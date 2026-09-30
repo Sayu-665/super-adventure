@@ -60,10 +60,10 @@ class Browser {
     const ua = ses.getUserAgent().replace(/\s+opensurf\/\S+/gi, '').replace(/\s+Electron\/\S+/g, '');
     ses.setUserAgent(ua);
     app.userAgentFallback = ua;
-    // Never download spellcheck dictionaries from Google's CDN (Windows/Linux Hunspell);
-    // dictionaries (.bdic) can be placed in <userData>/dictionaries instead.
+    // Never download Hunspell dictionaries from Google's CDN (Linux). Point the downloader at a
+    // local folder instead; Chromium loads .bdic files placed in <userData>/Dictionaries.
     try {
-      ses.setSpellCheckerDictionaryDownloadURL(`${pathToFileURL(path.join(app.getPath('userData'), 'dictionaries')).href}/`);
+      ses.setSpellCheckerDictionaryDownloadURL(`${pathToFileURL(path.join(app.getPath('userData'), 'Dictionaries')).href}/`);
     } catch (_) { /* macOS uses the native spellchecker */ }
   }
 
