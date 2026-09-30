@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.sayu.pocketstudio'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.sayu.pocketstudio'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Personal-use signing key, checked in on purpose so every build (local or CI)
+    // is signed the same way and new versions install over old ones.
+    signingConfigs {
+        personal {
+            storeFile file('pocketstudio.keystore')
+            storePassword 'pocketstudio'
+            keyAlias 'pocketstudio'
+            keyPassword 'pocketstudio'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.personal
+        }
+        debug {
+            signingConfig signingConfigs.personal
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

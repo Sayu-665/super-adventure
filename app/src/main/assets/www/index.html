@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#15161a">
+<title>Pocket Studio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="btnProjects" class="icon" title="My songs">☰</button>
+    <button id="projName" class="projname" title="My songs">My Song</button>
+    <button id="btnUndo" class="icon" title="Undo">↶</button>
+    <div class="transport">
+      <button id="btnRewind" class="icon" title="Back to start">⏮</button>
+      <button id="btnPlay" class="icon play" title="Play / Stop">▶</button>
+      <button id="btnRec" class="icon rec" title="Record">●</button>
+      <div id="pos" class="pos">1.1</div>
+    </div>
+    <div class="bpm" title="Tempo">
+      <button id="bpmDown">−</button><button id="bpmVal" class="bpmval">100</button><button id="bpmUp">+</button>
+    </div>
+    <button id="btnMetro" class="icon tog" title="Metronome">♩</button>
+    <button id="btnSong" class="icon" title="Song settings">⚙</button>
+    <button id="btnExport" class="icon" title="Export">⤓</button>
+  </header>
+  <main id="main"></main>
+</div>
+<div id="modal" class="modal hidden"></div>
+<div id="toast"></div>
+<script src="js/storage.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/music.js"></script>
+<script src="js/app.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
