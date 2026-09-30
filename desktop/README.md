@@ -119,9 +119,9 @@ src/
 
 ## Known limitations
 
-- The Linux (Hunspell) spellchecker has no dictionaries, because downloading them would contact
-  Google's CDN. You can place `.bdic` files in `<profile>/Dictionaries`. macOS and Windows use
-  the system spellchecker.
+- Where Chromium uses its Hunspell spellchecker (Linux), no dictionaries are downloaded, because
+  that would contact Google's CDN. You can place `.bdic` files in `<profile>/Dictionaries`.
+  macOS uses the system spellchecker.
 - Pages that use `window.open` get a normal new tab without an `opener` reference, so some
   pop-up sign-in flows may not complete. HTTP authentication prompts and client certificates
   are not supported: the request is cancelled and no certificate is sent.

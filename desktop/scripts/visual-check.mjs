@@ -173,7 +173,7 @@ const lines = logs.join('').split('\n').map((l) => l.trim()).filter(Boolean);
 const expected = (l) =>
   /dbus|bus\.cc|Failed to connect to the bus/i.test(l) || // no D-Bus in the container
   l.includes(`Failed to load URL: ${refusedUrl}`) || // the error-page scene, on purpose
-  /^\(Use `electron --trace-warnings/.test(l) || /Debugger (listening|ending)|nodejs\.org\/.*debugging/.test(l); // Playwright's inspector
+  /^\(Use `\S+ --trace-warnings/.test(l) || /Debugger (listening|ending)|nodejs\.org\/.*debugging/.test(l); // Playwright's inspector
 const problems = lines.filter((l) => /error|exception|uncaught|fatal|failed|warn/i.test(l) && !expected(l));
 if (problems.length) {
   console.error(`--- ${problems.length} unexpected problem line(s) in app output ---\n${problems.join('\n')}`);
