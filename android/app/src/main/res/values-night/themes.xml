@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Base.Theme.OpenSurf" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/bar_background</item>
+        <item name="android:colorPrimaryDark">@color/bar_background</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+        <item name="android:windowBackground">@color/bar_background</item>
+        <item name="android:statusBarColor">@color/bar_background</item>
+        <item name="android:navigationBarColor">@color/bar_background</item>
+        <item name="android:alertDialogTheme">@style/Theme.OpenSurf.Dialog</item>
+    </style>
+
+    <!-- Night mode wins over the -v27 qualifier, so this also applies on API 27+. -->
+    <style name="Theme.OpenSurf" parent="Base.Theme.OpenSurf" />
+
+    <style name="Theme.OpenSurf.Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+    </style>
+</resources>

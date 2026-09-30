@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'">
+<title>New tab</title>
+<style>
+  :root {
+    --bg: #F8FAFC;
+    --glow: #E0E7FF;
+    --fg: #0F172A;
+    --muted: #64748B;
+    --field: #FFFFFF;
+    --border: #E2E8F0;
+    --accent: #4F46E5;
+    --ring: rgba(79, 70, 229, 0.22);
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1120;
+      --glow: #1E1B4B;
+      --fg: #F1F5F9;
+      --muted: #94A3B8;
+      --field: #172033;
+      --border: #2B3A52;
+      --accent: #818CF8;
+      --ring: rgba(129, 140, 248, 0.3);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px 18vh;
+    background: radial-gradient(900px 480px at 50% -8%, var(--glow), transparent 70%), var(--bg);
+    color: var(--fg);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .logo {
+    width: 84px;
+    height: 84px;
+    filter: drop-shadow(0 8px 18px rgba(79, 70, 229, 0.28));
+  }
+  h1 {
+    margin: 14px 0 26px;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  form {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 5px 5px 20px;
+    background: var(--field);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  form:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--ring), var(--shadow);
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 11px 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 17px;
+  }
+  input::placeholder { color: var(--muted); opacity: 1; }
+  input::-webkit-search-cancel-button { -webkit-appearance: none; }
+  button {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #06B6D4, #4F46E5);
+    color: #FFFFFF;
+    cursor: pointer;
+  }
+  button:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  button svg { width: 20px; height: 20px; }
+  .caption {
+    margin: 16px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  @media (min-width: 720px) {
+    .logo { width: 112px; height: 112px; }
+    h1 { font-size: 40px; margin: 18px 0 32px; }
+    input { font-size: 18px; padding: 13px 0; }
+    button { width: 50px; height: 50px; }
+    .caption { font-size: 15px; }
+  }
+  @media (max-height: 420px) {
+    body { padding-bottom: 32px; }
+    .logo { width: 56px; height: 56px; }
+    h1 { margin: 8px 0 16px; font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <svg class="logo" viewBox="0 0 512 512" aria-hidden="true">
+    <defs>
+      <linearGradient id="logo-bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#06B6D4"/>
+        <stop offset="1" stop-color="#4F46E5"/>
+      </linearGradient>
+    </defs>
+    <rect width="512" height="512" rx="112" fill="url(#logo-bg)"/>
+    <g fill="none" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="240" cy="240" r="132"/>
+      <ellipse cx="240" cy="240" rx="54" ry="132"/>
+      <path d="M114 196h252M114 284h252"/>
+      <path d="M338 338l72 72"/>
+    </g>
+  </svg>
+  <h1>OpenSurf</h1>
+  <!-- Without JavaScript the form still submits to opensurf://go?q=... (GET). -->
+  <form id="search" action="opensurf://go" method="get" role="search" autocomplete="off">
+    <input id="q" name="q" type="search" placeholder="Search or type URL" aria-label="Search or type URL"
+           autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+    <button type="submit" aria-label="Search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+    </button>
+  </form>
+  <p id="caption" class="caption">Unrestricted search</p>
+</main>
+<script>
+  (function () {
+    'use strict';
+    var form = document.getElementById('search');
+    var input = document.getElementById('q');
+    var caption = document.getElementById('caption');
+
+    // Display-only settings passed by the app, e.g. #engine=DuckDuckGo&safe=off
+    function readFragment() {
+      var out = {};
+      location.hash.replace(/^#/, '').split('&').forEach(function (pair) {
+        if (!pair) return;
+        var i = pair.indexOf('=');
+        var key = i < 0 ? pair : pair.slice(0, i);
+        var value = i < 0 ? '' : pair.slice(i + 1);
+        try {
+          out[decodeURIComponent(key)] = decodeURIComponent(value.replace(/\+/g, ' '));
+        } catch (e) { /* ignore malformed values */ }
+      });
+      return out;
+    }
+
+    function render() {
+      var p = readFragment();
+      var engine = (p.engine || '').slice(0, 40);
+      var parts = [];
+      if (p.safe === 'on') {
+        parts.push('SafeSearch on');
+      } else {
+        parts.push('Unrestricted search');
+        if (p.safe === 'off') parts.push('SafeSearch off');
+      }
+      if (engine) parts.push(engine);
+      caption.textContent = parts.join(' · ');
+    }
+
+    render();
+    window.addEventListener('hashchange', render);
+
+    // The app resolves the text natively (same function as the address bar).
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var text = input.value;
+      if (!text.trim()) {
+        input.focus();
+        return;
+      }
+      location.href = 'opensurf://go?q=' + encodeURIComponent(text);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light dark">
+  <title>OpenSurf</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="../shared/omnibox.js" defer></script>
+  <script src="../shared/shortcuts.js" defer></script>
+  <script src="icons.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header id="top">
+    <div id="tabstrip">
+      <div id="tabs" role="tablist" aria-label="Tabs"></div>
+      <button id="new-tab" class="icon-btn new-tab" data-icon="plus" title="New tab" aria-label="New tab"></button>
+      <div class="grow"></div>
+      <button id="tab-count" class="tab-count" title="All tabs" aria-label="All tabs"><span id="tab-count-num">1</span></button>
+    </div>
+
+    <div id="toolbar">
+      <button id="btn-back" class="icon-btn" data-icon="back" title="Back" aria-label="Back"></button>
+      <button id="btn-forward" class="icon-btn" data-icon="forward" title="Forward" aria-label="Forward"></button>
+      <button id="btn-reload" class="icon-btn" title="Reload" aria-label="Reload"></button>
+      <button id="btn-home" class="icon-btn" data-icon="home" title="Home" aria-label="Home"></button>
+
+      <form id="omnibox-form" autocomplete="off">
+        <div id="omnibox-wrap">
+          <span id="site-icon" class="site-icon" aria-hidden="true"></span>
+          <input id="omnibox" type="search" placeholder="Search or type URL" spellcheck="false" autocomplete="off"
+                 autocapitalize="off" aria-label="Search or type URL" enterkeyhint="go">
+          <span id="omnibox-chip" class="chip" role="status" hidden></span>
+          <button id="zoom-badge" type="button" class="chip zoom-chip" title="Reset zoom" hidden></button>
+          <button id="btn-copy" type="button" class="icon-btn tiny" data-icon="link" title="Copy link" aria-label="Copy link"></button>
+        </div>
+      </form>
+
+      <button id="btn-downloads" class="icon-btn downloads-btn" title="Downloads" aria-label="Downloads">
+        <svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="ring-track" cx="18" cy="18" r="15.5"/><circle id="ring-value" class="ring-value" cx="18" cy="18" r="15.5"/></svg>
+        <span data-icon="download"></span>
+        <span id="downloads-badge" class="badge" hidden></span>
+      </button>
+      <button id="btn-menu" class="icon-btn" data-icon="menu" title="Menu" aria-label="Menu" aria-haspopup="menu"></button>
+      <div id="progress" aria-hidden="true"><div id="progress-bar"></div></div>
+    </div>
+
+    <div id="findbar" hidden>
+      <div class="find-box" role="search">
+        <span class="find-icon" data-icon="search"></span>
+        <input id="find-input" type="text" placeholder="Find in page" spellcheck="false" autocomplete="off" aria-label="Find in page">
+        <span id="find-count" class="find-count" aria-live="polite"></span>
+        <span class="sep"></span>
+        <button id="find-prev" class="icon-btn small" data-icon="up" title="Previous match" aria-label="Previous match"></button>
+        <button id="find-next" class="icon-btn small" data-icon="down" title="Next match" aria-label="Next match"></button>
+        <button id="find-close" class="icon-btn small" data-icon="close" title="Close find bar" aria-label="Close find bar"></button>
+      </div>
+    </div>
+  </header>
+
+  <main id="content">
+    <img id="backdrop" alt="" hidden>
+    <section id="error-panel" hidden>
+      <div class="error-card">
+        <div id="error-icon" class="error-icon"></div>
+        <h1 id="error-title"></h1>
+        <p id="error-desc"></p>
+        <p id="error-url" class="error-url"></p>
+        <code id="error-code" class="error-code"></code>
+        <div class="error-actions">
+          <button id="error-retry" class="btn primary" type="button">Try again</button>
+          <button id="error-proceed" class="btn" type="button" hidden>Proceed anyway…</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="scrim" hidden></div>
+
+  <!-- Menu -->
+  <div id="menu-popover" class="popover menu" role="menu" aria-label="Menu" hidden>
+    <button class="menu-item" data-action="new-tab" data-icon="plus" role="menuitem"><span>New tab</span><kbd data-kbd="Ctrl+T"></kbd></button>
+    <button class="menu-item" data-action="new-window" data-icon="window" role="menuitem"><span>New window</span><kbd data-kbd="Ctrl+N"></kbd></button>
+    <button class="menu-item" data-action="reopen-tab" data-icon="history" role="menuitem"><span>Reopen closed tab</span><kbd data-kbd="Ctrl+Shift+T"></kbd></button>
+    <div class="menu-sep"></div>
+    <div class="menu-row" role="group" aria-label="Zoom">
+      <span class="menu-row-label">Zoom</span>
+      <button class="icon-btn small" data-action="zoom-out" data-icon="minus" title="Zoom out" aria-label="Zoom out"></button>
+      <button class="zoom-value" data-action="zoom-reset" id="menu-zoom" title="Reset zoom">100%</button>
+      <button class="icon-btn small" data-action="zoom-in" data-icon="plus" title="Zoom in" aria-label="Zoom in"></button>
+      <span class="menu-row-sep"></span>
+      <button class="icon-btn small" data-action="fullscreen" data-icon="fullscreen" title="Full screen" aria-label="Full screen"></button>
+    </div>
+    <div class="menu-sep"></div>
+    <button class="menu-item" data-action="find" data-icon="search" role="menuitem"><span>Find in page…</span><kbd data-kbd="Ctrl+F"></kbd></button>
+    <button class="menu-item" data-action="copy-link" data-icon="link" role="menuitem"><span>Copy page link</span></button>
+    <button class="menu-item" data-action="downloads" data-icon="download" role="menuitem"><span>Downloads</span><kbd data-kbd="Ctrl+J"></kbd></button>
+    <div class="menu-sep"></div>
+    <button class="menu-item" data-action="settings" data-icon="settings" role="menuitem"><span>Settings</span><kbd data-kbd="Ctrl+,"></kbd></button>
+    <button class="menu-item" data-action="clear-data" data-icon="trash" role="menuitem"><span>Clear browsing data</span><kbd data-kbd="Ctrl+Shift+Del"></kbd></button>
+    <div class="menu-sep"></div>
+    <button class="menu-item" data-action="devtools" data-icon="code" role="menuitem"><span>Developer tools</span><kbd data-kbd="F12"></kbd></button>
+    <button class="menu-item" data-action="about" data-icon="info" role="menuitem"><span>About OpenSurf</span></button>
+  </div>
+
+  <!-- Downloads -->
+  <div id="downloads-popover" class="popover downloads" role="dialog" aria-labelledby="downloads-title" hidden>
+    <div class="popover-head">
+      <h2 id="downloads-title">Downloads</h2>
+      <button class="icon-btn small" id="dl-open-folder" data-icon="folder" title="Open Downloads folder" aria-label="Open Downloads folder"></button>
+    </div>
+    <ul id="downloads-list" class="downloads-list"></ul>
+    <p id="downloads-empty" class="empty">No downloads yet. Files that can't be shown in a tab are saved to your Downloads folder.</p>
+    <div class="popover-foot">
+      <button class="btn subtle" id="dl-clear" type="button">Clear list</button>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div id="settings-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="dialog-head">
+      <h2 id="settings-title">Settings</h2>
+      <button class="icon-btn small" data-close data-icon="close" title="Close" aria-label="Close"></button>
+    </div>
+    <div class="dialog-body">
+      <section class="settings-section">
+        <h3>Search</h3>
+        <label class="field">
+          <span class="field-label">Search engine</span>
+          <select id="set-engine"></select>
+        </label>
+        <div id="custom-field" class="field" hidden>
+          <label class="field-label" for="set-template">Custom search URL</label>
+          <input id="set-template" type="url" placeholder="https://example.com/search?q=%s" spellcheck="false" autocomplete="off">
+          <p id="template-msg" class="field-help">Use %s where the search terms go. Must start with http:// or https://</p>
+        </div>
+        <label class="switch-row">
+          <span class="switch-text">
+            <span class="field-label">SafeSearch</span>
+            <span class="field-help" id="safe-help">Off by default: results are not filtered. Turn on to ask the search engine to hide explicit results.</span>
+          </span>
+          <input id="set-safe" type="checkbox" class="switch" role="switch">
+        </label>
+      </section>
+
+      <section class="settings-section">
+        <h3>Content</h3>
+        <label class="switch-row">
+          <span class="switch-text">
+            <span class="field-label">JavaScript</span>
+            <span class="field-help">Applies to new tabs. Open tabs keep their setting until you apply it below (they reload).</span>
+          </span>
+          <input id="set-js" type="checkbox" class="switch" role="switch">
+        </label>
+        <div id="js-apply-row" class="inline-action" hidden>
+          <span>Some open tabs use the previous setting.</span>
+          <button id="js-apply" class="btn small" type="button">Apply to open tabs</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Startup</h3>
+        <label class="switch-row">
+          <span class="switch-text">
+            <span class="field-label">Restore tabs on startup</span>
+            <span class="field-help">Reopen the tabs that were open when you quit.</span>
+          </span>
+          <input id="set-restore" type="checkbox" class="switch" role="switch">
+        </label>
+      </section>
+
+      <section class="settings-section">
+        <h3>Privacy</h3>
+        <p class="field-help">OpenSurf has no accounts, telemetry, analytics, ads or remote configuration. It only connects to the pages you open.</p>
+        <button id="set-clear" class="btn" type="button" data-icon="trash">Clear browsing data…</button>
+      </section>
+    </div>
+    <div class="dialog-foot">
+      <span id="settings-status" class="field-help" role="status"></span>
+      <button class="btn primary" data-close type="button">Done</button>
+    </div>
+  </div>
+
+  <!-- Clear browsing data -->
+  <div id="clear-dialog" class="dialog small" role="alertdialog" aria-modal="true" aria-labelledby="clear-title" hidden>
+    <div class="dialog-head">
+      <h2 id="clear-title">Clear browsing data?</h2>
+    </div>
+    <div class="dialog-body">
+      <p>This removes cookies, cached files, site data (local storage, IndexedDB, service workers), back/forward history, recently closed tabs, the downloads list and site permissions. Open tabs stay open and downloaded files are kept.</p>
+    </div>
+    <div class="dialog-foot">
+      <span id="clear-status" class="field-help" role="status"></span>
+      <button class="btn" data-close type="button">Cancel</button>
+      <button id="clear-confirm" class="btn danger" type="button">Clear data</button>
+    </div>
+  </div>
+
+  <!-- About -->
+  <div id="about-dialog" class="dialog small about" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="dialog-body about-body">
+      <img src="../assets/logo.svg" alt="" class="about-logo" width="72" height="72">
+      <h2 id="about-title">OpenSurf</h2>
+      <p id="about-version" class="muted">Version</p>
+      <p>A simple, fast, private browser for unrestricted web search.</p>
+      <p class="muted">No accounts · No telemetry · No ads · No filtering</p>
+      <p class="muted fine">MIT License</p>
+    </div>
+    <div class="dialog-foot center">
+      <button class="btn primary" data-close type="button">Close</button>
+    </div>
+  </div>
+</body>
+</html>

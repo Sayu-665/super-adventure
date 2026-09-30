@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent">#818CF8</color>
+    <color name="bar_background">#0F172A</color>
+    <color name="page_background">#0B1120</color>
+    <color name="omnibox_background">#1E293B</color>
+    <color name="text_primary">#F1F5F9</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="icon">#CBD5E1</color>
+    <color name="divider">#1E293B</color>
+    <color name="warning">#F87171</color>
+    <color name="selected_row">#1E1B4B</color>
+    <color name="nav_bar_legacy">#0F172A</color>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent">#4F46E5</color>
+    <color name="bar_background">#F8FAFC</color>
+    <color name="page_background">#FFFFFF</color>
+    <color name="omnibox_background">#EDF0F5</color>
+    <color name="text_primary">#0F172A</color>
+    <color name="text_secondary">#64748B</color>
+    <color name="icon">#334155</color>
+    <color name="divider">#E2E8F0</color>
+    <color name="warning">#DC2626</color>
+    <color name="selected_row">#EEF2FF</color>
+    <!-- Navigation bar colour below API 27, where its icons cannot be dark. -->
+    <color name="nav_bar_legacy">#000000</color>
+</resources>

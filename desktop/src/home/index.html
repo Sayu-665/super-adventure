@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>New Tab</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="home.css">
+  <script src="home.js" defer></script>
+</head>
+<body>
+  <main class="home">
+    <img class="logo" src="logo.svg" alt="" width="96" height="96">
+    <h1 class="name">OpenSurf</h1>
+    <form class="search" action="opensurf://go" method="get" role="search" autocomplete="off">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+      <input class="search-input" type="search" name="q" placeholder="Search the web or type a URL" aria-label="Search the web or type a URL"
+             autofocus spellcheck="false" autocomplete="off" autocapitalize="off" enterkeyhint="search" maxlength="4096">
+      <button class="search-go" type="submit" aria-label="Search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+    </form>
+    <p class="caption" id="caption">%CAPTION%</p>
+  </main>
+  <footer class="footer">No accounts · No telemetry · No ads · No filtering by the app</footer>
+</body>
+</html>

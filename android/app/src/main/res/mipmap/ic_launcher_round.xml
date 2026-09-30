@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy (API 25) round launcher icon: the logo on a gradient circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group
+        android:pivotX="256"
+        android:pivotY="256"
+        android:scaleX="0.9167"
+        android:scaleY="0.9167">
+        <path android:pathData="M0,256a256,256 0,1 0,512,0a256,256 0,1 0,-512,0Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="512"
+                    android:endY="512"
+                    android:endColor="#4F46E5"
+                    android:startX="0"
+                    android:startY="0"
+                    android:startColor="#06B6D4"
+                    android:type="linear" />
+            </aapt:attr>
+        </path>
+        <group
+            android:pivotX="256"
+            android:pivotY="256"
+            android:scaleX="0.86"
+            android:scaleY="0.86">
+        <path
+            android:pathData="M108,240a132,132 0,1 0,264,0a132,132 0,1 0,-264,0"
+            android:strokeWidth="24"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M186,240a54,132 0,1 0,108,0a54,132 0,1 0,-108,0"
+            android:strokeWidth="24"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M114,196H366M114,284H366"
+            android:strokeWidth="24"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M338,338L410,410"
+            android:strokeWidth="24"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        </group>
+    </group>
+</vector>

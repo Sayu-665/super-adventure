@@ -1,0 +1,129 @@
+{
+  "name": "opensurf",
+  "productName": "OpenSurf",
+  "version": "1.0.0",
+  "description": "OpenSurf - a simple, fast, private web browser for unrestricted web searching.",
+  "author": "OpenSurf",
+  "license": "MIT",
+  "homepage": "https://github.com/Sayu-665/super-adventure",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sayu-665/super-adventure.git",
+    "directory": "desktop"
+  },
+  "private": true,
+  "main": "src/main/main.js",
+  "desktopName": "opensurf.desktop",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "test:smoke": "node --test --test-concurrency=1 test/smoke.spec.mjs",
+    "dist": "electron-builder --publish never",
+    "dist:linux": "electron-builder --linux --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:win:cross": "electron-builder --win nsis portable -c.win.signAndEditExecutable=false --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "electron": "^44.5.0",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.63.0"
+  },
+  "build": {
+    "appId": "com.opensurf.browser",
+    "productName": "OpenSurf",
+    "copyright": "Copyright © 2026 OpenSurf. MIT License.",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "icon": "build/icon.png",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "executableName": "opensurf",
+      "icon": "build/icon.png",
+      "synopsis": "Simple, fast, private browser for unrestricted search",
+      "description": "A simple, fast, private web browser for unrestricted web search. No accounts, no telemetry, no ads.",
+      "maintainer": "OpenSurf <opensurf@noreply.invalid>",
+      "vendor": "OpenSurf",
+      "mimeTypes": [
+        "x-scheme-handler/http",
+        "x-scheme-handler/https",
+        "text/html"
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "OpenSurf",
+          "GenericName": "Web Browser",
+          "Keywords": "browser;web;internet;search;"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "artifactName": "${name}_${version}_${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "protocols": [
+        {
+          "name": "Web page",
+          "schemes": [
+            "http",
+            "https"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenSurf",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "protocols": [
+        {
+          "name": "Web page",
+          "schemes": [
+            "http",
+            "https"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "publish": null
+  }
+}

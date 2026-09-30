@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ can draw dark navigation bar icons, so the bar can match the light UI. -->
+    <style name="Theme.OpenSurf" parent="Base.Theme.OpenSurf">
+        <item name="android:navigationBarColor">@color/bar_background</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/action_new_tab" android:title="@string/menu_new_tab" />
+    <item android:id="@+id/action_reload" android:title="@string/menu_reload" />
+    <item android:id="@+id/action_share" android:title="@string/menu_share" />
+    <item android:id="@+id/action_copy_link" android:title="@string/menu_copy_link" />
+    <item android:id="@+id/action_find" android:title="@string/menu_find" />
+    <item
+        android:id="@+id/action_desktop_site"
+        android:checkable="true"
+        android:title="@string/menu_desktop_site" />
+    <item android:id="@+id/action_settings" android:title="@string/menu_settings" />
+    <item android:id="@+id/action_clear_data" android:title="@string/menu_clear_data" />
+    <item android:id="@+id/action_exit" android:title="@string/menu_exit" />
+</menu>

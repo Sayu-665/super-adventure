@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The root is focusable so the omnibox can give up focus. Window insets (status/navigation
+     bars, display cutout and keyboard) are applied to it as padding in code. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:orientation="vertical">
+
+    <FrameLayout
+        android:id="@+id/top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="8dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="2dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:id="@+id/omnibox_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="48dp"
+            android:background="@drawable/omnibox_background"
+            android:gravity="center_vertical"
+            android:minHeight="44dp"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="4dp">
+
+            <ImageView
+                android:id="@+id/security_icon"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="@string/cd_secure"
+                android:src="@drawable/ic_lock"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/page_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <EditText
+                    android:id="@+id/omnibox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@null"
+                    android:hint="@string/omnibox_hint"
+                    android:imeOptions="actionGo|flagNoExtractUi"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri"
+                    android:maxLines="1"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:selectAllOnFocus="true"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_secondary"
+                    android:textSize="16sp"
+                    tools:targetApi="o" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/clear_button"
+                style="@style/SmallIconButton"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:contentDescription="@string/cd_clear_text"
+                android:src="@drawable/ic_close"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/reload_button"
+            style="@style/SmallIconButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end|center_vertical"
+            android:contentDescription="@string/cd_reload"
+            android:src="@drawable/ic_refresh" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <FrameLayout
+            android:id="@+id/web_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/page_background" />
+
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_gravity="top"
+            android:indeterminate="false"
+            android:max="100"
+            android:maxHeight="3dp"
+            android:minHeight="3dp"
+            android:progressDrawable="@drawable/progress_horizontal"
+            android:visibility="invisible" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/find_bar"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="4dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/find_input"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@null"
+            android:hint="@string/find_hint"
+            android:imeOptions="actionSearch|flagNoExtractUi"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="16sp"
+            tools:targetApi="o" />
+
+        <TextView
+            android:id="@+id/find_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="4dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <ImageButton
+            android:id="@+id/find_previous"
+            style="@style/SmallIconButton"
+            android:contentDescription="@string/cd_find_previous"
+            android:src="@drawable/ic_keyboard_arrow_up" />
+
+        <ImageButton
+            android:id="@+id/find_next"
+            style="@style/SmallIconButton"
+            android:contentDescription="@string/cd_find_next"
+            android:src="@drawable/ic_keyboard_arrow_down" />
+
+        <ImageButton
+            android:id="@+id/find_close"
+            style="@style/SmallIconButton"
+            android:contentDescription="@string/cd_find_close"
+            android:src="@drawable/ic_close" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <LinearLayout
+        android:id="@+id/bottom_bar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/back_button"
+            style="@style/IconButton"
+            android:contentDescription="@string/cd_back"
+            android:src="@drawable/ic_arrow_back" />
+
+        <ImageButton
+            android:id="@+id/forward_button"
+            style="@style/IconButton"
+            android:contentDescription="@string/cd_forward"
+            android:src="@drawable/ic_arrow_forward" />
+
+        <ImageButton
+            android:id="@+id/home_button"
+            style="@style/IconButton"
+            android:contentDescription="@string/cd_home"
+            android:src="@drawable/ic_home" />
+
+        <FrameLayout
+            android:id="@+id/tabs_button"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/tab_count"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:background="@drawable/tab_count_background"
+                android:gravity="center"
+                android:importantForAccessibility="no"
+                android:textColor="@color/icon"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <ImageButton
+            android:id="@+id/menu_button"
+            style="@style/IconButton"
+            android:contentDescription="@string/cd_menu"
+            android:src="@drawable/ic_more_vert" />
+    </LinearLayout>
+</LinearLayout>
