@@ -24,12 +24,22 @@ android {
     }
 
     signingConfigs {
+        // Sign with every APK signature scheme (v1 is otherwise skipped at minSdk 24) so that
+        // OEM package installers and file managers that still inspect JAR signatures accept it.
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
         if (hasReleaseKey) {
             create("release") {
                 storeFile = file(releaseKeystore!!)
                 storePassword = releaseKeystorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
