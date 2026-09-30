@@ -407,12 +407,12 @@ class WindowController {
     }
   }
 
-  /** Screenshot of the visible page, shown behind popovers. */
+  /** Screenshot of the page, shown behind popovers (also while hidden, e.g. after a zoom change). */
   async captureActivePage() {
     const tab = this.activeTab();
-    if (!tab || tab.error || this.overlay) return null;
+    if (!tab || tab.error) return null;
     try {
-      const image = await tab.wc.capturePage();
+      const image = await tab.wc.capturePage(undefined, { stayHidden: true });
       if (image.isEmpty()) return null;
       return `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`;
     } catch (_) {

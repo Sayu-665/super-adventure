@@ -17,11 +17,11 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test test/*.test.js",
-    "test:smoke": "node --test --test-concurrency=1 test/smoke.spec.mjs",
+    "test:smoke": "node --test --test-concurrency=1 test/smoke.spec.mjs test/behaviour.spec.mjs",
     "dist": "electron-builder --publish never",
     "dist:linux": "electron-builder --linux --publish never",
     "dist:win": "electron-builder --win --publish never",
-    "dist:win:cross": "electron-builder --win nsis portable -c.win.signAndEditExecutable=false --publish never",
+    "dist:win:cross": "node -r ./scripts/nsis-without-wine.cjs node_modules/electron-builder/cli.js --win nsis portable -c.win.signAndEditExecutable=false --publish never",
     "dist:mac": "electron-builder --mac --publish never",
     "icons": "node scripts/generate-icons.mjs"
   },

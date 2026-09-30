@@ -167,6 +167,9 @@ class Tab {
     wc.on('before-input-event', (event, input) => {
       if (keyboard.handleInput(this.ctrl, input, 'tab')) event.preventDefault();
     });
+    wc.on('devtools-open-url', (_event, url) => {
+      if (classifyUrl(url) === 'web') this.ctrl.openTab(url, { openerId: this.id });
+    });
     wc.on('select-bluetooth-device', (event, _devices, callback) => {
       event.preventDefault();
       callback('');
