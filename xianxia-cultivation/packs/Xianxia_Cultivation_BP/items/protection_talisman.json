@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:protection_talisman",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_protection_talisman"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Golden Light Protection Talisman"
+      },
+      "minecraft:max_stack_size": 16
+    }
+  }
+}

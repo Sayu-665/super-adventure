@@ -1,0 +1,330 @@
+{
+  "resource_pack_name": "xianxia",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "xian_low_spirit_stone": {
+      "textures": "textures/items/xian_low_spirit_stone"
+    },
+    "xian_mid_spirit_stone": {
+      "textures": "textures/items/xian_mid_spirit_stone"
+    },
+    "xian_high_spirit_stone": {
+      "textures": "textures/items/xian_high_spirit_stone"
+    },
+    "xian_supreme_spirit_stone": {
+      "textures": "textures/items/xian_supreme_spirit_stone"
+    },
+    "xian_spirit_jade": {
+      "textures": "textures/items/xian_spirit_jade"
+    },
+    "xian_raw_profound_iron": {
+      "textures": "textures/items/xian_raw_profound_iron"
+    },
+    "xian_profound_iron_ingot": {
+      "textures": "textures/items/xian_profound_iron_ingot"
+    },
+    "xian_low_beast_core": {
+      "textures": "textures/items/xian_low_beast_core"
+    },
+    "xian_mid_beast_core": {
+      "textures": "textures/items/xian_mid_beast_core"
+    },
+    "xian_high_beast_core": {
+      "textures": "textures/items/xian_high_beast_core"
+    },
+    "xian_king_beast_core": {
+      "textures": "textures/items/xian_king_beast_core"
+    },
+    "xian_demon_core": {
+      "textures": "textures/items/xian_demon_core"
+    },
+    "xian_dragon_scale": {
+      "textures": "textures/items/xian_dragon_scale"
+    },
+    "xian_tribulation_essence": {
+      "textures": "textures/items/xian_tribulation_essence"
+    },
+    "xian_fox_spirit_tail": {
+      "textures": "textures/items/xian_fox_spirit_tail"
+    },
+    "xian_tiger_bone": {
+      "textures": "textures/items/xian_tiger_bone"
+    },
+    "xian_wolf_fang": {
+      "textures": "textures/items/xian_wolf_fang"
+    },
+    "xian_talisman_paper": {
+      "textures": "textures/items/xian_talisman_paper"
+    },
+    "xian_cinnabar_ink": {
+      "textures": "textures/items/xian_cinnabar_ink"
+    },
+    "xian_pill_residue": {
+      "textures": "textures/items/xian_pill_residue"
+    },
+    "xian_spirit_fruit": {
+      "textures": "textures/items/xian_spirit_fruit"
+    },
+    "xian_immortal_peach": {
+      "textures": "textures/items/xian_immortal_peach"
+    },
+    "xian_qi_gathering_pill": {
+      "textures": "textures/items/xian_qi_gathering_pill"
+    },
+    "xian_healing_pill": {
+      "textures": "textures/items/xian_healing_pill"
+    },
+    "xian_bigu_pill": {
+      "textures": "textures/items/xian_bigu_pill"
+    },
+    "xian_qi_recovery_pill": {
+      "textures": "textures/items/xian_qi_recovery_pill"
+    },
+    "xian_detox_pill": {
+      "textures": "textures/items/xian_detox_pill"
+    },
+    "xian_spirit_condensing_pill": {
+      "textures": "textures/items/xian_spirit_condensing_pill"
+    },
+    "xian_body_tempering_pill": {
+      "textures": "textures/items/xian_body_tempering_pill"
+    },
+    "xian_berserk_blood_pill": {
+      "textures": "textures/items/xian_berserk_blood_pill"
+    },
+    "xian_foundation_pill": {
+      "textures": "textures/items/xian_foundation_pill"
+    },
+    "xian_clear_heart_pill": {
+      "textures": "textures/items/xian_clear_heart_pill"
+    },
+    "xian_enlightenment_pill": {
+      "textures": "textures/items/xian_enlightenment_pill"
+    },
+    "xian_golden_core_pill": {
+      "textures": "textures/items/xian_golden_core_pill"
+    },
+    "xian_bone_marrow_pill": {
+      "textures": "textures/items/xian_bone_marrow_pill"
+    },
+    "xian_nascent_soul_pill": {
+      "textures": "textures/items/xian_nascent_soul_pill"
+    },
+    "xian_longevity_pill": {
+      "textures": "textures/items/xian_longevity_pill"
+    },
+    "xian_void_tribulation_pill": {
+      "textures": "textures/items/xian_void_tribulation_pill"
+    },
+    "xian_fire_talisman": {
+      "textures": "textures/items/xian_fire_talisman"
+    },
+    "xian_thunder_talisman": {
+      "textures": "textures/items/xian_thunder_talisman"
+    },
+    "xian_protection_talisman": {
+      "textures": "textures/items/xian_protection_talisman"
+    },
+    "xian_divine_travel_talisman": {
+      "textures": "textures/items/xian_divine_travel_talisman"
+    },
+    "xian_escape_talisman": {
+      "textures": "textures/items/xian_escape_talisman"
+    },
+    "xian_concealment_talisman": {
+      "textures": "textures/items/xian_concealment_talisman"
+    },
+    "xian_sealing_talisman": {
+      "textures": "textures/items/xian_sealing_talisman"
+    },
+    "xian_lightning_rod_talisman": {
+      "textures": "textures/items/xian_lightning_rod_talisman"
+    },
+    "xian_manual_basic_breathing": {
+      "textures": "textures/items/xian_manual_basic_breathing"
+    },
+    "xian_manual_five_elements": {
+      "textures": "textures/items/xian_manual_five_elements"
+    },
+    "xian_manual_azure_wood": {
+      "textures": "textures/items/xian_manual_azure_wood"
+    },
+    "xian_manual_blazing_sun": {
+      "textures": "textures/items/xian_manual_blazing_sun"
+    },
+    "xian_manual_profound_water": {
+      "textures": "textures/items/xian_manual_profound_water"
+    },
+    "xian_manual_golden_vajra": {
+      "textures": "textures/items/xian_manual_golden_vajra"
+    },
+    "xian_manual_great_earth": {
+      "textures": "textures/items/xian_manual_great_earth"
+    },
+    "xian_manual_nine_heavens_thunder": {
+      "textures": "textures/items/xian_manual_nine_heavens_thunder"
+    },
+    "xian_manual_frost_moon": {
+      "textures": "textures/items/xian_manual_frost_moon"
+    },
+    "xian_manual_void_wind": {
+      "textures": "textures/items/xian_manual_void_wind"
+    },
+    "xian_manual_heavenly_devouring": {
+      "textures": "textures/items/xian_manual_heavenly_devouring"
+    },
+    "xian_manual_primordial_chaos": {
+      "textures": "textures/items/xian_manual_primordial_chaos"
+    },
+    "xian_scroll_qi_bolt": {
+      "textures": "textures/items/xian_scroll_qi_bolt"
+    },
+    "xian_scroll_wind_step": {
+      "textures": "textures/items/xian_scroll_wind_step"
+    },
+    "xian_scroll_fireball": {
+      "textures": "textures/items/xian_scroll_fireball"
+    },
+    "xian_scroll_sword_qi": {
+      "textures": "textures/items/xian_scroll_sword_qi"
+    },
+    "xian_scroll_frost_spikes": {
+      "textures": "textures/items/xian_scroll_frost_spikes"
+    },
+    "xian_scroll_healing_spring": {
+      "textures": "textures/items/xian_scroll_healing_spring"
+    },
+    "xian_scroll_spirit_sense": {
+      "textures": "textures/items/xian_scroll_spirit_sense"
+    },
+    "xian_scroll_vine_bind": {
+      "textures": "textures/items/xian_scroll_vine_bind"
+    },
+    "xian_scroll_tidal_palm": {
+      "textures": "textures/items/xian_scroll_tidal_palm"
+    },
+    "xian_scroll_earth_shield": {
+      "textures": "textures/items/xian_scroll_earth_shield"
+    },
+    "xian_scroll_golden_bell": {
+      "textures": "textures/items/xian_scroll_golden_bell"
+    },
+    "xian_scroll_thunder_palm": {
+      "textures": "textures/items/xian_scroll_thunder_palm"
+    },
+    "xian_scroll_phoenix_flame": {
+      "textures": "textures/items/xian_scroll_phoenix_flame"
+    },
+    "xian_scroll_buddha_palm": {
+      "textures": "textures/items/xian_scroll_buddha_palm"
+    },
+    "xian_scroll_heavenly_thunder": {
+      "textures": "textures/items/xian_scroll_heavenly_thunder"
+    },
+    "xian_scroll_void_step": {
+      "textures": "textures/items/xian_scroll_void_step"
+    },
+    "xian_scroll_sword_rain": {
+      "textures": "textures/items/xian_scroll_sword_rain"
+    },
+    "xian_scroll_blood_sacrifice": {
+      "textures": "textures/items/xian_scroll_blood_sacrifice"
+    },
+    "xian_scroll_heavenly_domain": {
+      "textures": "textures/items/xian_scroll_heavenly_domain"
+    },
+    "xian_scroll_starfall": {
+      "textures": "textures/items/xian_scroll_starfall"
+    },
+    "xian_cultivation_codex": {
+      "textures": "textures/items/xian_cultivation_codex"
+    },
+    "xian_martial_seal": {
+      "textures": "textures/items/xian_martial_seal"
+    },
+    "xian_root_testing_stone": {
+      "textures": "textures/items/xian_root_testing_stone"
+    },
+    "xian_dragon_summoning_pearl": {
+      "textures": "textures/items/xian_dragon_summoning_pearl"
+    },
+    "xian_beast_tide_horn": {
+      "textures": "textures/items/xian_beast_tide_horn"
+    },
+    "xian_sect_token": {
+      "textures": "textures/items/xian_sect_token"
+    },
+    "xian_spatial_ring": {
+      "textures": "textures/items/xian_spatial_ring"
+    },
+    "xian_spirit_iron_sword": {
+      "textures": "textures/items/xian_spirit_iron_sword"
+    },
+    "xian_azure_frost_sword": {
+      "textures": "textures/items/xian_azure_frost_sword"
+    },
+    "xian_crimson_flame_saber": {
+      "textures": "textures/items/xian_crimson_flame_saber"
+    },
+    "xian_thunderclap_spear": {
+      "textures": "textures/items/xian_thunderclap_spear"
+    },
+    "xian_blood_demon_blade": {
+      "textures": "textures/items/xian_blood_demon_blade"
+    },
+    "xian_heaven_severing_sword": {
+      "textures": "textures/items/xian_heaven_severing_sword"
+    },
+    "xian_flying_sword": {
+      "textures": "textures/items/xian_flying_sword"
+    },
+    "xian_daoist_helmet": {
+      "textures": "textures/items/xian_daoist_helmet"
+    },
+    "xian_daoist_chestplate": {
+      "textures": "textures/items/xian_daoist_chestplate"
+    },
+    "xian_daoist_leggings": {
+      "textures": "textures/items/xian_daoist_leggings"
+    },
+    "xian_daoist_boots": {
+      "textures": "textures/items/xian_daoist_boots"
+    },
+    "xian_celestial_helmet": {
+      "textures": "textures/items/xian_celestial_helmet"
+    },
+    "xian_celestial_chestplate": {
+      "textures": "textures/items/xian_celestial_chestplate"
+    },
+    "xian_celestial_leggings": {
+      "textures": "textures/items/xian_celestial_leggings"
+    },
+    "xian_celestial_boots": {
+      "textures": "textures/items/xian_celestial_boots"
+    },
+    "xian_spirit_grass": {
+      "textures": "textures/items/xian_spirit_grass"
+    },
+    "xian_blood_ginseng": {
+      "textures": "textures/items/xian_blood_ginseng"
+    },
+    "xian_frost_lotus": {
+      "textures": "textures/items/xian_frost_lotus"
+    },
+    "xian_flame_lotus": {
+      "textures": "textures/items/xian_flame_lotus"
+    },
+    "xian_purple_cloud_mushroom": {
+      "textures": "textures/items/xian_purple_cloud_mushroom"
+    },
+    "xian_moon_orchid": {
+      "textures": "textures/items/xian_moon_orchid"
+    },
+    "xian_thunder_fern": {
+      "textures": "textures/items/xian_thunder_fern"
+    },
+    "xian_jade_dew_flower": {
+      "textures": "textures/items/xian_jade_dew_flower"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:block": {
+    "description": {
+      "identifier": "xian:meditation_cushion",
+      "menu_category": {
+        "category": "construction"
+      }
+    },
+    "components": {
+      "minecraft:destructible_by_mining": {
+        "seconds_to_destroy": 2
+      },
+      "minecraft:destructible_by_explosion": {
+        "explosion_resistance": 30
+      },
+      "minecraft:loot": "loot_tables/blocks/meditation_cushion.json",
+      "minecraft:geometry": "geometry.xian_cushion",
+      "minecraft:material_instances": {
+        "*": {
+          "texture": "xian_meditation_cushion",
+          "render_method": "opaque"
+        }
+      },
+      "minecraft:collision_box": {
+        "origin": [
+          -7,
+          0,
+          -7
+        ],
+        "size": [
+          14,
+          4,
+          14
+        ]
+      },
+      "minecraft:selection_box": {
+        "origin": [
+          -7,
+          0,
+          -7
+        ],
+        "size": [
+          14,
+          4,
+          14
+        ]
+      },
+      "minecraft:light_dampening": 0,
+      "xian:station": {},
+      "minecraft:map_color": "#dcaa32"
+    }
+  }
+}

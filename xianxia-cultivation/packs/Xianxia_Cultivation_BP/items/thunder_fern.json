@@ -1,0 +1,25 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:thunder_fern",
+      "menu_category": {
+        "category": "nature"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_thunder_fern"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Thunderstrike Fern"
+      },
+      "minecraft:max_stack_size": 64,
+      "minecraft:block_placer": {
+        "block": "xian:thunder_fern_plant"
+      }
+    }
+  }
+}

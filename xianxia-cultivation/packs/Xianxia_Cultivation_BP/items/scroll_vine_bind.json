@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:scroll_vine_bind",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_scroll_vine_bind"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Technique Scroll: Entangling Spirit Vines"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

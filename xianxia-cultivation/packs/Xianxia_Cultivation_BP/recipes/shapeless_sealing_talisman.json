@@ -1,0 +1,29 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shapeless": {
+    "description": {
+      "identifier": "xian:shapeless_sealing_talisman"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "ingredients": [
+      {
+        "item": "xian:talisman_paper",
+        "count": 1
+      },
+      {
+        "item": "xian:cinnabar_ink",
+        "count": 1
+      },
+      {
+        "item": "minecraft:chain",
+        "count": 1
+      }
+    ],
+    "result": {
+      "item": "xian:sealing_talisman",
+      "count": 2
+    }
+  }
+}

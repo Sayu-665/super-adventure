@@ -1,0 +1,27 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "xian:shaped_cultivation_codex"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "pattern": [
+      "S",
+      "B"
+    ],
+    "key": {
+      "S": {
+        "item": "xian:low_spirit_stone"
+      },
+      "B": {
+        "item": "minecraft:book"
+      }
+    },
+    "result": {
+      "item": "xian:cultivation_codex",
+      "count": 1
+    }
+  }
+}

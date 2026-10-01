@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:scroll_spirit_sense",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_scroll_spirit_sense"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Technique Scroll: Divine Sense Sweep"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

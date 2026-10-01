@@ -1,0 +1,70 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.xian.heart_demon.walk": {
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "math.cos(query.anim_time * 38.17) * 40.0",
+            0,
+            0
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-math.cos(query.anim_time * 38.17) * 40.0",
+            0,
+            0
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            "-math.cos(query.anim_time * 38.17) * 35.0",
+            0,
+            0
+          ]
+        },
+        "leftLeg": {
+          "rotation": [
+            "math.cos(query.anim_time * 38.17) * 35.0",
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.xian.heart_demon.idle": {
+      "loop": true,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            0,
+            0,
+            "math.sin(query.life_time * 60) * 2.5 + 2.5"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            0,
+            0,
+            "-math.sin(query.life_time * 60) * 2.5 - 2.5"
+          ]
+        }
+      }
+    },
+    "animation.xian.heart_demon.attack": {
+      "loop": true,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-math.sin(variable.attack_time * 180) * 80 - (query.is_delayed_attacking ? 70 : 0)",
+            0,
+            0
+          ]
+        }
+      }
+    }
+  }
+}

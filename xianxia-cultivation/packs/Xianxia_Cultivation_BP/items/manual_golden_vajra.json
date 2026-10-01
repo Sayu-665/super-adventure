@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:manual_golden_vajra",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_manual_golden_vajra"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Jade Slip: Indestructible Golden Vajra Art"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

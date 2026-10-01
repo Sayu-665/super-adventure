@@ -1,0 +1,49 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:daoist_leggings",
+      "menu_category": {
+        "category": "equipment"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_daoist_leggings"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Daoist Trousers"
+      },
+      "minecraft:max_stack_size": 1,
+      "minecraft:wearable": {
+        "slot": "slot.armor.legs",
+        "protection": 5
+      },
+      "minecraft:durability": {
+        "max_durability": 420
+      },
+      "minecraft:enchantable": {
+        "slot": "armor_legs",
+        "value": 18
+      },
+      "minecraft:repairable": {
+        "repair_items": [
+          {
+            "items": [
+              "xian:spirit_jade"
+            ],
+            "repair_amount": "q.max_durability * 0.25"
+          }
+        ]
+      },
+      "minecraft:tags": {
+        "tags": [
+          "minecraft:is_armor",
+          "xian:daoist_armor"
+        ]
+      }
+    }
+  }
+}

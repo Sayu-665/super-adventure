@@ -1,0 +1,39 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:flood_dragon",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/flood_dragon"
+      },
+      "geometry": {
+        "default": "geometry.xian.flood_dragon"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "idle": "animation.xian.flood_dragon.idle",
+        "walk": "animation.xian.flood_dragon.walk"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          "idle",
+          {
+            "walk": "query.modified_move_speed"
+          }
+        ],
+        "scale": "1.4"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#2896be",
+        "overlay_color": "#f0dc5a"
+      }
+    }
+  }
+}

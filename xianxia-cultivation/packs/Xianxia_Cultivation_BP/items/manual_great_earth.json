@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:manual_great_earth",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_manual_great_earth"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Jade Slip: Great Earth Mountain Art"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

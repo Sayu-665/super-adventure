@@ -1,0 +1,43 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:wandering_merchant",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/wandering_merchant"
+      },
+      "geometry": {
+        "default": "geometry.xian.wandering_merchant"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.wandering_merchant.walk",
+        "idle": "animation.xian.wandering_merchant.idle",
+        "attack": "animation.xian.wandering_merchant.attack"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle",
+          {
+            "attack": "variable.attack_time > 0.0"
+          }
+        ],
+        "scale": "1.0"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#c8aa5a",
+        "overlay_color": "#5a321e"
+      }
+    }
+  }
+}

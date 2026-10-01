@@ -1,0 +1,162 @@
+{
+  "format_version": "1.21.0",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "xian:spirit_fox",
+      "is_spawnable": true,
+      "is_summonable": true,
+      "is_experimental": false
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "spirit_beast",
+          "fox_spirit",
+          "mob"
+        ]
+      },
+      "minecraft:health": {
+        "value": 24,
+        "max": 24
+      },
+      "minecraft:collision_box": {
+        "width": 0.7,
+        "height": 0.8
+      },
+      "minecraft:movement": {
+        "value": 0.32
+      },
+      "minecraft:movement.basic": {},
+      "minecraft:jump.static": {},
+      "minecraft:can_climb": {},
+      "minecraft:physics": {},
+      "minecraft:breathable": {
+        "total_supply": 15,
+        "suffocate_time": 0
+      },
+      "minecraft:nameable": {},
+      "minecraft:loot": {
+        "table": "loot_tables/entities/spirit_fox.json"
+      },
+      "minecraft:experience_reward": {
+        "on_death": "query.last_hit_by_player ? 6 : 0"
+      },
+      "minecraft:navigation.walk": {
+        "can_path_over_water": true,
+        "avoid_water": true,
+        "avoid_damage_blocks": true,
+        "can_open_doors": false
+      },
+      "minecraft:behavior.float": {
+        "priority": 0
+      },
+      "minecraft:behavior.random_stroll": {
+        "priority": 7,
+        "speed_multiplier": 0.9
+      },
+      "minecraft:behavior.look_at_player": {
+        "priority": 8,
+        "look_distance": 8,
+        "probability": 0.02
+      },
+      "minecraft:behavior.random_look_around": {
+        "priority": 9
+      },
+      "minecraft:follow_range": {
+        "value": 24,
+        "max": 32
+      }
+    },
+    "component_groups": {
+      "xian:wild": {
+        "minecraft:tameable": {
+          "probability": 0.34,
+          "tame_items": "xian:spirit_fruit",
+          "tame_event": {
+            "event": "xian:on_tame",
+            "target": "self"
+          }
+        },
+        "minecraft:despawn": {
+          "despawn_from_distance": {}
+        },
+        "minecraft:behavior.avoid_mob_type": {
+          "priority": 3,
+          "entity_types": [
+            {
+              "filters": {
+                "test": "is_family",
+                "subject": "other",
+                "value": "monster"
+              },
+              "max_dist": 8,
+              "walk_speed_multiplier": 1.1,
+              "sprint_speed_multiplier": 1.4
+            }
+          ]
+        }
+      },
+      "xian:tamed": {
+        "minecraft:is_tamed": {},
+        "minecraft:health": {
+          "value": 50,
+          "max": 50
+        },
+        "minecraft:attack": {
+          "damage": 6
+        },
+        "minecraft:behavior.melee_attack": {
+          "priority": 3,
+          "speed_multiplier": 1.3,
+          "track_target": true
+        },
+        "minecraft:behavior.follow_owner": {
+          "priority": 5,
+          "speed_multiplier": 1.2,
+          "start_distance": 10,
+          "stop_distance": 2
+        },
+        "minecraft:behavior.owner_hurt_by_target": {
+          "priority": 1
+        },
+        "minecraft:behavior.owner_hurt_target": {
+          "priority": 2
+        },
+        "minecraft:sittable": {},
+        "minecraft:behavior.stay_while_sitting": {
+          "priority": 3
+        },
+        "minecraft:healable": {
+          "items": [
+            {
+              "item": "xian:spirit_fruit",
+              "heal_amount": 15
+            }
+          ]
+        },
+        "minecraft:leashable": {}
+      }
+    },
+    "events": {
+      "minecraft:entity_spawned": {
+        "add": {
+          "component_groups": [
+            "xian:wild"
+          ]
+        }
+      },
+      "xian:on_tame": {
+        "remove": {
+          "component_groups": [
+            "xian:wild"
+          ]
+        },
+        "add": {
+          "component_groups": [
+            "xian:tamed"
+          ]
+        }
+      }
+    }
+  }
+}

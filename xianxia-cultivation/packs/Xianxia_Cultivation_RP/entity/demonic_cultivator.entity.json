@@ -1,0 +1,43 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:demonic_cultivator",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/demonic_cultivator"
+      },
+      "geometry": {
+        "default": "geometry.xian.demonic_cultivator"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.demonic_cultivator.walk",
+        "idle": "animation.xian.demonic_cultivator.idle",
+        "attack": "animation.xian.demonic_cultivator.attack"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle",
+          {
+            "attack": "variable.attack_time > 0.0"
+          }
+        ],
+        "scale": "1.0"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#280a14",
+        "overlay_color": "#c81428"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "xian:shaped_meditation_cushion"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "pattern": [
+      "WWW",
+      "SCS"
+    ],
+    "key": {
+      "W": {
+        "item": "minecraft:yellow_wool"
+      },
+      "S": {
+        "item": "xian:low_spirit_stone"
+      },
+      "C": {
+        "item": "minecraft:white_carpet"
+      }
+    },
+    "result": {
+      "item": "xian:meditation_cushion",
+      "count": 1
+    }
+  }
+}

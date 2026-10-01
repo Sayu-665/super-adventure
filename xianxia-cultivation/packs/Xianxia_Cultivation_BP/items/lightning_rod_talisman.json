@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:lightning_rod_talisman",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_lightning_rod_talisman"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Tribulation Warding Talisman"
+      },
+      "minecraft:max_stack_size": 16
+    }
+  }
+}

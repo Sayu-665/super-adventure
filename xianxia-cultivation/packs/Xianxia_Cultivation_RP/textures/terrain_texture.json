@@ -1,0 +1,131 @@
+{
+  "resource_pack_name": "xianxia",
+  "texture_name": "atlas.terrain",
+  "padding": 8,
+  "num_mip_levels": 4,
+  "texture_data": {
+    "xian_spirit_stone_ore": {
+      "textures": "textures/blocks/xian_spirit_stone_ore"
+    },
+    "xian_deepslate_spirit_stone_ore": {
+      "textures": "textures/blocks/xian_deepslate_spirit_stone_ore"
+    },
+    "xian_spirit_jade_ore": {
+      "textures": "textures/blocks/xian_spirit_jade_ore"
+    },
+    "xian_profound_iron_ore": {
+      "textures": "textures/blocks/xian_profound_iron_ore"
+    },
+    "xian_alchemy_furnace_side": {
+      "textures": "textures/blocks/xian_alchemy_furnace_side"
+    },
+    "xian_alchemy_furnace_top": {
+      "textures": "textures/blocks/xian_alchemy_furnace_top"
+    },
+    "xian_refining_forge_side": {
+      "textures": "textures/blocks/xian_refining_forge_side"
+    },
+    "xian_refining_forge_top": {
+      "textures": "textures/blocks/xian_refining_forge_top"
+    },
+    "xian_meditation_cushion": {
+      "textures": "textures/blocks/xian_meditation_cushion"
+    },
+    "xian_qi_gathering_array_top": {
+      "textures": "textures/blocks/xian_qi_gathering_array_top"
+    },
+    "xian_qi_gathering_array_side": {
+      "textures": "textures/blocks/xian_qi_gathering_array_side"
+    },
+    "xian_protection_array_top": {
+      "textures": "textures/blocks/xian_protection_array_top"
+    },
+    "xian_protection_array_side": {
+      "textures": "textures/blocks/xian_protection_array_side"
+    },
+    "xian_teleport_array_top": {
+      "textures": "textures/blocks/xian_teleport_array_top"
+    },
+    "xian_teleport_array_side": {
+      "textures": "textures/blocks/xian_teleport_array_side"
+    },
+    "xian_spirit_vein": {
+      "textures": "textures/blocks/xian_spirit_vein"
+    },
+    "xian_spirit_stone_block": {
+      "textures": "textures/blocks/xian_spirit_stone_block"
+    },
+    "xian_spirit_grass_plant_0": {
+      "textures": "textures/blocks/xian_spirit_grass_plant_0"
+    },
+    "xian_spirit_grass_plant_1": {
+      "textures": "textures/blocks/xian_spirit_grass_plant_1"
+    },
+    "xian_spirit_grass_plant_2": {
+      "textures": "textures/blocks/xian_spirit_grass_plant_2"
+    },
+    "xian_blood_ginseng_plant_0": {
+      "textures": "textures/blocks/xian_blood_ginseng_plant_0"
+    },
+    "xian_blood_ginseng_plant_1": {
+      "textures": "textures/blocks/xian_blood_ginseng_plant_1"
+    },
+    "xian_blood_ginseng_plant_2": {
+      "textures": "textures/blocks/xian_blood_ginseng_plant_2"
+    },
+    "xian_frost_lotus_plant_0": {
+      "textures": "textures/blocks/xian_frost_lotus_plant_0"
+    },
+    "xian_frost_lotus_plant_1": {
+      "textures": "textures/blocks/xian_frost_lotus_plant_1"
+    },
+    "xian_frost_lotus_plant_2": {
+      "textures": "textures/blocks/xian_frost_lotus_plant_2"
+    },
+    "xian_flame_lotus_plant_0": {
+      "textures": "textures/blocks/xian_flame_lotus_plant_0"
+    },
+    "xian_flame_lotus_plant_1": {
+      "textures": "textures/blocks/xian_flame_lotus_plant_1"
+    },
+    "xian_flame_lotus_plant_2": {
+      "textures": "textures/blocks/xian_flame_lotus_plant_2"
+    },
+    "xian_purple_cloud_mushroom_plant_0": {
+      "textures": "textures/blocks/xian_purple_cloud_mushroom_plant_0"
+    },
+    "xian_purple_cloud_mushroom_plant_1": {
+      "textures": "textures/blocks/xian_purple_cloud_mushroom_plant_1"
+    },
+    "xian_purple_cloud_mushroom_plant_2": {
+      "textures": "textures/blocks/xian_purple_cloud_mushroom_plant_2"
+    },
+    "xian_moon_orchid_plant_0": {
+      "textures": "textures/blocks/xian_moon_orchid_plant_0"
+    },
+    "xian_moon_orchid_plant_1": {
+      "textures": "textures/blocks/xian_moon_orchid_plant_1"
+    },
+    "xian_moon_orchid_plant_2": {
+      "textures": "textures/blocks/xian_moon_orchid_plant_2"
+    },
+    "xian_thunder_fern_plant_0": {
+      "textures": "textures/blocks/xian_thunder_fern_plant_0"
+    },
+    "xian_thunder_fern_plant_1": {
+      "textures": "textures/blocks/xian_thunder_fern_plant_1"
+    },
+    "xian_thunder_fern_plant_2": {
+      "textures": "textures/blocks/xian_thunder_fern_plant_2"
+    },
+    "xian_jade_dew_flower_plant_0": {
+      "textures": "textures/blocks/xian_jade_dew_flower_plant_0"
+    },
+    "xian_jade_dew_flower_plant_1": {
+      "textures": "textures/blocks/xian_jade_dew_flower_plant_1"
+    },
+    "xian_jade_dew_flower_plant_2": {
+      "textures": "textures/blocks/xian_jade_dew_flower_plant_2"
+    }
+  }
+}

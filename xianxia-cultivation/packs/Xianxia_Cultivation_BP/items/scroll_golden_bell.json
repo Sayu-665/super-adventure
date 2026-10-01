@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:scroll_golden_bell",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_scroll_golden_bell"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Technique Scroll: Golden Bell Shield"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:blood_ginseng",
+      "menu_category": {
+        "category": "nature"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_blood_ginseng"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Blood Ginseng"
+      },
+      "minecraft:max_stack_size": 64,
+      "minecraft:block_placer": {
+        "block": "xian:blood_ginseng_plant"
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Xianxia Cultivation (Behavior)",
+    "description": "Walk the path of immortality: spirit roots, eleven cultivation realms, heavenly tribulations, alchemy, artifact refining, formations, talismans, sects, spirit beasts and martial techniques.",
+    "uuid": "928a151f-5426-530b-879d-4c2580e1c0e1",
+    "version": [
+      1,
+      0,
+      0
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      90
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "10222564-6b95-5c1d-b214-bb9df96b5962",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "uuid": "92f3cb6f-8cbd-5175-a51a-abc370300855",
+      "version": [
+        1,
+        0,
+        0
+      ],
+      "entry": "scripts/main.js"
+    }
+  ],
+  "dependencies": [
+    {
+      "uuid": "d52091c9-b9fc-5cbd-b5ae-a424e284a92b",
+      "version": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "module_name": "@minecraft/server",
+      "version": "2.0.0"
+    },
+    {
+      "module_name": "@minecraft/server-ui",
+      "version": "2.0.0"
+    }
+  ],
+  "metadata": {
+    "authors": [
+      "super-adventure"
+    ],
+    "license": "MIT"
+  }
+}

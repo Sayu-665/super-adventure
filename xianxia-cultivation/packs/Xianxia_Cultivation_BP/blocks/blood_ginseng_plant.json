@@ -1,0 +1,103 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:block": {
+    "description": {
+      "identifier": "xian:blood_ginseng_plant",
+      "menu_category": {
+        "category": "nature"
+      },
+      "states": {
+        "xian:growth": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    "components": {
+      "minecraft:geometry": "geometry.xian_cross",
+      "minecraft:material_instances": {
+        "*": {
+          "texture": "xian_blood_ginseng_plant_0",
+          "render_method": "alpha_test",
+          "ambient_occlusion": false,
+          "face_dimming": false
+        }
+      },
+      "minecraft:collision_box": false,
+      "minecraft:selection_box": {
+        "origin": [
+          -6,
+          0,
+          -6
+        ],
+        "size": [
+          12,
+          10,
+          12
+        ]
+      },
+      "minecraft:destructible_by_mining": {
+        "seconds_to_destroy": 0
+      },
+      "minecraft:destructible_by_explosion": {
+        "explosion_resistance": 0
+      },
+      "minecraft:light_dampening": 0,
+      "minecraft:loot": "loot_tables/blocks/blood_ginseng_plant.json",
+      "minecraft:placement_filter": {
+        "conditions": [
+          {
+            "allowed_faces": [
+              "up"
+            ],
+            "block_filter": [
+              "minecraft:grass_block",
+              "minecraft:dirt",
+              "minecraft:farmland",
+              "minecraft:podzol",
+              "minecraft:coarse_dirt",
+              "minecraft:rooted_dirt",
+              "minecraft:moss_block",
+              "minecraft:mycelium",
+              "minecraft:sand",
+              "minecraft:red_sand",
+              "minecraft:mud",
+              "minecraft:snow"
+            ]
+          }
+        ]
+      },
+      "minecraft:map_color": "#c81e28",
+      "xian:herb": {}
+    },
+    "permutations": [
+      {
+        "condition": "q.block_state('xian:growth') == 1",
+        "components": {
+          "minecraft:material_instances": {
+            "*": {
+              "texture": "xian_blood_ginseng_plant_1",
+              "render_method": "alpha_test",
+              "ambient_occlusion": false,
+              "face_dimming": false
+            }
+          }
+        }
+      },
+      {
+        "condition": "q.block_state('xian:growth') == 2",
+        "components": {
+          "minecraft:material_instances": {
+            "*": {
+              "texture": "xian_blood_ginseng_plant_2",
+              "render_method": "alpha_test",
+              "ambient_occlusion": false,
+              "face_dimming": false
+            }
+          }
+        }
+      }
+    ]
+  }
+}

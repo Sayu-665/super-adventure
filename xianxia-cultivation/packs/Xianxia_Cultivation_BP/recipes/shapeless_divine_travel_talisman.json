@@ -1,0 +1,29 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shapeless": {
+    "description": {
+      "identifier": "xian:shapeless_divine_travel_talisman"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "ingredients": [
+      {
+        "item": "xian:talisman_paper",
+        "count": 1
+      },
+      {
+        "item": "xian:cinnabar_ink",
+        "count": 1
+      },
+      {
+        "item": "minecraft:feather",
+        "count": 1
+      }
+    ],
+    "result": {
+      "item": "xian:divine_travel_talisman",
+      "count": 2
+    }
+  }
+}

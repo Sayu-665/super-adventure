@@ -1,0 +1,28 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "xian:shaped_martial_seal"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "pattern": [
+      " J ",
+      "JSJ",
+      " J "
+    ],
+    "key": {
+      "J": {
+        "item": "xian:spirit_jade"
+      },
+      "S": {
+        "item": "xian:low_spirit_stone"
+      }
+    },
+    "result": {
+      "item": "xian:martial_seal",
+      "count": 1
+    }
+  }
+}

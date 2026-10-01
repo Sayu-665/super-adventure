@@ -1,0 +1,177 @@
+{
+  "pools": [
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:low_spirit_stone",
+          "weight": 1,
+          "functions": [
+            {
+              "function": "set_count",
+              "count": {
+                "min": 2,
+                "max": 6
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:qi_gathering_pill",
+          "weight": 4
+        },
+        {
+          "type": "item",
+          "name": "xian:healing_pill",
+          "weight": 4
+        },
+        {
+          "type": "item",
+          "name": "xian:qi_recovery_pill",
+          "weight": 2
+        },
+        {
+          "type": "item",
+          "name": "xian:fire_talisman",
+          "weight": 2
+        },
+        {
+          "type": "item",
+          "name": "xian:protection_talisman",
+          "weight": 1
+        }
+      ],
+      "conditions": [
+        {
+          "condition": "random_chance",
+          "chance": 0.6
+        }
+      ]
+    },
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:scroll_qi_bolt",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_wind_step",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_fireball",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_sword_qi",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_frost_spikes",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_healing_spring",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_vine_bind",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_tidal_palm",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_thunder_palm",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:scroll_earth_shield",
+          "weight": 1
+        }
+      ],
+      "conditions": [
+        {
+          "condition": "random_chance",
+          "chance": 0.12
+        }
+      ]
+    },
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:manual_five_elements",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:manual_azure_wood",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:manual_blazing_sun",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:manual_profound_water",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:manual_golden_vajra",
+          "weight": 1
+        },
+        {
+          "type": "item",
+          "name": "xian:manual_great_earth",
+          "weight": 1
+        }
+      ],
+      "conditions": [
+        {
+          "condition": "random_chance",
+          "chance": 0.06
+        }
+      ]
+    },
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:spirit_jade",
+          "weight": 1
+        }
+      ],
+      "conditions": [
+        {
+          "condition": "random_chance",
+          "chance": 0.15
+        }
+      ]
+    }
+  ]
+}

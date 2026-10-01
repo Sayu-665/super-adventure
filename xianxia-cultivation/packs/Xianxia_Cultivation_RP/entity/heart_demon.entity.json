@@ -1,0 +1,43 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:heart_demon",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/heart_demon"
+      },
+      "geometry": {
+        "default": "geometry.xian.heart_demon"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.heart_demon.walk",
+        "idle": "animation.xian.heart_demon.idle",
+        "attack": "animation.xian.heart_demon.attack"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle",
+          {
+            "attack": "variable.attack_time > 0.0"
+          }
+        ],
+        "scale": "1.0"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#0a0a0f",
+        "overlay_color": "#8c28c8"
+      }
+    }
+  }
+}

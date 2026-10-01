@@ -1,0 +1,39 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:spirit_fox",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/spirit_fox"
+      },
+      "geometry": {
+        "default": "geometry.xian.spirit_fox"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.spirit_fox.walk",
+        "idle": "animation.xian.spirit_fox.idle"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle"
+        ],
+        "scale": "1.0"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#f0f0ff",
+        "overlay_color": "#6ec8ff"
+      }
+    }
+  }
+}

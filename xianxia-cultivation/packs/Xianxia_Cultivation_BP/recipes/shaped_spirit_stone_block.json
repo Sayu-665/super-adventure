@@ -1,0 +1,25 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "xian:shaped_spirit_stone_block"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "pattern": [
+      "SSS",
+      "SSS",
+      "SSS"
+    ],
+    "key": {
+      "S": {
+        "item": "xian:low_spirit_stone"
+      }
+    },
+    "result": {
+      "item": "xian:spirit_stone_block",
+      "count": 1
+    }
+  }
+}

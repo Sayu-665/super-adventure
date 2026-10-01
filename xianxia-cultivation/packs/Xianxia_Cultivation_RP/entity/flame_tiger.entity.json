@@ -1,0 +1,39 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:flame_tiger",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/flame_tiger"
+      },
+      "geometry": {
+        "default": "geometry.xian.flame_tiger"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.flame_tiger.walk",
+        "idle": "animation.xian.flame_tiger.idle"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle"
+        ],
+        "scale": "1.1"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#f08228",
+        "overlay_color": "#1e1414"
+      }
+    }
+  }
+}

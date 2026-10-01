@@ -1,0 +1,98 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.xian_cushion",
+        "texture_width": 16,
+        "texture_height": 16
+      },
+      "bones": [
+        {
+          "name": "cushion",
+          "pivot": [
+            0,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -7,
+                0,
+                -7
+              ],
+              "size": [
+                14,
+                4,
+                14
+              ],
+              "uv": {
+                "north": {
+                  "uv": [
+                    1,
+                    6
+                  ],
+                  "uv_size": [
+                    14,
+                    4
+                  ]
+                },
+                "south": {
+                  "uv": [
+                    1,
+                    6
+                  ],
+                  "uv_size": [
+                    14,
+                    4
+                  ]
+                },
+                "east": {
+                  "uv": [
+                    1,
+                    6
+                  ],
+                  "uv_size": [
+                    14,
+                    4
+                  ]
+                },
+                "west": {
+                  "uv": [
+                    1,
+                    6
+                  ],
+                  "uv_size": [
+                    14,
+                    4
+                  ]
+                },
+                "up": {
+                  "uv": [
+                    1,
+                    1
+                  ],
+                  "uv_size": [
+                    14,
+                    14
+                  ]
+                },
+                "down": {
+                  "uv": [
+                    1,
+                    1
+                  ],
+                  "uv_size": [
+                    14,
+                    14
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "format_version": "1.21.40",
+  "xian:spirit_stone_ore": {
+    "sound": "stone"
+  },
+  "xian:deepslate_spirit_stone_ore": {
+    "sound": "deepslate"
+  },
+  "xian:spirit_jade_ore": {
+    "sound": "stone"
+  },
+  "xian:profound_iron_ore": {
+    "sound": "deepslate"
+  },
+  "xian:alchemy_furnace": {
+    "sound": "metal"
+  },
+  "xian:refining_forge": {
+    "sound": "metal"
+  },
+  "xian:meditation_cushion": {
+    "sound": "cloth"
+  },
+  "xian:qi_gathering_array": {
+    "sound": "stone"
+  },
+  "xian:protection_array": {
+    "sound": "stone"
+  },
+  "xian:teleport_array": {
+    "sound": "stone"
+  },
+  "xian:spirit_vein": {
+    "sound": "amethyst_block"
+  },
+  "xian:spirit_stone_block": {
+    "sound": "amethyst_block"
+  },
+  "xian:spirit_grass_plant": {
+    "sound": "grass"
+  },
+  "xian:blood_ginseng_plant": {
+    "sound": "grass"
+  },
+  "xian:frost_lotus_plant": {
+    "sound": "grass"
+  },
+  "xian:flame_lotus_plant": {
+    "sound": "grass"
+  },
+  "xian:purple_cloud_mushroom_plant": {
+    "sound": "grass"
+  },
+  "xian:moon_orchid_plant": {
+    "sound": "grass"
+  },
+  "xian:thunder_fern_plant": {
+    "sound": "grass"
+  },
+  "xian:jade_dew_flower_plant": {
+    "sound": "grass"
+  }
+}

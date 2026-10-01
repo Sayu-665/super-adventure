@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:root_testing_stone",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_root_testing_stone"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Spirit Root Testing Stone"
+      },
+      "minecraft:max_stack_size": 16
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:spatial_ring",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_spatial_ring"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Spatial Storage Ring"
+      },
+      "minecraft:max_stack_size": 1
+    }
+  }
+}

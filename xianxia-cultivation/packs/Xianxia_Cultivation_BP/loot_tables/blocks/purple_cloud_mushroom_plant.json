@@ -1,0 +1,14 @@
+{
+  "pools": [
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "item",
+          "name": "xian:purple_cloud_mushroom",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

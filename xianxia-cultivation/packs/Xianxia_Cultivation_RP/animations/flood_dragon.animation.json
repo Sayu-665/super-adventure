@@ -1,0 +1,86 @@
+{
+  "format_version": "1.8.0",
+  "animations": {
+    "animation.xian.flood_dragon.idle": {
+      "loop": true,
+      "bones": {
+        "seg1": {
+          "rotation": [
+            "math.sin(query.life_time * 80 + 50) * 4",
+            "math.sin(query.life_time * 100 + 45) * 12",
+            0
+          ]
+        },
+        "seg2": {
+          "rotation": [
+            "math.sin(query.life_time * 80 + 100) * 4",
+            "math.sin(query.life_time * 100 + 90) * 12",
+            0
+          ]
+        },
+        "seg3": {
+          "rotation": [
+            "math.sin(query.life_time * 80 + 150) * 4",
+            "math.sin(query.life_time * 100 + 135) * 12",
+            0
+          ]
+        },
+        "seg4": {
+          "rotation": [
+            "math.sin(query.life_time * 80 + 200) * 4",
+            "math.sin(query.life_time * 100 + 180) * 12",
+            0
+          ]
+        },
+        "seg5": {
+          "rotation": [
+            "math.sin(query.life_time * 80 + 250) * 4",
+            "math.sin(query.life_time * 100 + 225) * 12",
+            0
+          ]
+        },
+        "tail": {
+          "rotation": [
+            0,
+            "math.sin(query.life_time * 120) * 20",
+            0
+          ]
+        }
+      }
+    },
+    "animation.xian.flood_dragon.walk": {
+      "loop": true,
+      "anim_time_update": "query.modified_distance_moved",
+      "bones": {
+        "leg1r": {
+          "rotation": [
+            "math.cos(query.anim_time * 38.17) * 40",
+            0,
+            0
+          ]
+        },
+        "leg1l": {
+          "rotation": [
+            "-math.cos(query.anim_time * 38.17) * 40",
+            0,
+            0
+          ]
+        },
+        "leg4r": {
+          "rotation": [
+            "-math.cos(query.anim_time * 38.17) * 40",
+            0,
+            0
+          ]
+        },
+        "leg4l": {
+          "rotation": [
+            "math.cos(query.anim_time * 38.17) * 40",
+            0,
+            0
+          ]
+        }
+      }
+    }
+  }
+}

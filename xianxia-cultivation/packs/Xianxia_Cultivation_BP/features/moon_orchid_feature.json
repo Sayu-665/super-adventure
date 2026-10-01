@@ -1,0 +1,33 @@
+{
+  "format_version": "1.13.0",
+  "minecraft:single_block_feature": {
+    "description": {
+      "identifier": "xian:moon_orchid_feature"
+    },
+    "places_block": {
+      "name": "xian:moon_orchid_plant",
+      "states": {
+        "xian:growth": 2
+      }
+    },
+    "enforce_placement_rules": false,
+    "enforce_survivability_rules": true,
+    "may_replace": [
+      "minecraft:air"
+    ],
+    "may_attach_to": {
+      "bottom": [
+        "minecraft:grass_block",
+        "minecraft:dirt",
+        "minecraft:podzol",
+        "minecraft:sand",
+        "minecraft:red_sand",
+        "minecraft:snow",
+        "minecraft:mycelium",
+        "minecraft:moss_block",
+        "minecraft:mud",
+        "minecraft:coarse_dirt"
+      ]
+    }
+  }
+}

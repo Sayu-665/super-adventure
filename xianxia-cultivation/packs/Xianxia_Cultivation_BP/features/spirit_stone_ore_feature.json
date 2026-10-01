@@ -1,0 +1,20 @@
+{
+  "format_version": "1.13.0",
+  "minecraft:ore_feature": {
+    "description": {
+      "identifier": "xian:spirit_stone_ore_feature"
+    },
+    "count": 6,
+    "replace_rules": [
+      {
+        "places_block": "xian:spirit_stone_ore",
+        "may_replace": [
+          "minecraft:stone",
+          "minecraft:andesite",
+          "minecraft:diorite",
+          "minecraft:granite"
+        ]
+      }
+    ]
+  }
+}

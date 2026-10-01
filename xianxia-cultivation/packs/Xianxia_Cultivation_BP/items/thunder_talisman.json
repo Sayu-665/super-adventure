@@ -1,0 +1,22 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "xian:thunder_talisman",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "xian_thunder_talisman"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "Five Thunder Talisman"
+      },
+      "minecraft:max_stack_size": 16
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "xian:demonic_wolf",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/xian/demonic_wolf"
+      },
+      "geometry": {
+        "default": "geometry.xian.demonic_wolf"
+      },
+      "animations": {
+        "look": "animation.xian.look_at_target",
+        "walk": "animation.xian.demonic_wolf.walk",
+        "idle": "animation.xian.demonic_wolf.idle"
+      },
+      "scripts": {
+        "animate": [
+          "look",
+          {
+            "walk": "query.modified_move_speed"
+          },
+          "idle"
+        ],
+        "scale": "1.0"
+      },
+      "render_controllers": [
+        "controller.render.xian_default"
+      ],
+      "spawn_egg": {
+        "base_color": "#282832",
+        "overlay_color": "#dc1e28"
+      }
+    }
+  }
+}

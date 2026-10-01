@@ -1,0 +1,14 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_furnace": {
+    "description": {
+      "identifier": "xian:smelt_profound_iron_ingot"
+    },
+    "tags": [
+      "furnace",
+      "blast_furnace"
+    ],
+    "input": "xian:raw_profound_iron",
+    "output": "xian:profound_iron_ingot"
+  }
+}
