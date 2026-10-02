@@ -35,6 +35,8 @@ pub struct DeviceInfo {
     pub caps: sb_core::model::DeviceCaps,
     /// The validation layer is active.
     pub validation: bool,
+    /// Synchronization validation (hazard detection between commands) is active as well.
+    pub sync_validation: bool,
     /// `VK_EXT_depth_clip_control` is enabled (needed for `DepthMode::GlNegOneToOne`).
     pub depth_clip_control: bool,
 }
@@ -110,6 +112,9 @@ pub(crate) struct Gpu {
     debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     debug_device: Option<ash::ext::debug_utils::Device>,
     sink: Arc<Sink>,
+    /// Notes about the validation setup (layer missing, sync validation off), repeated in
+    /// every render's messages.
+    setup_notes: Vec<ValidationMessage>,
     pub physical: vk::PhysicalDevice,
     pub device: ash::Device,
     pub queue: vk::Queue,
@@ -158,6 +163,20 @@ impl Gpu {
         let inst_exts = unsafe { entry.enumerate_instance_extension_properties(None) }.unwrap_or_default();
         let has_debug_utils = has_extension(&inst_exts, ash::ext::debug_utils::NAME);
         let validation = opts.validation && has_validation && has_debug_utils;
+        // Synchronization validation (hazard tracking between commands) is enabled with the
+        // core checks through VK_EXT_validation_features, which the layer itself exposes.
+        let layer_exts = if validation { unsafe { entry.enumerate_instance_extension_properties(Some(validation_layer)) }.unwrap_or_default() } else { Vec::new() };
+        let sync_validation = validation && has_extension(&layer_exts, ash::ext::validation_features::NAME);
+        if validation && !sync_validation {
+            sink.lock()
+                .map(|mut v| {
+                    v.push(ValidationMessage {
+                        severity: MessageSeverity::Warning,
+                        text: "sb-runtime: the validation layer does not expose VK_EXT_validation_features; synchronization validation is off".into(),
+                    })
+                })
+                .ok();
+        }
         if opts.validation && !validation {
             sink.lock().map(|mut v| {
                 v.push(ValidationMessage {
@@ -171,7 +190,12 @@ impl Gpu {
         let app_name = c"sb-runtime";
         let app = vk::ApplicationInfo::default().application_name(app_name).engine_name(app_name).api_version(api);
         let layer_ptrs = if validation { vec![validation_layer.as_ptr()] } else { Vec::new() };
-        let ext_ptrs = if has_debug_utils { vec![ash::ext::debug_utils::NAME.as_ptr()] } else { Vec::new() };
+        let mut ext_ptrs = if has_debug_utils { vec![ash::ext::debug_utils::NAME.as_ptr()] } else { Vec::new() };
+        if sync_validation {
+            ext_ptrs.push(ash::ext::validation_features::NAME.as_ptr());
+        }
+        let enabled_features = [vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION];
+        let mut validation_features = vk::ValidationFeaturesEXT::default().enabled_validation_features(&enabled_features);
         let user = Arc::as_ptr(&sink) as *mut c_void;
         let mut messenger_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR)
@@ -183,6 +207,9 @@ impl Gpu {
         let mut create = vk::InstanceCreateInfo::default().application_info(&app).enabled_layer_names(&layer_ptrs).enabled_extension_names(&ext_ptrs);
         if validation {
             create = create.push_next(&mut messenger_info);
+        }
+        if sync_validation {
+            create = create.push_next(&mut validation_features);
         }
         // SAFETY: valid create info; the sink outlives the instance (dropped after it).
         let instance = unsafe { entry.create_instance(&create, None) }.vk("vkCreateInstance")?;
@@ -358,15 +385,18 @@ impl Gpu {
             device_type: device_type_name(props.device_type).to_string(),
             caps,
             validation,
+            sync_validation,
             depth_clip_control,
         };
         let (instance, debug) = guard.take();
+        let setup_notes = sink.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
         Ok(Gpu {
             _entry: entry,
             instance,
             debug,
             debug_device,
             sink,
+            setup_notes,
             physical,
             device,
             queue,
@@ -384,6 +414,11 @@ impl Gpu {
     /// Take the collected validation messages.
     pub fn take_messages(&self) -> Vec<ValidationMessage> {
         self.sink.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
+    }
+
+    /// Notes about the validation setup itself (empty when everything requested is active).
+    pub fn setup_notes(&self) -> &[ValidationMessage] {
+        &self.setup_notes
     }
 
     pub fn limits(&self) -> &vk::PhysicalDeviceLimits {
@@ -556,5 +591,36 @@ mod tests {
         let msgs = gpu.take_messages();
         assert!(msgs.iter().any(|m| m.severity == MessageSeverity::Error && m.text.contains("00912")), "{msgs:?}");
         assert!(msgs.iter().all(|m| m.render().starts_with('[')));
+    }
+
+    /// Synchronization validation is active with the core checks: two transfer writes to
+    /// the same buffer without a barrier between them must be reported as a hazard.
+    #[test]
+    fn sync_validation_reports_hazards() {
+        let mut gpu = match Gpu::new(&RuntimeOptions { validation: true, prefer_cpu_device: true, device_name_filter: None }) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipping: {e}");
+                return;
+            }
+        };
+        if !gpu.info.validation {
+            eprintln!("skipping: validation layer not installed");
+            return;
+        }
+        assert!(gpu.info.sync_validation, "validation is on but synchronization validation is not");
+        assert!(gpu.setup_notes().is_empty(), "{:?}", gpu.setup_notes());
+        let _ = gpu.take_messages();
+        let mut arena = crate::resources::Arena::default();
+        let buf = arena.create_buffer(&mut gpu, "hazard", 256, vk::BufferUsageFlags::TRANSFER_DST, gpu_allocator::MemoryLocation::GpuOnly).expect("buffer");
+        let b = arena.buffer(buf).buffer;
+        gpu.one_shot(|d, cmd| unsafe {
+            d.cmd_fill_buffer(cmd, b, 0, 256, 1);
+            d.cmd_fill_buffer(cmd, b, 0, 256, 2);
+        })
+        .expect("submit");
+        arena.destroy_all(&mut gpu);
+        let msgs = gpu.take_messages();
+        assert!(msgs.iter().any(|m| m.text.contains("SYNC-HAZARD-WRITE-AFTER-WRITE")), "{msgs:?}");
     }
 }

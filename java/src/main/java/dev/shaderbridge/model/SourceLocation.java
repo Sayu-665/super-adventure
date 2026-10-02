@@ -1,5 +1,7 @@
 package dev.shaderbridge.model;
 
+import dev.shaderbridge.model.json.OmitIfNull;
+
 /**
  * A location in an original pack file.
  *
@@ -7,7 +9,7 @@ package dev.shaderbridge.model;
  * @param line   1-based line
  * @param column 1-based column, or null
  */
-public record SourceLocation(String file, int line, Integer column) {
+public record SourceLocation(String file, int line, @OmitIfNull Integer column) {
     @Override
     public String toString() {
         return column == null ? file + ":" + line : file + ":" + line + ":" + column;

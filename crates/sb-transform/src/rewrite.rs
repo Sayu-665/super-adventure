@@ -28,6 +28,7 @@ pub(crate) fn rewrite_stage(w: &mut StageWork, ctx: &Ctx) {
     compat::profile_pieces(w, ctx);
     crate::fixes::apply(w, ctx);
     crate::depth::apply(w, ctx);
+    crate::shadow::apply(w, ctx);
     varying_global_inputs(w, ctx);
     rename_main(w);
     epilogues(w, ctx);
@@ -225,9 +226,9 @@ fn hygiene(w: &mut StageWork, ctx: &Ctx) {
             plan.insert(name.clone(), format!("sbu_{}", &name[3..]));
         } else if ctx.profile_names.contains(name) && !uniforms.contains(name) {
             plan.insert(name.clone(), format!("sbu_{name}"));
-        } else if names::is_reserved_at_460(name) && !names::is_vulkan_type_keyword(name) {
-            plan.insert(name.clone(), format!("sb_kw_{name}"));
-        } else if names::is_vulkan_type_keyword(name) && !declared[name] {
+        } else if names::is_reserved_at_460(name) && (!names::is_vulkan_type_keyword(name) || !declared[name]) {
+            // Vulkan type keywords declared as functions or structs are renamed by
+            // `legacy_and_collisions` instead.
             plan.insert(name.clone(), format!("sb_kw_{name}"));
         }
     }
@@ -570,7 +571,8 @@ fn resources(w: &mut StageWork, ctx: &Ctx) {
         }
         let layout = if layout.is_empty() { String::new() } else { format!("layout({}) ", layout.join(", ")) };
         let mem = if mem.is_empty() { String::new() } else { format!("{} ", mem.join(" ")) };
-        w.piece(Section::Resources, &[&glsl_name], format!("{layout}{mem}uniform {tn} {glsl_name}{dims};"));
+        let declared_ty = crate::shadow::declared_type(&tn, ctx);
+        w.piece(Section::Resources, &[&glsl_name], format!("{layout}{mem}uniform {declared_ty} {glsl_name}{dims};"));
     }
     if renames.iter().all(|(a, b)| a == b) {
         return;

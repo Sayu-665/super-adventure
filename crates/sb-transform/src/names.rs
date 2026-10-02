@@ -151,14 +151,11 @@ pub fn legacy_texture(name: &str) -> Option<LegacyTexture> {
         };
     }
     if let Some(rest) = base.strip_prefix("textureSize") {
-        return (strip_dim(rest)? == "").then_some(LegacyTexture { core: "textureSize", shadow: false });
+        return strip_dim(rest)?.is_empty().then_some(LegacyTexture { core: "textureSize", shadow: false });
     }
-    let (rest, shadow) = if let Some(r) = base.strip_prefix("texture") {
-        (r, false)
-    } else if let Some(r) = base.strip_prefix("shadow") {
-        (r, true)
-    } else {
-        return None;
+    let (rest, shadow) = match base.strip_prefix("texture") {
+        Some(r) => (r, false),
+        None => (base.strip_prefix("shadow")?, true),
     };
     let suffix = strip_dim(rest)?;
     if !shadow && rest.starts_with("Buffer") {

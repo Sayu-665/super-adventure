@@ -1,5 +1,7 @@
 package dev.shaderbridge.model;
 
+import dev.shaderbridge.model.json.OmitIfNull;
+
 /**
  * Device capabilities relevant to translation.
  *
@@ -22,6 +24,6 @@ public record DeviceCaps(
     int maxPushConstantsSize,
     int maxColorAttachments,
     boolean comparisonSamplers,
-    Integer maxDescriptorsPerProgram
+    @OmitIfNull Integer maxDescriptorsPerProgram
 ) {
 }

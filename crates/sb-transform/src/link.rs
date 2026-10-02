@@ -428,7 +428,7 @@ fn add_producer_output(p: &mut StageWork, input: &IVar, pname: &str, ctx: &Ctx, 
                 if !is_generated {
                     p.warn(
                         "xf.missing-varying",
-                        format!("`{}` is read by the {} stage but never written by the {} stage; it reads zero", input.name, input_stage_name(input), p.stage),
+                        format!("`{}` is read by the next stage but never written by the {} stage; it reads zero", input.name, p.stage),
                         0,
                     );
                 }
@@ -457,10 +457,6 @@ fn add_producer_output(p: &mut StageWork, input: &IVar, pname: &str, ctx: &Ctx, 
             }
         }
     }
-}
-
-fn input_stage_name(_input: &IVar) -> &'static str {
-    "next"
 }
 
 /// Rule c: the producer keeps a temporary of its own type and converts at the end.

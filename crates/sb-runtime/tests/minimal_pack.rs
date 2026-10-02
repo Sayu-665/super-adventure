@@ -18,7 +18,7 @@ fn minimal_pack_renders_terrain_and_sky() {
         img.save(render_dir().join(format!("minimal_pack_{name}.png"))).ok();
     }
     eprintln!("stats: {:#?}", out.stats);
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
     assert_eq!(out.stats.frames, 2);
     assert!(out.stats.draws > 50, "{}", out.stats.draws);
@@ -74,8 +74,8 @@ fn dh_lods_beyond_render_distance_are_visible() {
     let b = render(&mut rt, &without, &blobs2, scene, (256, 144), 1, false);
     a.image.save(render_dir().join("dh_with_lods.png")).ok();
     b.image.save(render_dir().join("dh_without_lods.png")).ok();
-    assert_no_validation_errors(&a);
-    assert_no_validation_errors(&b);
+    assert_no_validation_messages(&a);
+    assert_no_validation_messages(&b);
     assert!(b.stats.geometry_skipped.iter().any(|g| g.starts_with("dh_terrain")), "{:?}", b.stats.geometry_skipped);
     // LODs fill pixels that are sky without them.
     let changed = a.image.pixels().zip(b.image.pixels()).filter(|(p, q)| (0..3).map(|c| p[c].abs_diff(q[c]) as u32).sum::<u32>() > 30).count();
@@ -92,7 +92,7 @@ fn native_dh_uses_separate_depth() {
     let out = render(&mut rt, &pack, &blobs, SceneParams { render_distance: 4, dh_render_distance: 16, ..Default::default() }, (256, 144), 1, true);
     out.image.save(render_dir().join("native_dh.png")).ok();
     assert!(luminance_variance(&out.image) > 0.002, "variance {}", luminance_variance(&out.image));
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
     let dh = &out.targets.iter().find(|(n, _)| n == "dhDepthTex0").expect("dhDepthTex0 captured").1;
     assert!(dh.pixels().any(|p| p[0] < 255), "DH depth is empty");
@@ -108,8 +108,8 @@ fn depth_mode_parity_forward_vs_reversed() {
         let scene = small_scene();
         let a = render(&mut rt, &fwd, &fb, scene.clone(), (256, 144), 2, false);
         let b = render(&mut rt, &rev, &rb, scene, (256, 144), 2, false);
-        assert_no_validation_errors(&a);
-        assert_no_validation_errors(&b);
+        assert_no_validation_messages(&a);
+        assert_no_validation_messages(&b);
         a.image.save(render_dir().join(format!("parity_forward{}.png", if native_dh { "_native" } else { "" }))).ok();
         b.image.save(render_dir().join(format!("parity_reversed{}.png", if native_dh { "_native" } else { "" }))).ok();
         let d = mean_abs_diff(&a.image, &b.image);
@@ -144,7 +144,7 @@ fn gl_depth_mode_with_depth_clip_control() {
             capture_targets: false,
         })
         .expect("render");
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert!(out.stats.warnings.iter().any(|w| w.contains("depth mode")), "{:?}", out.stats.warnings);
 }
 
@@ -185,7 +185,7 @@ fn broken_programs_are_skipped_not_fatal() {
     dim.passes[3].computes.push(1234);
     dim.passes[4].flip_state = vec![false; 3];
     let out = render(&mut rt, &pack, &blobs, small_scene(), (128, 72), 1, false);
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert!(out.stats.programs_skipped.iter().any(|s| s.name == "gbuffers_water"), "{:?}", out.stats.programs_skipped);
     assert!(out.stats.warnings.iter().any(|w| w.contains("99")), "{:?}", out.stats.warnings);
     assert!(out.stats.warnings.iter().any(|w| w.contains("1234")), "{:?}", out.stats.warnings);
@@ -212,7 +212,7 @@ fn render_to_png_writes_files() {
         capture_dir: Some(dir.join("targets")),
     };
     let out = sb_runtime::render_to_png(&pack, &blobs, &NoTextures, &settings).expect("render_to_png");
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     let png = image::open(dir.join("out.png")).expect("png written").to_rgba8();
     assert_eq!(png.dimensions(), (96, 54));
     assert!(dir.join("targets/colortex0.png").exists());

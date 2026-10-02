@@ -1,5 +1,8 @@
 name = "dh_terrain"
 description = "Distant Horizons 3.3 BLAZE_3D LOD terrain (16-byte vertices; quads indexed 0,1,2,2,3,0) (pipelines 'opaque_terrain' / 'transparent_terrain'). Vertex format: vPosition RGB16_UINT, meta R16_UINT (low byte = light: block<<4 | sky; bits 8..15 = micro offset 0b00zzyyxx), vColor RGBA8_UNORM, irisMaterial R8_UINT (DH_BLOCK_* id), irisNormal R8_UINT (EDhDirection: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east), textureTile R16_UINT (0 = flat color). DH binds vertUniqueUniformBlock per buffer, vertSharedUniformBlock/fragUniformBlock per pass and the samplers uLightMap/uBlockAtlas by name. gl_Vertex is camera-relative (Iris semantics); the pack sees gbufferModelView and dhProjection."
+# Camera-relative world geometry: in the shadow pass (TransformOptions::is_shadow_pass) the
+# model_view / projection semantics become shadowModelView / shadowProjection, as in Iris.
+world_space = true
 
 [[inputs]]
 name = "vPosition"

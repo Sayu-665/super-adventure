@@ -20,6 +20,8 @@ final class RustSource {
     private static final Pattern ITEM = Pattern.compile("(?m)^((?:#\\[[^\\n]*\\]\\n|///[^\\n]*\\n)*)pub (struct|enum) (\\w+) \\{\\n");
     private static final Pattern FIELD = Pattern.compile("(?m)^    pub (\\w+): ");
     private static final Pattern VARIANT = Pattern.compile("(?m)^    (\\w+)\\s*(?:[({,]|$)");
+    private static final Pattern SKIPPED_FIELD = Pattern.compile(
+        "(?m)^    #\\[serde\\([^\\n]*skip_serializing_if[^\\n]*\\)\\]\\n(?:    (?:///|#\\[)[^\\n]*\\n)*    pub (\\w+): ");
 
     /** A struct or enum declaration. */
     record Item(String kind, String name, String attributes, String body) {
@@ -27,6 +29,16 @@ final class RustSource {
         List<String> fields() {
             List<String> out = new ArrayList<>();
             Matcher m = FIELD.matcher(body);
+            while (m.find()) {
+                out.add(m.group(1));
+            }
+            return out;
+        }
+
+        /** @return the JSON field names of a struct that serde omits when they are {@code None} */
+        List<String> skippedFields() {
+            List<String> out = new ArrayList<>();
+            Matcher m = SKIPPED_FIELD.matcher(body);
             while (m.find()) {
                 out.add(m.group(1));
             }

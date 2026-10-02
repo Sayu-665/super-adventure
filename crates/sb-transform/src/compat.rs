@@ -398,6 +398,21 @@ pub(crate) fn profile_pieces(w: &mut StageWork, ctx: &Ctx) {
         };
         w.piece(Section::HostBlocks, &[&b.instance], format!("{layout} uniform {} {{ {} }} {};", b.name, b.members, b.instance));
     }
+    // Push constants: one anonymous block, members referenced unqualified (declared in
+    // every stage that references one of them).
+    if !compute && !p.push_constants.trim().is_empty() {
+        match crate::profiles::push_constant_members(&p.push_constants) {
+            Ok(members) => {
+                let provides: Vec<&str> = members.iter().map(String::as_str).collect();
+                w.piece(
+                    Section::HostBlocks,
+                    &provides,
+                    format!("layout(push_constant) uniform {} {{ {} }};", crate::profiles::PUSH_CONSTANT_BLOCK, p.push_constants.trim()),
+                );
+            }
+            Err(e) => w.error("xf.profile", format!("profile `{}`: {e}", p.name), 0),
+        }
+    }
     // Host samplers.
     for s in p.samplers.iter().filter(|_| !compute) {
         let decl = if vulkan {

@@ -1,5 +1,8 @@
 name = "vanilla_terrain_basic"
 description = "Minecraft 26.3 terrain with the unmodified BLOCK format (no normals/tangents/ids). Normals default to up; mc_Entity.x = -1. Use only when the host cannot extend the vertex format."
+# Camera-relative world geometry: in the shadow pass (TransformOptions::is_shadow_pass) the
+# model_view / projection semantics become shadowModelView / shadowProjection, as in Iris.
+world_space = true
 
 [[inputs]]
 name = "Position"

@@ -70,15 +70,13 @@ pub(crate) fn parse_glsl(code: &str, version: u32) -> Result<TranslationUnit, Pa
 fn parse_with_version(text: &str, version: u16, lines: &Lines) -> Result<TranslationUnit, ParseFailure> {
     let opts = ParseOptions { default_version: version, target_vulkan: false, ..ParseOptions::default() };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        <g::TranslationUnit as Parse>::parse_with_options::<MinLexer>(text, &opts).map(|(tu, _, _)| tu)
+        <g::TranslationUnit as Parse>::parse_with_options::<MinLexer>(text, &opts)
+            .map(|(tu, _, _)| tu)
+            .map_err(|e| ParseFailure { line: lines.line_of(u32::from(e.pos().start()) as usize), message: e.inner().to_string() })
     }));
     let tu = match result {
         Ok(Ok(tu)) => tu,
-        Ok(Err(e)) => {
-            let offset = u32::from(e.pos().start()) as usize;
-            let msg = e.inner().to_string();
-            return Err(ParseFailure { line: lines.line_of(offset), message: msg });
-        }
+        Ok(Err(e)) => return Err(e),
         Err(_) => return Err(ParseFailure { line: 0, message: "the GLSL parser panicked".into() }),
     };
     let mut conv = Converter { lines, error: None };

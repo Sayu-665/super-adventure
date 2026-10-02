@@ -2,7 +2,7 @@
 
 use indexmap::IndexMap;
 use sb_core::model::{AlphaTest, BindingTable, DepthMode, OutputTarget, UniformLayout, VertexInput};
-use sb_core::{Diagnostic, Diagnostics, ShaderStage, SourceLocation};
+use sb_core::{Diagnostics, ShaderStage, SourceLocation};
 use sb_uniforms::{MemberIndex, ProgramClass, ResourceContext};
 
 use crate::analyze::AnalyzedStage;
@@ -156,11 +156,3 @@ void main() {\n\
     gl_TexCoord[2] = gl_TextureMatrix[1] * gl_MultiTexCoord2;\n\
     gl_FrontColor = gl_Color;\n\
 }\n";
-
-pub(crate) fn error(code: &str, msg: impl Into<String>, stage: Option<ShaderStage>, loc: Option<SourceLocation>) -> Diagnostic {
-    let d = Diagnostic::error(code, msg).at_opt(loc);
-    match stage {
-        Some(s) => d.in_stage(s),
-        None => d,
-    }
-}

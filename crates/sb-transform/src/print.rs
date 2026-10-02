@@ -65,7 +65,6 @@ impl Printer {
             ItemKind::Precision(p, t) => self.line(&format!("precision {} {};", precision(*p), type_spec(t)), l),
             ItemKind::Invariant(n) => self.line(&format!("invariant {n};"), l),
             ItemKind::QualifierOnly(q) => self.line(&format!("{};", qualifiers(q)), l),
-            ItemKind::Raw(t) => self.text(t, l),
         }
     }
 
@@ -161,7 +160,6 @@ impl Printer {
             StmtKind::Break => self.line("break;", l),
             StmtKind::Continue => self.line("continue;", l),
             StmtKind::Discard => self.line("discard;", l),
-            StmtKind::Raw(t) => self.text(t, l),
         }
     }
 

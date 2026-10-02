@@ -1,6 +1,6 @@
 //! Model inconsistencies must never panic, fail the render or produce Vulkan validation
 //! errors: each mutation of the minimal pack below renders a tiny frame and must come
-//! back `Ok` with zero validation errors (the problem is recorded in the stats instead).
+//! back `Ok` with zero validation messages (the problem is recorded in the stats instead).
 
 mod common;
 
@@ -172,15 +172,14 @@ fn malformed_models_render_without_errors() {
         });
         match result {
             Ok(out) => {
-                let errors: Vec<&String> = out.validation_errors().collect();
                 eprintln!(
-                    "{name}: ok, {} skipped, {} warnings, {} validation errors",
+                    "{name}: ok, {} skipped, {} warnings, {} validation messages",
                     out.stats.programs_skipped.len(),
                     out.stats.warnings.len(),
-                    errors.len()
+                    out.validation_messages.len()
                 );
-                if !errors.is_empty() {
-                    failures.push(format!("{name}: {} validation errors, first: {}", errors.len(), errors[0]));
+                if let Some(first) = out.validation_messages.first() {
+                    failures.push(format!("{name}: {} validation messages, first: {first}", out.validation_messages.len()));
                 }
             }
             Err(e) => failures.push(format!("{name}: render failed: {e}")),

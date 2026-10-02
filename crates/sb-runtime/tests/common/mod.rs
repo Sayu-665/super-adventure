@@ -328,7 +328,8 @@ pub fn runtime() -> Option<Runtime> {
     match Runtime::new(&RuntimeOptions { validation: true, prefer_cpu_device: true, device_name_filter: None }) {
         Ok(rt) => {
             let info = rt.device_info();
-            eprintln!("device: {} ({}), validation: {}", info.name, info.device_type, info.validation);
+            eprintln!("device: {} ({}), validation: {}, sync validation: {}", info.name, info.device_type, info.validation, info.sync_validation);
+            assert_eq!(info.validation, info.sync_validation, "the validation layer is active without synchronization validation");
             Some(rt)
         }
         Err(e @ (RuntimeError::Loader(_) | RuntimeError::NoDevice(_) | RuntimeError::Unsupported(_))) => {
@@ -360,14 +361,15 @@ pub fn render(rt: &mut Runtime, pack: &CompiledPack, blobs: &BlobTable, scene: S
     .unwrap_or_else(|e| panic!("render failed: {e}"))
 }
 
-/// Assert that the validation layer reported no errors (printing all messages).
-pub fn assert_no_validation_errors(out: &RenderOutput) {
-    let errors: Vec<&String> = out.validation_errors().collect();
-    if !errors.is_empty() {
+/// Assert that the validation layer (core and synchronization validation) reported
+/// nothing at all: every error and every warning is a bug. Requires the layer to be
+/// active with synchronization validation whenever it is installed.
+pub fn assert_no_validation_messages(out: &RenderOutput) {
+    if !out.validation_messages.is_empty() {
         for m in &out.validation_messages {
             eprintln!("{m}");
         }
-        panic!("{} validation errors", errors.len());
+        panic!("{} validation messages ({} errors)", out.validation_messages.len(), out.validation_errors().count());
     }
 }
 

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.FieldNamingPolicy;
 import com.google.gson.annotations.SerializedName;
+import dev.shaderbridge.model.json.OmitIfNull;
 import dev.shaderbridge.model.json.SerdeNames;
 import dev.shaderbridge.model.json.Tag;
 import dev.shaderbridge.model.json.WireEnum;
@@ -41,6 +42,7 @@ class ContractSyncTest {
     @Test
     void everySerializedRustTypeIsMirrored() throws Exception {
         List<String> checked = new ArrayList<>();
+        int skipped = 0;
         for (String file : FILES) {
             for (RustSource.Item item : RustSource.items(RustSource.read(file)).values()) {
                 if (!item.attributes().contains("Serialize") || NOT_IN_MODEL.contains(item.name())) {
@@ -50,6 +52,8 @@ class ContractSyncTest {
                 if (item.kind().equals("struct")) {
                     assertTrue(type.isRecord(), type + " must be a record");
                     assertEquals(item.fields(), jsonFields(type), "fields of " + item.name());
+                    assertEquals(item.skippedFields(), omittedFields(type), "skip_serializing_if fields of " + item.name());
+                    skipped += item.skippedFields().size();
                 } else if (type.isEnum()) {
                     assertEquals(wireNames(item.variants(), item.renameAll()), enumWireNames(type), "values of " + item.name());
                 } else {
@@ -59,6 +63,7 @@ class ContractSyncTest {
             }
         }
         assertTrue(checked.size() > 50, "only checked " + checked);
+        assertEquals(8, skipped, "skip_serializing_if fields found in the Rust sources");
     }
 
     @Test
@@ -129,6 +134,18 @@ class ContractSyncTest {
 
     private static List<String> enumWireNames(Class<?> type) {
         return Arrays.stream(type.getEnumConstants()).map(c -> ((WireEnum) c).wireName()).toList();
+    }
+
+    private static List<String> omittedFields(Class<?> record) {
+        List<String> all = jsonFields(record);
+        List<String> out = new ArrayList<>();
+        RecordComponent[] components = record.getRecordComponents();
+        for (int i = 0; i < components.length; i++) {
+            if (components[i].isAnnotationPresent(OmitIfNull.class)) {
+                out.add(all.get(i));
+            }
+        }
+        return out;
     }
 
     private static List<String> jsonFields(Class<?> record) {

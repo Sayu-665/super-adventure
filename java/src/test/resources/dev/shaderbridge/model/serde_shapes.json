@@ -1,0 +1,531 @@
+{
+  "alpha_func": [
+    "never",
+    "less",
+    "equal",
+    "l_equal",
+    "greater",
+    "not_equal",
+    "g_equal",
+    "always"
+  ],
+  "axis_size": [
+    {
+      "type": "relative",
+      "value": 0.75
+    },
+    {
+      "type": "absolute",
+      "value": 128
+    }
+  ],
+  "blend_factor": [
+    "zero",
+    "one",
+    "src_color",
+    "one_minus_src_color",
+    "dst_color",
+    "one_minus_dst_color",
+    "src_alpha",
+    "one_minus_src_alpha",
+    "dst_alpha",
+    "one_minus_dst_alpha",
+    "src_alpha_saturate"
+  ],
+  "blob_kind": [
+    "spirv",
+    "glsl",
+    "bytes"
+  ],
+  "depth_mode": [
+    "forward_zero_to_one",
+    "reversed_zero_to_one",
+    "gl_neg_one_to_one"
+  ],
+  "device_caps": [
+    {
+      "comparison_samplers": true,
+      "depth_clip_control": false,
+      "geometry_shader": true,
+      "max_color_attachments": 8,
+      "max_push_constants_size": 128,
+      "storage_image_read_without_format": true,
+      "storage_image_write_without_format": true,
+      "tessellation_shader": true
+    },
+    {
+      "comparison_samplers": false,
+      "depth_clip_control": false,
+      "geometry_shader": true,
+      "max_color_attachments": 8,
+      "max_descriptors_per_program": 32,
+      "max_push_constants_size": 128,
+      "storage_image_read_without_format": true,
+      "storage_image_write_without_format": true,
+      "tessellation_shader": true
+    },
+    {
+      "depth_clip_control": true,
+      "geometry_shader": false,
+      "max_color_attachments": 8,
+      "max_push_constants_size": 256,
+      "storage_image_read_without_format": false,
+      "storage_image_write_without_format": false,
+      "tessellation_shader": false
+    }
+  ],
+  "dh_strategy": [
+    "native",
+    "synthesized",
+    "disabled"
+  ],
+  "geometry_program": [
+    "basic",
+    "line",
+    "textured",
+    "textured_lit",
+    "sky_basic",
+    "sky_textured",
+    "clouds",
+    "terrain",
+    "terrain_solid",
+    "terrain_cutout",
+    "damaged_block",
+    "block",
+    "block_translucent",
+    "beacon_beam",
+    "item",
+    "entities",
+    "entities_translucent",
+    "lightning",
+    "particles",
+    "particles_translucent",
+    "entities_glowing",
+    "armor_glint",
+    "spider_eyes",
+    "hand",
+    "weather",
+    "water",
+    "hand_water",
+    "shadow",
+    "shadow_solid",
+    "shadow_cutout",
+    "shadow_water",
+    "shadow_entities",
+    "shadow_lightning",
+    "shadow_block",
+    "dh_terrain",
+    "dh_water",
+    "dh_generic",
+    "dh_shadow"
+  ],
+  "glsl_type": [
+    {
+      "cols": 1,
+      "rows": 1,
+      "scalar": "float"
+    },
+    {
+      "cols": 1,
+      "rows": 3,
+      "scalar": "int"
+    },
+    {
+      "cols": 3,
+      "rows": 3,
+      "scalar": "float"
+    },
+    {
+      "cols": 3,
+      "rows": 4,
+      "scalar": "float"
+    },
+    {
+      "cols": 1,
+      "rows": 2,
+      "scalar": "bool"
+    },
+    {
+      "array": 5,
+      "cols": 1,
+      "rows": 4,
+      "scalar": "float"
+    },
+    {
+      "cols": 1,
+      "rows": 1,
+      "scalar": "double"
+    }
+  ],
+  "image_size": [
+    {
+      "type": "relative",
+      "x": 0.5,
+      "y": 1.0
+    },
+    {
+      "type": "absolute1_d",
+      "width": 256
+    },
+    {
+      "height": 256,
+      "type": "absolute2_d",
+      "width": 512
+    },
+    {
+      "depth": 16,
+      "height": 32,
+      "type": "absolute3_d",
+      "width": 64
+    }
+  ],
+  "nan_floats": {
+    "alpha_test": {
+      "func": "greater",
+      "reference": null
+    },
+    "viewport": {
+      "offset_x": 0.0,
+      "offset_y": null,
+      "scale": null
+    }
+  },
+  "option_kind": [
+    "boolean_define",
+    "value_define",
+    "const"
+  ],
+  "output_target": [
+    "vulkan",
+    "renderpearl"
+  ],
+  "pass_group": [
+    "setup",
+    "begin",
+    "shadow",
+    "shadow_comp",
+    "prepare",
+    "gbuffers_opaque",
+    "deferred",
+    "gbuffers_translucent",
+    "composite",
+    "final"
+  ],
+  "program_kind": [
+    {
+      "program": "damaged_block",
+      "type": "geometry"
+    },
+    {
+      "group": "composite",
+      "index": 3,
+      "type": "composite"
+    },
+    {
+      "group": "shadow_comp",
+      "index": 2,
+      "letter": "b",
+      "type": "compute"
+    },
+    {
+      "group": "deferred",
+      "index": 0,
+      "letter": null,
+      "type": "compute"
+    },
+    {
+      "letter": "a",
+      "program": "shadow",
+      "type": "geometry_compute"
+    },
+    {
+      "letter": null,
+      "program": "shadow",
+      "type": "geometry_compute"
+    }
+  ],
+  "resource_kind": [
+    {
+      "dim": "2d",
+      "sample_type": "float",
+      "shadow": true,
+      "type": "sampler"
+    },
+    {
+      "dim": "3d",
+      "format": "rgba16f",
+      "readonly": false,
+      "sample_type": "uint",
+      "type": "storage_image",
+      "writeonly": true
+    },
+    {
+      "dim": "2d",
+      "format": null,
+      "readonly": true,
+      "sample_type": "float",
+      "type": "storage_image",
+      "writeonly": false
+    },
+    {
+      "type": "storage_buffer"
+    },
+    {
+      "type": "uniform_buffer"
+    }
+  ],
+  "resource_ref": [
+    {
+      "type": "color_tex",
+      "value": 3
+    },
+    {
+      "type": "depth_tex",
+      "value": 1
+    },
+    {
+      "type": "shadow_tex",
+      "value": 0
+    },
+    {
+      "type": "shadow_tex_hw",
+      "value": 1
+    },
+    {
+      "type": "shadow_color",
+      "value": 2
+    },
+    {
+      "type": "noise"
+    },
+    {
+      "type": "atlas"
+    },
+    {
+      "type": "lightmap"
+    },
+    {
+      "type": "normals"
+    },
+    {
+      "type": "specular"
+    },
+    {
+      "type": "overlay"
+    },
+    {
+      "type": "dh_depth_tex",
+      "value": 0
+    },
+    {
+      "type": "dh_block_atlas"
+    },
+    {
+      "type": "white"
+    },
+    {
+      "type": "custom_texture",
+      "value": "composite.cloudTex.3d"
+    },
+    {
+      "type": "image",
+      "value": "imgVoxel"
+    },
+    {
+      "type": "color_image",
+      "value": 5
+    },
+    {
+      "type": "shadow_color_image",
+      "value": 1
+    },
+    {
+      "type": "ssbo",
+      "value": 4
+    },
+    {
+      "type": "uniform_block",
+      "value": "sb_Frame"
+    },
+    {
+      "type": "unknown",
+      "value": "mySampler"
+    }
+  ],
+  "scalar_kind": [
+    "float",
+    "int",
+    "uint",
+    "bool",
+    "double"
+  ],
+  "screen_entry": [
+    {
+      "type": "option",
+      "value": "SHADOWS"
+    },
+    {
+      "type": "screen",
+      "value": "LIGHTING"
+    },
+    {
+      "type": "profile"
+    },
+    {
+      "type": "empty"
+    },
+    {
+      "type": "rest"
+    }
+  ],
+  "severity": [
+    "info",
+    "warning",
+    "error"
+  ],
+  "shader_stage": [
+    "vertex",
+    "tess_control",
+    "tess_eval",
+    "geometry",
+    "fragment",
+    "compute"
+  ],
+  "target_size": [
+    {
+      "type": "relative",
+      "x": 0.5,
+      "y": 0.25
+    },
+    {
+      "height": 32,
+      "type": "absolute",
+      "width": 64
+    },
+    {
+      "type": "per_axis",
+      "x": {
+        "type": "relative",
+        "value": 0.5
+      },
+      "y": {
+        "type": "absolute",
+        "value": 64
+      }
+    }
+  ],
+  "texture_format": [
+    "RGBA",
+    "R8",
+    "RG8",
+    "RGB8",
+    "RGBA8",
+    "R8_SNORM",
+    "RG8_SNORM",
+    "RGB8_SNORM",
+    "RGBA8_SNORM",
+    "R16",
+    "RG16",
+    "RGB16",
+    "RGBA16",
+    "R16_SNORM",
+    "RG16_SNORM",
+    "RGB16_SNORM",
+    "RGBA16_SNORM",
+    "R16F",
+    "RG16F",
+    "RGB16F",
+    "RGBA16F",
+    "R32F",
+    "RG32F",
+    "RGB32F",
+    "RGBA32F",
+    "R8I",
+    "RG8I",
+    "RGB8I",
+    "RGBA8I",
+    "R8UI",
+    "RG8UI",
+    "RGB8UI",
+    "RGBA8UI",
+    "R16I",
+    "RG16I",
+    "RGB16I",
+    "RGBA16I",
+    "R16UI",
+    "RG16UI",
+    "RGB16UI",
+    "RGBA16UI",
+    "R32I",
+    "RG32I",
+    "RGB32I",
+    "RGBA32I",
+    "R32UI",
+    "RG32UI",
+    "RGB32UI",
+    "RGBA32UI",
+    "RGBA2",
+    "RGBA4",
+    "R3_G3_B2",
+    "RGB5_A1",
+    "RGB565",
+    "RGB10_A2",
+    "RGB10_A2UI",
+    "R11F_G11F_B10F",
+    "RGB9_E5"
+  ],
+  "texture_source": [
+    {
+      "path": "textures/noise.png",
+      "type": "pack_image"
+    },
+    {
+      "location": "minecraft:textures/atlas/blocks.png",
+      "type": "resource"
+    },
+    {
+      "name": "minecraft:dynamic/lightmap_1",
+      "type": "dynamic"
+    },
+    {
+      "dimensions": 3,
+      "format": "RGBA16F",
+      "path": "data/lut.dat",
+      "pixel_format": "RGBA",
+      "pixel_type": "HALF_FLOAT",
+      "size": [
+        64,
+        32,
+        16
+      ],
+      "target": "2d_rect",
+      "type": "raw"
+    }
+  ],
+  "uniform_source": [
+    {
+      "name": "frameTimeCounter",
+      "type": "builtin"
+    },
+    {
+      "name": "myCustom",
+      "type": "custom"
+    },
+    {
+      "type": "unset"
+    }
+  ],
+  "work_groups": [
+    {
+      "type": "absolute",
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    {
+      "type": "relative",
+      "x": 0.5,
+      "y": 0.25
+    }
+  ]
+}

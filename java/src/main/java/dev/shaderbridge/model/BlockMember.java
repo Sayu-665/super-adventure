@@ -1,6 +1,7 @@
 package dev.shaderbridge.model;
 
 import com.google.gson.annotations.SerializedName;
+import dev.shaderbridge.model.json.OmitIfNull;
 import java.util.List;
 
 /**
@@ -18,7 +19,7 @@ public record BlockMember(
     GlslType ty,
     int offset,
     UniformSource source,
-    @SerializedName("default") List<Float> defaultValues
+    @OmitIfNull @SerializedName("default") List<Float> defaultValues
 ) {
     public BlockMember {
         Copies.required(name, "name");

@@ -51,9 +51,7 @@ pub(crate) fn reachable(w: &StageWork, _ctx: &Ctx) -> BTreeSet<String> {
             if p.provides.iter().any(|n| reached.contains(n) && !pack.contains_key(n)) {
                 included[i] = true;
                 changed = true;
-                let before = reached.len();
                 add_idents(&p.text, &mut reached);
-                let _ = before;
             }
         }
         if !changed {
@@ -144,7 +142,6 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
 
     let mut printer = crate::print::Printer::new();
     printer.text(&head, 0);
-    let mut emitted_late = false;
     for p in pieces.iter().filter(|p| p.section < Section::Constants) {
         printer.text(&p.text, 0);
     }
@@ -153,9 +150,7 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
     }
     for p in pieces.iter().filter(|p| p.section >= Section::Constants && p.section != Section::Tail) {
         printer.text(&p.text, 0);
-        emitted_late = true;
     }
-    let _ = emitted_late;
     let redeclares_per_vertex = w.unit.items.iter().any(|i| matches!(&i.kind, ItemKind::Block(b) if b.name == "gl_PerVertex"));
     if ctx.last_pre_raster == Some(w.stage) && !redeclares_per_vertex {
         printer.line("invariant gl_Position;", 0);

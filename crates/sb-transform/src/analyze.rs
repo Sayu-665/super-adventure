@@ -236,7 +236,7 @@ fn analyze_inner(stage: ShaderStage, pre: &Preprocessed, file: &str) -> Result<A
         Ok(u) => u,
         Err(e) => {
             let mut d = Diagnostics::new();
-            let location = loc(e.line).or_else(|| Some(SourceLocation::new(file, 0)).filter(|_| e.line == 0));
+            let location = loc(e.line).or_else(|| (e.line == 0).then(|| SourceLocation::new(file, 0)));
             d.push(
                 Diagnostic::error("xf.parse", format!("GLSL syntax error: {}", e.message))
                     .at_opt(location)
@@ -450,7 +450,7 @@ fn collect_info(
                     info.local_size = Some(ls);
                 }
             }
-            ItemKind::Precision(..) | ItemKind::Invariant(_) | ItemKind::Raw(_) => {}
+            ItemKind::Precision(..) | ItemKind::Invariant(_) => {}
         }
     }
     if stage == ShaderStage::Compute && info.local_size.is_none() {

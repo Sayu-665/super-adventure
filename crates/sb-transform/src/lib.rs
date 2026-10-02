@@ -37,6 +37,7 @@ mod program;
 pub mod profiles;
 mod rewrite;
 mod scope;
+mod shadow;
 mod stack;
 mod text;
 mod transform;

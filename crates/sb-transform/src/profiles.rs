@@ -205,10 +205,14 @@ pub struct DrawProfile {
     /// `model_view`/`projection` semantics become `shadowModelView`/`shadowProjection`
     /// (Iris shadow programs see `gl_ModelViewMatrix == shadowModelView`).
     pub world_space: bool,
-    /// Push-constant members (`layout(push_constant) uniform sb_hPush { ... }`, accessed
-    /// unqualified); empty for none.
+    /// Push-constant members (`layout(push_constant) uniform sb_hPush { ... };`, accessed
+    /// unqualified, std430 offsets); empty for none. The block is declared in every stage
+    /// that references a member.
     pub push_constants: String,
 }
+
+/// Block name of the push-constant block declared for [`DrawProfile::push_constants`].
+pub const PUSH_CONSTANT_BLOCK: &str = "sb_hPush";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -318,6 +322,17 @@ fn validate(p: &DrawProfile) -> Result<(), String> {
             return Err(format!("sampler `{}` is declared twice", s.name));
         }
     }
+    if !p.push_constants.trim().is_empty() {
+        let members = push_constant_members(&p.push_constants)?;
+        if members.is_empty() {
+            return Err("push_constants declares no member".into());
+        }
+        for m in members {
+            if !names.insert(m.clone()) {
+                return Err(format!("push constant `{m}` is declared twice"));
+            }
+        }
+    }
     for g in &p.globals {
         if !is_identifier(&g.name) || g.name.starts_with("gl_") {
             return Err(format!("global `{}` is not a valid identifier", g.name));
@@ -333,6 +348,25 @@ fn validate(p: &DrawProfile) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Member names of a push-constant member list (`vec3 a; int b[2];`), validated by
+/// parsing the block declaration.
+pub(crate) fn push_constant_members(members: &str) -> Result<Vec<String>, String> {
+    let text = format!("layout(push_constant) uniform {PUSH_CONSTANT_BLOCK} {{ {members} }};\n");
+    let unit = crate::parse::parse_glsl(&text, 460).map_err(|e| format!("push_constants `{members}` do not parse: {}", e.message))?;
+    let mut out = Vec::new();
+    for item in &unit.items {
+        if let crate::ast::ItemKind::Block(b) = &item.kind {
+            for f in &b.fields {
+                if f.ty.name().is_none_or(|t| sb_core::GlslType::parse(t).is_none()) {
+                    return Err(format!("push constants: unsupported member type in `{members}`"));
+                }
+                out.extend(f.names.iter().map(|(n, _)| n.clone()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 struct Embedded {
@@ -353,6 +387,7 @@ const EMBEDDED_FILES: &[(&str, &str)] = &[
     ("vanilla_position_tex_color.toml", include_str!("../profiles/vanilla_position_tex_color.toml")),
     ("dh_terrain.toml", include_str!("../profiles/dh_terrain.toml")),
     ("dh_generic.toml", include_str!("../profiles/dh_generic.toml")),
+    ("sodium_terrain.toml", include_str!("../profiles/sodium_terrain.toml")),
 ];
 
 const DEFAULTS_FILE: &str = include_str!("../profiles/defaults.toml");
@@ -493,6 +528,10 @@ impl DrawProfile {
         }
         for g in &self.globals {
             out.insert(g.name.clone());
+        }
+        if !self.push_constants.trim().is_empty() {
+            out.insert(PUSH_CONSTANT_BLOCK.to_string());
+            out.extend(push_constant_members(&self.push_constants).unwrap_or_default());
         }
         for code in [&self.code_vertex, &self.code_fragment] {
             out.extend(crate::text::defined_functions(code));

@@ -18,6 +18,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.RecordComponent;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Reads and writes a sealed interface whose permitted subclasses are records, using the serde
@@ -74,20 +75,34 @@ public final class TaggedUnionAdapterFactory implements TypeAdapterFactory {
         return new TaggedUnionAdapterFactory(sealedBase, contentField);
     }
 
+    /**
+     * Applies to the sealed base type and to each variant record, so that a variant serialized on
+     * its own (for example {@code ModelJson.toJson(new ResourceRef.ColorTex(3))}) also gets its tag.
+     */
     @Override
     @SuppressWarnings("unchecked")
     public <T> TypeAdapter<T> create(Gson gson, TypeToken<T> type) {
-        if (type.getRawType() != baseType) {
+        Class<?> raw = type.getRawType();
+        if (raw != baseType && !byClass.containsKey(raw)) {
             return null;
         }
-        return (TypeAdapter<T>) new Adapter(gson).nullSafe();
+        return (TypeAdapter<T>) new Adapter(gson, raw).nullSafe();
     }
 
     private final class Adapter extends TypeAdapter<Object> {
         private final Gson gson;
+        private final Class<?> expected;
+        private final Map<Class<?>, TypeAdapter<Object>> bodies = new ConcurrentHashMap<>();
 
-        Adapter(Gson gson) {
+        Adapter(Gson gson, Class<?> expected) {
             this.gson = gson;
+            this.expected = expected;
+        }
+
+        /** The plain record adapter of a variant (this factory skipped, to avoid recursion). */
+        private TypeAdapter<Object> body(Variant variant) {
+            return bodies.computeIfAbsent(variant.type,
+                type -> cast(gson.getDelegateAdapter(TaggedUnionAdapterFactory.this, TypeToken.get(type))));
         }
 
         @Override
@@ -96,7 +111,7 @@ public final class TaggedUnionAdapterFactory implements TypeAdapterFactory {
             JsonObject object = new JsonObject();
             object.addProperty(TAG_FIELD, variant.tag);
             if (contentField == null) {
-                JsonObject body = gson.getAdapter(variant.type).toJsonTree(cast(value)).getAsJsonObject();
+                JsonObject body = body(variant).toJsonTree(value).getAsJsonObject();
                 body.entrySet().forEach(e -> object.add(e.getKey(), e.getValue()));
             } else if (variant.component != null) {
                 Object content = variant.content(value);
@@ -123,10 +138,13 @@ public final class TaggedUnionAdapterFactory implements TypeAdapterFactory {
             if (variant == null) {
                 throw new JsonParseException("Unknown " + baseType.getSimpleName() + " type '" + tagElement.getAsString() + "' at " + path);
             }
+            if (!expected.isAssignableFrom(variant.type)) {
+                throw new JsonParseException("Expected " + expected.getSimpleName() + " but found '" + tagElement.getAsString() + "' at " + path);
+            }
             if (contentField == null) {
                 JsonObject body = object.deepCopy();
                 body.remove(TAG_FIELD);
-                return gson.getAdapter(variant.type).fromJsonTree(body);
+                return body(variant).fromJsonTree(body);
             }
             if (variant.component == null) {
                 return variant.construct();

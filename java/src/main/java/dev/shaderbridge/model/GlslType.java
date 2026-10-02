@@ -1,5 +1,7 @@
 package dev.shaderbridge.model;
 
+import dev.shaderbridge.model.json.OmitIfNull;
+
 /**
  * A non-opaque GLSL type: scalar, vector or matrix, optionally an array.
  *
@@ -8,7 +10,7 @@ package dev.shaderbridge.model;
  * @param cols   columns (1 for scalars and vectors, 2..4 for matrices)
  * @param array  array length, or null if not an array
  */
-public record GlslType(ScalarKind scalar, int rows, int cols, Integer array) {
+public record GlslType(ScalarKind scalar, int rows, int cols, @OmitIfNull Integer array) {
     /** {@code float}. */
     public static final GlslType FLOAT = new GlslType(ScalarKind.FLOAT, 1, 1, null);
     /** {@code int}. */

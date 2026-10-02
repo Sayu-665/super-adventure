@@ -40,8 +40,6 @@ pub enum ItemKind {
     Invariant(String),
     /// Qualifier-only declaration (`layout(local_size_x = 8) in;`).
     QualifierOnly(Vec<Qualifier>),
-    /// Generated text, printed verbatim.
-    Raw(String),
 }
 
 /// A function definition.
@@ -338,8 +336,6 @@ pub enum StmtKind {
     Continue,
     /// `discard;`
     Discard,
-    /// Generated statement text, printed verbatim.
-    Raw(String),
 }
 
 /// A loop condition.
@@ -547,14 +543,6 @@ impl Expr {
         }
     }
 
-    /// The callee name if this is a call by name.
-    pub fn call_name(&self) -> Option<&str> {
-        match self {
-            Self::Call(Callee::Name(n), _) => Some(n),
-            _ => None,
-        }
-    }
-
     /// Pre-order mutable walk over this expression and its sub-expressions (array
     /// constructor sizes and method receivers included).
     pub fn walk_mut(&mut self, f: &mut dyn FnMut(&mut Expr) -> Walk) {
@@ -710,11 +698,6 @@ impl Init {
 }
 
 impl FullType {
-    /// Unqualified type.
-    pub fn plain(ty: TypeSpec) -> Self {
-        Self { quals: Vec::new(), ty }
-    }
-
     /// Whether a storage qualifier is present.
     pub fn has_storage(&self, s: &Storage) -> bool {
         has_storage(&self.quals, s)
@@ -761,11 +744,6 @@ impl Stmt {
     /// A statement at `line`.
     pub fn new(kind: StmtKind, line: Line) -> Self {
         Self { kind, line }
-    }
-
-    /// Generated statement text.
-    pub fn raw(text: impl Into<String>) -> Self {
-        Self { kind: StmtKind::Raw(text.into()), line: 0 }
     }
 
     /// Walk every expression in this statement and nested statements (pre-order per
@@ -817,7 +795,7 @@ impl Stmt {
                 }
                 body.walk_exprs_mut(f);
             }
-            StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard | StmtKind::Raw(_) => {}
+            StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard => {}
         }
     }
 
@@ -938,14 +916,6 @@ impl TranslationUnit {
         }
     }
 
-    /// The function definitions.
-    pub fn functions(&self) -> impl Iterator<Item = &FunctionDef> {
-        self.items.iter().filter_map(|i| match &i.kind {
-            ItemKind::Function(f) => Some(f),
-            _ => None,
-        })
-    }
-
     /// Mutable function definitions.
     pub fn functions_mut(&mut self) -> impl Iterator<Item = &mut FunctionDef> {
         self.items.iter_mut().filter_map(|i| match &mut i.kind {
@@ -982,7 +952,7 @@ impl Item {
                     }
                 }
             }
-            ItemKind::Precision(..) | ItemKind::Invariant(_) | ItemKind::QualifierOnly(_) | ItemKind::Raw(_) => {}
+            ItemKind::Precision(..) | ItemKind::Invariant(_) | ItemKind::QualifierOnly(_) => {}
         }
     }
 
@@ -1028,7 +998,7 @@ impl Item {
                     }
                 }
             }
-            ItemKind::Precision(..) | ItemKind::Invariant(_) | ItemKind::QualifierOnly(_) | ItemKind::Raw(_) => {}
+            ItemKind::Precision(..) | ItemKind::Invariant(_) | ItemKind::QualifierOnly(_) => {}
         }
     }
 }

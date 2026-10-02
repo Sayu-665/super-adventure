@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use sb_core::model::{BlockMember, ResourceKind};
+use sb_core::model::ResourceKind;
 use sb_core::{Diagnostic, Diagnostics, ShaderStage, SourceLocation};
 use sb_uniforms::ResourceContext;
 
@@ -31,10 +31,6 @@ pub(crate) struct Ctx<'a> {
     /// Names the profile declares (inputs, blocks, samplers, helpers); pack declarations
     /// with these names are renamed.
     pub profile_names: BTreeSet<String>,
-    /// `sb_Frame` members by name.
-    pub frame_members: HashMap<String, BlockMember>,
-    /// `sb_Draw` members by name.
-    pub draw_members: HashMap<String, BlockMember>,
 }
 
 /// A generated global-scope declaration that is emitted only if referenced.
@@ -258,8 +254,6 @@ pub(crate) fn run(
             }
             n
         },
-        frame_members: pack.layout.frame.members.iter().map(|m| (m.name.clone(), m.clone())).collect(),
-        draw_members: pack.layout.draw.members.iter().map(|m| (m.name.clone(), m.clone())).collect(),
     };
 
     let mut works: Vec<StageWork> = ordered.iter().map(|s| StageWork::new(s)).collect();

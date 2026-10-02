@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{GPU_LOCK, assert_no_validation_errors, luminance_variance, mean_abs_diff, render_dir, runtime};
+use common::{GPU_LOCK, assert_no_validation_messages, luminance_variance, mean_abs_diff, render_dir, runtime};
 use sb_core::model::{BlobTable, CompiledPack, DepthMode, OutputTarget};
 use sb_runtime::{RenderOutput, RenderRequest, Runtime, SceneParams};
 use std::path::{Path, PathBuf};
@@ -146,7 +146,7 @@ fn render_named(name: &str) {
     let out = render_compiled(&mut rt, &pack, &blobs, &files, (640, 360), 3);
     out.image.save(render_dir().join(format!("{}.png", normalize(name)))).ok();
     report(name, &out);
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert_non_degenerate(name, &out.image);
 }
 
@@ -183,8 +183,8 @@ fn depth_mode_parity_real_pack() {
     let b = render_compiled(&mut rt, &rev, &rb, &files, (320, 180), 3);
     a.image.save(render_dir().join("parity_real_forward.png")).ok();
     b.image.save(render_dir().join("parity_real_reversed.png")).ok();
-    assert_no_validation_errors(&a);
-    assert_no_validation_errors(&b);
+    assert_no_validation_messages(&a);
+    assert_no_validation_messages(&b);
     let d = mean_abs_diff(&a.image, &b.image);
     eprintln!("mean abs diff {d}");
     assert!(d < 2.0 / 255.0, "forward and reversed renders differ: {d}");

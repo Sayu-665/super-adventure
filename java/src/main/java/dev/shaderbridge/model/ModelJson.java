@@ -11,8 +11,10 @@ import com.google.gson.TypeAdapter;
 import com.google.gson.TypeAdapterFactory;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import dev.shaderbridge.model.json.ModelParseException;
+import dev.shaderbridge.model.json.OmitIfNullAdapterFactory;
 import dev.shaderbridge.model.json.TaggedUnionAdapterFactory;
 import dev.shaderbridge.model.json.WireEnumAdapterFactory;
 import java.io.IOException;
@@ -24,11 +26,15 @@ import java.io.IOException;
  * the Java record components with {@link FieldNamingPolicy#LOWER_CASE_WITH_UNDERSCORES}. Enums with
  * data use {@link TaggedUnionAdapterFactory}, unit enums use {@link WireEnumAdapterFactory}. Nulls
  * are written explicitly so that {@code Option<T>} values and maps with optional values survive a
- * round trip.
+ * round trip, except for the fields serde skips when they are {@code None}
+ * ({@link dev.shaderbridge.model.json.OmitIfNull}). serde_json writes non-finite {@code f32} values as
+ * {@code null}; primitive {@code float} components read such a {@code null} as NaN and write
+ * non-finite values back as {@code null}.
  */
 public final class ModelJson {
+    private static final FieldNamingPolicy NAMING = FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES;
     private static final Gson GSON = new GsonBuilder()
-        .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
+        .setFieldNamingPolicy(NAMING)
         .serializeNulls()
         .enableComplexMapKeySerialization()
         .disableHtmlEscaping()
@@ -44,6 +50,9 @@ public final class ModelJson {
         .registerTypeAdapterFactory(TaggedUnionAdapterFactory.internallyTagged(ProgramKind.class))
         .registerTypeAdapterFactory(TaggedUnionAdapterFactory.internallyTagged(WorkGroups.class))
         .registerTypeAdapterFactory(new DeviceCapsDefaults())
+        .registerTypeAdapterFactory(new OmitIfNullAdapterFactory(NAMING))
+        .registerTypeAdapter(float.class, new FloatAdapter(Float.NaN))
+        .registerTypeAdapter(Float.class, new FloatAdapter(null))
         .registerTypeAdapter(BlobId.class, new BlobIdAdapter().nullSafe())
         .registerTypeAdapter(IndirectDispatch.class, new IndirectDispatchAdapter().nullSafe())
         .create();
@@ -107,6 +116,38 @@ public final class ModelJson {
         @Override
         public BlobId read(JsonReader in) throws IOException {
             return new BlobId(in.nextInt());
+        }
+    }
+
+    /**
+     * {@code f32} values. serde_json writes NaN and infinities as {@code null}; a primitive
+     * {@code float} reads such a {@code null} as NaN (instead of rejecting the whole document), an
+     * {@code Option<f32>} reads it as null. Non-finite values are written as {@code null}, as serde
+     * does. Gson writes primitive components through the boxed type's adapter, so both are needed.
+     */
+    private static final class FloatAdapter extends TypeAdapter<Float> {
+        private final Float nullValue;
+
+        FloatAdapter(Float nullValue) {
+            this.nullValue = nullValue;
+        }
+
+        @Override
+        public void write(JsonWriter out, Float value) throws IOException {
+            if (value == null || !Float.isFinite(value)) {
+                out.nullValue();
+            } else {
+                out.value(value);
+            }
+        }
+
+        @Override
+        public Float read(JsonReader in) throws IOException {
+            if (in.peek() == JsonToken.NULL) {
+                in.nextNull();
+                return nullValue;
+            }
+            return (float) in.nextDouble();
         }
     }
 

@@ -10,7 +10,7 @@
 mod common;
 
 use common::shaders::{DRAW_DECL, FRAME_DECL, PRELUDE, fullscreen_vsh, terrain_vsh};
-use common::{GPU_LOCK, assert_no_validation_errors, frame_layout, draw_layout, luminance_variance, render_dir, runtime, small_scene};
+use common::{GPU_LOCK, assert_no_validation_messages, frame_layout, draw_layout, luminance_variance, render_dir, runtime, small_scene};
 use indexmap::IndexMap;
 use sb_compile::{CompileOptions, compile_glsl};
 use sb_core::model::*;
@@ -454,7 +454,7 @@ fn feature_coverage_pack() {
         img.save(render_dir().join(format!("coverage_{name}.png"))).ok();
     }
     eprintln!("{:#?}", out.stats);
-    assert_no_validation_errors(&out);
+    assert_no_validation_messages(&out);
     assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
     assert_eq!(out.stats.dispatches, 2);
     // The missing noise override and the 3D unknown sampler are reported.

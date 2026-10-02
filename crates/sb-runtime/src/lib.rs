@@ -178,7 +178,8 @@ impl Runtime {
         let mut stats = std::mem::take(&mut exec.stats);
         stats.pipelines_created = exec.pipelines_created();
         drop(exec);
-        let messages = self.gpu.take_messages();
+        let mut messages = self.gpu.setup_notes().to_vec();
+        messages.extend(self.gpu.take_messages());
         stats.validation_errors = messages.iter().filter(|m| m.severity == MessageSeverity::Error).count() as u32;
         stats.validation_warnings = messages.iter().filter(|m| m.severity == MessageSeverity::Warning).count() as u32;
         Ok(RenderOutput { image, targets, validation_messages: messages.iter().map(|m| m.render()).collect(), stats })

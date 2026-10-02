@@ -1,0 +1,112 @@
+name = "sodium_terrain"
+description = "Sodium 0.9.x (MC 26.3) terrain: 20-byte compact chunk vertex (a_Position RG32_UINT 20-bit interleaved xyz, a_Color RGBA8_UNORM, a_TexCoord RG16_UINT 15-bit + bias sign, a_LightAndData RGBA8_UINT light|material|section) + ShaderBridge extension attributes appended at offset 20 (sb_Entity R32_UINT ((id+1)<<1)|isFluid, sb_Normal RGBA8_SNORM, sb_MidTexCoord RG16_UINT /32768, sb_MidBlock RGBA8_SNORM *127). Push constants (20 bytes, per region): vec3 u_RegionOffset @0, int u_CurrentTime @12, uint u_RegionID @16. Bind groups: u_BlockTex (atlas), u_LightTex (lightmap), u_Globals UBO, u_SectionTimeInfo texel buffer R32_SINT (not read: mc_chunkFade is 1). Light is 16L+8 (Sodium stock encoder) -> the lightmap semantic subtracts 8. The format has no tangent: at_tangent is derived from the normal for axis-aligned faces with vanilla UV orientation. gl_Vertex is camera-relative (region offset + section translation + section-local position), as in Iris."
+# Camera-relative world geometry: in the shadow pass (TransformOptions::is_shadow_pass) the
+# model_view / projection semantics become shadowModelView / shadowProjection, as in Iris.
+world_space = true
+# Declared as `layout(push_constant) uniform sb_hPush { ... };` (std430 offsets 0, 12, 16).
+push_constants = "vec3 u_RegionOffset; int u_CurrentTime; uint u_RegionID;"
+
+[[inputs]]
+name = "a_Position"
+type = "uvec2"
+location = 0
+[[inputs]]
+name = "a_Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "a_TexCoord"
+type = "uvec2"
+location = 2
+[[inputs]]
+name = "a_LightAndData"
+type = "uvec4"
+location = 3
+[[inputs]]
+name = "sb_Entity"
+type = "uint"
+location = 4
+[[inputs]]
+name = "sb_Normal"
+type = "vec4"
+location = 5
+[[inputs]]
+name = "sb_MidTexCoord"
+type = "uvec2"
+location = 6
+[[inputs]]
+name = "sb_MidBlock"
+type = "vec4"
+location = 7
+
+[[blocks]]
+name = "u_Globals"
+instance = "sb_hSodium"
+members = "mat4 u_ProjectionMatrix; mat4 u_ModelViewMatrix; vec4 u_FogColor; vec2 u_EnvironmentFog; vec2 u_RenderFog; vec2 u_TexelSize; vec2 u_TexCoordShrink; float u_FadePeriodInv; bool u_UseRGSS;"
+
+[[samplers]]
+name = "u_BlockTex"
+type = "sampler2D"
+provides = ["gtexture"]
+[[samplers]]
+name = "u_LightTex"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(sb_sodiumPosition(), 1.0)"
+color = "a_Color"
+uv0 = "vec4(sb_sodiumTexCoord(), 0.0, 1.0)"
+# a_LightAndData.x = block light, .y = sky light, each 16L+8 (clamped 8..248): back to 16L.
+lightmap = "vec4(max(vec2(a_LightAndData.xy) - 8.0, vec2(0.0)), 0.0, 1.0)"
+normal = "normalize(sb_Normal.xyz)"
+# Iris's Sodium decode: x = block id (-1 = none), y = 1 for fluids, 0 otherwise; z = 0, w = 1.
+entity = "vec4(float(int(sb_Entity >> 1u) - 1), float(sb_Entity & 1u), 0.0, 1.0)"
+mid_tex_coord = "vec4(vec2(sb_MidTexCoord) / 32768.0, 0.0, 1.0)"
+tangent = "sb_sodiumTangent(sb_Normal.xyz)"
+mid_block = "sb_MidBlock * 127.0"
+model_view = "sb_hSodium.u_ModelViewMatrix"
+projection = "gbufferProjection"
+chunk_offset = "(u_RegionOffset + sb_sodiumDrawTranslation())"
+
+[[globals]]
+name = "mc_chunkFade"
+type = "float"
+stage = "vertex"
+init = "1.0"
+
+[code]
+vertex = """
+// Clean-room decoder of Sodium's compact chunk vertex (bit layout only).
+// a_Position.x holds the high 10 bits of each 20-bit coordinate, a_Position.y the low
+// 10 bits (x at bit 0, y at bit 10, z at bit 20); value * 32 / 2^20 - 8 is the
+// section-local position in blocks.
+vec3 sb_sodiumDeinterleave(uvec2 v) {
+    uvec3 hi = (uvec3(v.x) >> uvec3(0u, 10u, 20u)) & 0x3FFu;
+    uvec3 lo = (uvec3(v.y) >> uvec3(0u, 10u, 20u)) & 0x3FFu;
+    return vec3((hi << 10u) | lo);
+}
+// Section index (a_LightAndData.w) within the 8x4x8-section region: x = bits 5..7,
+// y = bits 0..1, z = bits 2..4; times 16 blocks.
+vec3 sb_sodiumDrawTranslation() {
+    uint w = a_LightAndData.w;
+    return vec3(float((w >> 5u) & 7u), float(w & 3u), float((w >> 2u) & 7u)) * 16.0;
+}
+vec3 sb_sodiumPosition() {
+    return sb_sodiumDeinterleave(a_Position) * (32.0 / 1048576.0) - 8.0 + u_RegionOffset + sb_sodiumDrawTranslation();
+}
+// 15-bit UV / 32768, nudged towards the quad centre by the bias sign (bit 15) times
+// u_TexCoordShrink.
+vec2 sb_sodiumTexCoord() {
+    vec2 coord = vec2(a_TexCoord & 0x7FFFu) / 32768.0;
+    vec2 bias = mix(vec2(-1.0), vec2(1.0), bvec2(a_TexCoord >> 15u));
+    return bias * sb_hSodium.u_TexCoordShrink + coord;
+}
+// Tangent of an axis-aligned block face with vanilla UV orientation (u to the viewer's
+// right): up/down/south +X, north -X, west +Z, east -Z.
+vec4 sb_sodiumTangent(vec3 n) {
+    if (abs(n.y) >= max(abs(n.x), abs(n.z))) return vec4(1.0, 0.0, 0.0, 1.0);
+    if (abs(n.z) >= abs(n.x)) return vec4(n.z < 0.0 ? -1.0 : 1.0, 0.0, 0.0, 1.0);
+    return vec4(0.0, 0.0, n.x < 0.0 ? 1.0 : -1.0, 1.0);
+}
+"""

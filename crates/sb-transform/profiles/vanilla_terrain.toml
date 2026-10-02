@@ -1,5 +1,8 @@
 name = "vanilla_terrain"
 description = "Minecraft 26.3 terrain (MultiDrawIndirect path: BLOCK format + CHUNK_DATA_INSTANCED) extended with the Iris attributes the host appends to the BLOCK format (sb_Normal, sb_Entity, sb_MidTexCoord, sb_Tangent, sb_MidBlock). Positions are chunk-section relative; gl_Vertex is camera-relative like OptiFine/Iris."
+# Camera-relative world geometry: in the shadow pass (TransformOptions::is_shadow_pass) the
+# model_view / projection semantics become shadowModelView / shadowProjection, as in Iris.
+world_space = true
 
 [[inputs]]
 name = "Position"

@@ -1,5 +1,7 @@
 package dev.shaderbridge.model;
 
+import dev.shaderbridge.model.json.OmitIfNull;
+
 /**
  * An error, warning or note with a location in the original pack sources.
  *
@@ -10,7 +12,8 @@ package dev.shaderbridge.model;
  * @param program  program the diagnostic belongs to, or null
  * @param stage    stage the diagnostic belongs to, or null
  */
-public record Diagnostic(Severity severity, String code, String message, SourceLocation location, String program, ShaderStage stage) {
+public record Diagnostic(Severity severity, String code, String message, @OmitIfNull SourceLocation location,
+    @OmitIfNull String program, @OmitIfNull ShaderStage stage) {
     public Diagnostic {
         Copies.required(severity, "severity");
         Copies.required(code, "code");

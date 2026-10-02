@@ -83,7 +83,6 @@ pub(crate) fn walk_item(item: &mut Item, f: &mut dyn FnMut(&mut String, Occ)) {
         ItemKind::Precision(_, t) => type_spec(t, f, &mut scopes),
         ItemKind::Invariant(n) => f(n, Occ::GlobalRef),
         ItemKind::QualifierOnly(q) => layout_exprs(q, f, &mut scopes),
-        ItemKind::Raw(_) => {}
     }
 }
 
@@ -252,8 +251,7 @@ fn stmt(s: &mut Stmt, f: &mut dyn FnMut(&mut String, Occ), scopes: &mut Scopes) 
         | StmtKind::Default
         | StmtKind::Break
         | StmtKind::Continue
-        | StmtKind::Discard
-        | StmtKind::Raw(_) => {}
+        | StmtKind::Discard => {}
     }
 }
 
@@ -300,11 +298,15 @@ fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut String, Occ), scopes: &mut Scopes) 
     }
 }
 
+/// Callback of [`walk_function_exprs`]: an expression tree root and a predicate telling
+/// whether a name is local (a parameter or a local variable in scope) at that point.
+pub(crate) type ScopedExprFn<'a> = dyn FnMut(&mut Expr, &dyn Fn(&str) -> bool) + 'a;
+
 /// Visit every expression of a function body with the set of names that are local at
 /// that point (parameters and locals in scope). The callback sees each expression
 /// tree root (statement expressions, initializers, conditions); it is responsible for
 /// descending. Used by passes that need scope information per expression.
-pub(crate) fn walk_function_exprs(func: &mut FunctionDef, f: &mut dyn FnMut(&mut Expr, &dyn Fn(&str) -> bool)) {
+pub(crate) fn walk_function_exprs(func: &mut FunctionDef, f: &mut ScopedExprFn) {
     let mut scopes = Scopes::default();
     scopes.push();
     for p in &func.proto.params {
@@ -317,7 +319,7 @@ pub(crate) fn walk_function_exprs(func: &mut FunctionDef, f: &mut dyn FnMut(&mut
     }
 }
 
-fn stmt_exprs(s: &mut Stmt, f: &mut dyn FnMut(&mut Expr, &dyn Fn(&str) -> bool), scopes: &mut Scopes) {
+fn stmt_exprs(s: &mut Stmt, f: &mut ScopedExprFn, scopes: &mut Scopes) {
     macro_rules! visit {
         ($e:expr) => {{
             let sc: &Scopes = scopes;
@@ -402,7 +404,7 @@ fn stmt_exprs(s: &mut Stmt, f: &mut dyn FnMut(&mut Expr, &dyn Fn(&str) -> bool),
     }
 }
 
-fn init_exprs(i: &mut Init, f: &mut dyn FnMut(&mut Expr, &dyn Fn(&str) -> bool), scopes: &mut Scopes) {
+fn init_exprs(i: &mut Init, f: &mut ScopedExprFn, scopes: &mut Scopes) {
     match i {
         Init::Expr(e) => {
             let sc: &Scopes = scopes;

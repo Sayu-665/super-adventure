@@ -1,0 +1,1224 @@
+{
+  "format_version": 1,
+  "info": {
+    "name": "Fixture Pack.zip",
+    "source_hash": "0123abcd",
+    "shaderbridge_version": "0.1.0",
+    "features_enabled": [
+      "SSBO",
+      "CUSTOM_IMAGES"
+    ],
+    "features_unsupported": [
+      "PER_BUFFER_BLENDING_X"
+    ],
+    "environment": {
+      "minecraft_version": "26.3",
+      "os": "LINUX",
+      "vendor": "MESA",
+      "renderer": "GALLIUM",
+      "distant_horizons": true,
+      "extra_macros": {
+        "SB_FLAG": null,
+        "SB_LEVEL": "2"
+      },
+      "targets": [
+        "vulkan",
+        "renderpearl"
+      ],
+      "depth_mode": "reversed_zero_to_one",
+      "device": {
+        "geometry_shader": true,
+        "tessellation_shader": true,
+        "storage_image_read_without_format": true,
+        "storage_image_write_without_format": true,
+        "depth_clip_control": false,
+        "max_push_constants_size": 128,
+        "max_color_attachments": 8,
+        "comparison_samplers": false,
+        "max_descriptors_per_program": 32
+      }
+    }
+  },
+  "options": {
+    "options": [
+      {
+        "name": "SHADOWS",
+        "kind": "boolean_define",
+        "default": "true",
+        "value": "false",
+        "allowed": [],
+        "comment": "Enable shadows",
+        "file": "lib/settings.glsl",
+        "line": 12
+      },
+      {
+        "name": "SHADOW_RES",
+        "kind": "value_define",
+        "default": "2048",
+        "value": "1024",
+        "allowed": [
+          "1024",
+          "2048",
+          "4096"
+        ],
+        "comment": null,
+        "file": "lib/settings.glsl",
+        "line": 13
+      },
+      {
+        "name": "sunPathRotation",
+        "kind": "const",
+        "default": "-40.0",
+        "value": "-40.0",
+        "allowed": [
+          "-40.0",
+          "0.0",
+          "40.0"
+        ],
+        "comment": "",
+        "file": "world0/composite.fsh",
+        "line": 1
+      }
+    ],
+    "main_screen": [
+      {
+        "type": "profile"
+      },
+      {
+        "type": "empty"
+      },
+      {
+        "type": "option",
+        "value": "SHADOWS"
+      },
+      {
+        "type": "screen",
+        "value": "LIGHTING"
+      },
+      {
+        "type": "rest"
+      }
+    ],
+    "main_screen_columns": 3,
+    "screens": {
+      "LIGHTING": {
+        "entries": [
+          {
+            "type": "option",
+            "value": "SHADOW_RES"
+          },
+          {
+            "type": "rest"
+          }
+        ],
+        "columns": null
+      },
+      "EMPTY": {
+        "entries": [],
+        "columns": 1
+      }
+    },
+    "sliders": [
+      "SHADOW_RES"
+    ],
+    "profiles": {
+      "LOW": {
+        "SHADOWS": "false",
+        "SHADOW_RES": "1024"
+      },
+      "HIGH": {}
+    },
+    "current_profile": "LOW",
+    "profile_disabled_programs": {
+      "LOW": [
+        "world0/composite2"
+      ]
+    },
+    "lang": {
+      "option.SHADOWS": "Shadows",
+      "value.SHADOW_RES.1024": "Low (1024)"
+    }
+  },
+  "id_maps": {
+    "blocks": {
+      "10001": [
+        "minecraft:oak_leaves",
+        "%minecraft:logs"
+      ],
+      "-1": [
+        "minecraft:wheat:age=7"
+      ]
+    },
+    "items": {
+      "5000": [
+        "minecraft:torch"
+      ]
+    },
+    "entities": {
+      "0": [
+        "minecraft:player"
+      ]
+    },
+    "layers": {
+      "translucent": [
+        "minecraft:glass"
+      ]
+    },
+    "dimensions": {
+      "world0": [
+        "minecraft:overworld",
+        "*"
+      ]
+    }
+  },
+  "dimensions": [
+    {
+      "folder": "world0",
+      "dimension_ids": [
+        "minecraft:overworld"
+      ],
+      "targets": {
+        "colortex": [
+          {
+            "index": 0,
+            "format": "RGBA16F",
+            "clear": true,
+            "clear_color": null,
+            "mipmap_programs": [
+              4
+            ],
+            "size": {
+              "type": "relative",
+              "x": 1.0,
+              "y": 1.0
+            },
+            "used": true
+          },
+          {
+            "index": 1,
+            "format": "RGBA16F",
+            "clear": true,
+            "clear_color": [
+              1.0,
+              0.5,
+              0.25,
+              0.0
+            ],
+            "mipmap_programs": [],
+            "size": {
+              "type": "absolute",
+              "width": 256,
+              "height": 128
+            },
+            "used": true
+          },
+          {
+            "index": 2,
+            "format": "RGBA16F",
+            "clear": false,
+            "clear_color": null,
+            "mipmap_programs": [],
+            "size": {
+              "type": "per_axis",
+              "x": {
+                "type": "relative",
+                "value": 0.5
+              },
+              "y": {
+                "type": "absolute",
+                "value": 64
+              }
+            },
+            "used": true
+          }
+        ],
+        "shadowcolor": [
+          {
+            "index": 0,
+            "format": "RGBA16F",
+            "clear": true,
+            "clear_color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "mipmap_programs": [
+              4
+            ],
+            "size": {
+              "type": "relative",
+              "x": 1.0,
+              "y": 1.0
+            },
+            "used": true
+          }
+        ],
+        "shadow": {
+          "enabled": true,
+          "resolution": 2048,
+          "fov": 90.0,
+          "distance": 128.0,
+          "near_plane": -1.0,
+          "far_plane": -1.0,
+          "distance_render_mul": 1.0,
+          "entity_distance_mul": 0.5,
+          "interval_size": 4.0,
+          "voxel_distance": 32.0,
+          "hardware_filtering": [
+            true,
+            false
+          ],
+          "mipmap": [
+            false,
+            true
+          ],
+          "nearest": [
+            true,
+            true
+          ],
+          "color_mipmap": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "color_nearest": [
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "culling": "reversed",
+          "render_terrain": true,
+          "render_translucent": false,
+          "render_entities": true,
+          "render_player": true,
+          "render_block_entities": false,
+          "render_light_block_entities": true,
+          "dh_shadow_enabled": false
+        },
+        "uses_depthtex1": true,
+        "uses_depthtex2": false,
+        "noise_texture_resolution": 256,
+        "noise_texture": {
+          "type": "pack_image",
+          "path": "textures/noise.png"
+        },
+        "custom_textures": [
+          {
+            "sampler": "cloudTex",
+            "stage": "composite",
+            "source": {
+              "type": "raw",
+              "path": "data/cloud.dat",
+              "target": "3d",
+              "dimensions": 3,
+              "format": "R8",
+              "size": [
+                32,
+                32,
+                32
+              ],
+              "pixel_format": "RED",
+              "pixel_type": "UNSIGNED_BYTE"
+            },
+            "blur": true,
+            "clamp": false
+          },
+          {
+            "sampler": "lightmapTex",
+            "stage": "custom",
+            "source": {
+              "type": "dynamic",
+              "name": "minecraft:dynamic/lightmap_1"
+            },
+            "blur": false,
+            "clamp": true
+          },
+          {
+            "sampler": "atlasTex",
+            "stage": "gbuffers",
+            "source": {
+              "type": "resource",
+              "location": "minecraft:textures/atlas/blocks.png"
+            },
+            "blur": false,
+            "clamp": false
+          }
+        ],
+        "images": [
+          {
+            "name": "imgVoxel",
+            "sampler_name": "voxelSampler",
+            "format": "R32UI",
+            "pixel_format": "RED_INTEGER",
+            "pixel_type": "UNSIGNED_INT",
+            "clear": true,
+            "size": {
+              "type": "absolute3_d",
+              "width": 64,
+              "height": 32,
+              "depth": 16
+            }
+          },
+          {
+            "name": "imgHalf",
+            "sampler_name": null,
+            "format": "RGBA16F",
+            "pixel_format": "RGBA",
+            "pixel_type": "HALF_FLOAT",
+            "clear": false,
+            "size": {
+              "type": "relative",
+              "x": 0.5,
+              "y": 0.5
+            }
+          },
+          {
+            "name": "img1d",
+            "sampler_name": null,
+            "format": "R32F",
+            "pixel_format": "RED",
+            "pixel_type": "FLOAT",
+            "clear": false,
+            "size": {
+              "type": "absolute1_d",
+              "width": 256
+            }
+          },
+          {
+            "name": "img2d",
+            "sampler_name": null,
+            "format": "RGBA8",
+            "pixel_format": "RGBA",
+            "pixel_type": "UNSIGNED_BYTE",
+            "clear": true,
+            "size": {
+              "type": "absolute2_d",
+              "width": 512,
+              "height": 256
+            }
+          }
+        ],
+        "buffers": [
+          {
+            "index": 0,
+            "size": 5000000000,
+            "relative": null,
+            "file": "data/init.bin"
+          },
+          {
+            "index": 4,
+            "size": 16,
+            "relative": [
+              0.5,
+              1.0
+            ],
+            "file": null
+          }
+        ]
+      },
+      "settings": {
+        "clouds": "off",
+        "dh_clouds": "on",
+        "old_hand_light": false,
+        "dynamic_hand_light": true,
+        "old_lighting": false,
+        "separate_ao": false,
+        "underwater_overlay": false,
+        "vignette": false,
+        "sun": true,
+        "moon": true,
+        "stars": true,
+        "sky": true,
+        "weather": true,
+        "weather_particles": true,
+        "rain_depth": false,
+        "beacon_beam_depth": false,
+        "frustum_culling": true,
+        "occlusion_culling": true,
+        "separate_entity_draws": false,
+        "allow_concurrent_compute": false,
+        "particles_ordering": "after",
+        "supports_color_correction": false,
+        "skip_all_rendering": false,
+        "voxelize_light_blocks": false,
+        "end_flash_shadows": false,
+        "fallback_tex": 3,
+        "back_face": {
+          "solid": true,
+          "translucent": false
+        },
+        "sun_path_rotation": -40.0,
+        "ambient_occlusion_level": 1.0,
+        "wetness_half_life": 600.0,
+        "dryness_half_life": 200.0,
+        "eye_brightness_half_life": 10.0,
+        "center_depth_half_life": 1.0,
+        "raw": {
+          "clouds": "off"
+        }
+      },
+      "uniforms": {
+        "frame": {
+          "name": "sb_Frame",
+          "set": 0,
+          "binding": 0,
+          "size": 96,
+          "members": [
+            {
+              "name": "frameTimeCounter",
+              "ty": {
+                "scalar": "float",
+                "rows": 1,
+                "cols": 1
+              },
+              "offset": 0,
+              "source": {
+                "type": "builtin",
+                "name": "frameTimeCounter"
+              }
+            },
+            {
+              "name": "myCustom",
+              "ty": {
+                "scalar": "float",
+                "rows": 3,
+                "cols": 1
+              },
+              "offset": 16,
+              "source": {
+                "type": "custom",
+                "name": "myCustom"
+              }
+            },
+            {
+              "name": "unknownThing",
+              "ty": {
+                "scalar": "float",
+                "rows": 2,
+                "cols": 2
+              },
+              "offset": 32,
+              "source": {
+                "type": "unset"
+              },
+              "default": [
+                1.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            {
+              "name": "weights",
+              "ty": {
+                "scalar": "float",
+                "rows": 1,
+                "cols": 1,
+                "array": 2
+              },
+              "offset": 64,
+              "source": {
+                "type": "unset"
+              },
+              "default": [
+                0.5,
+                0.25
+              ]
+            }
+          ]
+        },
+        "draw": {
+          "name": "sb_Draw",
+          "set": 0,
+          "binding": 1,
+          "size": 16,
+          "members": [
+            {
+              "name": "entityId",
+              "ty": {
+                "scalar": "int",
+                "rows": 1,
+                "cols": 1
+              },
+              "offset": 0,
+              "source": {
+                "type": "builtin",
+                "name": "entityId"
+              }
+            }
+          ]
+        }
+      },
+      "custom_uniforms": [
+        {
+          "name": "myCustom",
+          "ty": {
+            "scalar": "float",
+            "rows": 3,
+            "cols": 1
+          },
+          "expression": "vec3(sin(frameTimeCounter), 0, 1)",
+          "is_variable": false,
+          "location": {
+            "file": "shaders.properties",
+            "line": 40,
+            "column": 3
+          }
+        },
+        {
+          "name": "tmp",
+          "ty": {
+            "scalar": "float",
+            "rows": 1,
+            "cols": 1
+          },
+          "expression": "frameTimeCounter * 2",
+          "is_variable": true
+        }
+      ],
+      "bindings": {
+        "entries": [
+          {
+            "name": "colortex0",
+            "set": 1,
+            "binding": 0,
+            "kind": {
+              "type": "sampler",
+              "dim": "2d",
+              "shadow": false,
+              "sample_type": "float"
+            },
+            "resource": {
+              "type": "color_tex",
+              "value": 0
+            }
+          },
+          {
+            "name": "shadowtex0HW",
+            "set": 1,
+            "binding": 1,
+            "kind": {
+              "type": "sampler",
+              "dim": "2d",
+              "shadow": true,
+              "sample_type": "float"
+            },
+            "resource": {
+              "type": "shadow_tex_hw",
+              "value": 0
+            }
+          },
+          {
+            "name": "imgVoxel",
+            "set": 2,
+            "binding": 0,
+            "kind": {
+              "type": "storage_image",
+              "dim": "3d",
+              "format": "r32ui",
+              "sample_type": "uint",
+              "readonly": false,
+              "writeonly": false
+            },
+            "resource": {
+              "type": "image",
+              "value": "imgVoxel"
+            }
+          },
+          {
+            "name": "ssbo4",
+            "set": 2,
+            "binding": 4,
+            "kind": {
+              "type": "storage_buffer"
+            },
+            "resource": {
+              "type": "ssbo",
+              "value": 4
+            }
+          },
+          {
+            "name": "sb_Frame",
+            "set": 0,
+            "binding": 0,
+            "kind": {
+              "type": "uniform_buffer"
+            },
+            "resource": {
+              "type": "uniform_block",
+              "value": "sb_Frame"
+            }
+          },
+          {
+            "name": "gtexture",
+            "set": 1,
+            "binding": 2,
+            "kind": {
+              "type": "sampler",
+              "dim": "2d",
+              "shadow": false,
+              "sample_type": "float"
+            },
+            "resource": {
+              "type": "white"
+            }
+          }
+        ]
+      },
+      "programs": [
+        {
+          "name": "world0/gbuffers_terrain",
+          "kind": {
+            "type": "geometry",
+            "program": "terrain"
+          },
+          "draw_profile": "vanilla_terrain",
+          "requires_raw_vulkan": false,
+          "stages": [
+            {
+              "stage": "vertex",
+              "entry_point": "main",
+              "spirv": 0,
+              "glsl_vulkan": 1,
+              "glsl_renderpearl": 1,
+              "source_file": "world0/gbuffers_terrain.vsh"
+            },
+            {
+              "stage": "fragment",
+              "entry_point": "main",
+              "spirv": 2,
+              "glsl_vulkan": 3,
+              "glsl_renderpearl": 3,
+              "source_file": "world0/gbuffers_terrain.fsh"
+            }
+          ],
+          "draw_buffers": [
+            0,
+            4
+          ],
+          "output_slots": [
+            0,
+            2
+          ],
+          "output_types": [
+            "float",
+            "uint"
+          ],
+          "blend": {
+            "src_color": "src_alpha",
+            "dst_color": "one_minus_src_alpha",
+            "src_alpha": "one",
+            "dst_alpha": "one_minus_src_alpha"
+          },
+          "blend_per_buffer": {
+            "4": null,
+            "0": {
+              "src_color": "one",
+              "dst_color": "zero",
+              "src_alpha": "src_alpha_saturate",
+              "dst_alpha": "one_minus_dst_color"
+            }
+          },
+          "alpha_test": {
+            "func": "greater",
+            "reference": 0.1
+          },
+          "viewport": {
+            "scale": 0.5,
+            "offset_x": 0.25,
+            "offset_y": 0.0
+          },
+          "mipmap_targets": [
+            1
+          ],
+          "bindings_used": [
+            {
+              "name": "colortex0",
+              "set": 1,
+              "binding": 0,
+              "use_alt": true,
+              "stages": [
+                "vertex",
+                "fragment"
+              ]
+            }
+          ],
+          "vertex_inputs": [
+            {
+              "location": 0,
+              "name": "Position",
+              "ty": "vec3",
+              "semantic": "position"
+            },
+            {
+              "location": 5,
+              "name": "mc_Entity",
+              "ty": "vec4",
+              "semantic": null
+            }
+          ],
+          "push_constant_size": 16,
+          "compute": null,
+          "cull": false,
+          "synthesized_from": null
+        },
+        {
+          "name": "world0/dh_terrain",
+          "kind": {
+            "type": "geometry",
+            "program": "dh_terrain"
+          },
+          "draw_profile": "dh_terrain",
+          "requires_raw_vulkan": true,
+          "stages": [],
+          "draw_buffers": [
+            0
+          ],
+          "output_slots": [
+            0
+          ],
+          "output_types": [
+            "float"
+          ],
+          "blend": null,
+          "blend_per_buffer": {},
+          "alpha_test": null,
+          "viewport": {
+            "scale": 1.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0
+          },
+          "mipmap_targets": [],
+          "bindings_used": [],
+          "vertex_inputs": [],
+          "push_constant_size": 0,
+          "compute": null,
+          "cull": true,
+          "synthesized_from": "world0/gbuffers_terrain"
+        },
+        {
+          "name": "world0/composite3_b",
+          "kind": {
+            "type": "compute",
+            "group": "composite",
+            "index": 3,
+            "letter": "b"
+          },
+          "draw_profile": null,
+          "requires_raw_vulkan": true,
+          "stages": [
+            {
+              "stage": "compute",
+              "entry_point": "main",
+              "spirv": 4,
+              "glsl_vulkan": 5,
+              "glsl_renderpearl": null,
+              "source_file": "world0/composite3_b.csh"
+            }
+          ],
+          "draw_buffers": [],
+          "output_slots": [],
+          "output_types": [],
+          "blend": null,
+          "blend_per_buffer": {},
+          "alpha_test": null,
+          "viewport": {
+            "scale": 1.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0
+          },
+          "mipmap_targets": [],
+          "bindings_used": [],
+          "vertex_inputs": [],
+          "push_constant_size": 0,
+          "compute": {
+            "local_size": [
+              8,
+              8,
+              1
+            ],
+            "work_groups": {
+              "type": "relative",
+              "x": 0.5,
+              "y": 0.5
+            },
+            "indirect": [
+              4,
+              16
+            ]
+          },
+          "cull": null,
+          "synthesized_from": null
+        },
+        {
+          "name": "world0/shadow_a",
+          "kind": {
+            "type": "geometry_compute",
+            "program": "shadow",
+            "letter": "a"
+          },
+          "draw_profile": null,
+          "requires_raw_vulkan": false,
+          "stages": [],
+          "draw_buffers": [
+            0
+          ],
+          "output_slots": [
+            0
+          ],
+          "output_types": [
+            "float"
+          ],
+          "blend": null,
+          "blend_per_buffer": {},
+          "alpha_test": null,
+          "viewport": {
+            "scale": 1.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0
+          },
+          "mipmap_targets": [],
+          "bindings_used": [],
+          "vertex_inputs": [],
+          "push_constant_size": 0,
+          "compute": {
+            "local_size": [
+              64,
+              1,
+              1
+            ],
+            "work_groups": {
+              "type": "absolute",
+              "x": 4,
+              "y": 1,
+              "z": 1
+            },
+            "indirect": null
+          },
+          "cull": null,
+          "synthesized_from": null
+        },
+        {
+          "name": "world0/final",
+          "kind": {
+            "type": "composite",
+            "group": "final",
+            "index": 0
+          },
+          "draw_profile": "fullscreen",
+          "requires_raw_vulkan": false,
+          "stages": [],
+          "draw_buffers": [
+            0
+          ],
+          "output_slots": [
+            0
+          ],
+          "output_types": [
+            "float"
+          ],
+          "blend": null,
+          "blend_per_buffer": {},
+          "alpha_test": null,
+          "viewport": {
+            "scale": 1.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0
+          },
+          "mipmap_targets": [],
+          "bindings_used": [],
+          "vertex_inputs": [],
+          "push_constant_size": 0,
+          "compute": null,
+          "cull": null,
+          "synthesized_from": null
+        }
+      ],
+      "geometry": {
+        "terrain": {
+          "program": 0,
+          "resolved_from": "terrain"
+        },
+        "damaged_block": {
+          "program": 0,
+          "resolved_from": "terrain"
+        },
+        "dh_terrain": {
+          "program": 1,
+          "resolved_from": "dh_terrain"
+        }
+      },
+      "passes": [
+        {
+          "group": "gbuffers_opaque",
+          "index": 0,
+          "computes": [],
+          "program": null,
+          "flips_after": [],
+          "flip_state": [
+            false,
+            false,
+            false
+          ]
+        },
+        {
+          "group": "composite",
+          "index": 3,
+          "computes": [
+            2
+          ],
+          "program": null,
+          "flips_after": [
+            0,
+            2
+          ],
+          "flip_state": [
+            true,
+            false,
+            true
+          ]
+        },
+        {
+          "group": "final",
+          "index": 0,
+          "computes": [],
+          "program": 4,
+          "flips_after": [],
+          "flip_state": [
+            false,
+            false,
+            false
+          ]
+        }
+      ],
+      "gbuffer_attachments": [
+        0,
+        2,
+        4
+      ],
+      "shadow_attachments": [
+        0
+      ],
+      "end_of_frame_copies": [
+        2
+      ],
+      "distant_horizons": {
+        "strategy": "synthesized",
+        "unified_projection": true,
+        "shadow_enabled": false
+      }
+    },
+    {
+      "folder": "",
+      "dimension_ids": [
+        "*"
+      ],
+      "targets": {
+        "colortex": [],
+        "shadowcolor": [],
+        "shadow": {
+          "enabled": false,
+          "resolution": 1024,
+          "fov": null,
+          "distance": 160.0,
+          "near_plane": 0.05,
+          "far_plane": 256.0,
+          "distance_render_mul": -1.0,
+          "entity_distance_mul": 1.0,
+          "interval_size": 2.0,
+          "voxel_distance": 0.0,
+          "hardware_filtering": [
+            false,
+            false
+          ],
+          "mipmap": [
+            false,
+            false
+          ],
+          "nearest": [
+            false,
+            false
+          ],
+          "color_mipmap": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "color_nearest": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "culling": "default",
+          "render_terrain": true,
+          "render_translucent": true,
+          "render_entities": true,
+          "render_player": false,
+          "render_block_entities": true,
+          "render_light_block_entities": false,
+          "dh_shadow_enabled": true
+        },
+        "uses_depthtex1": false,
+        "uses_depthtex2": false,
+        "noise_texture_resolution": 64,
+        "noise_texture": null,
+        "custom_textures": [],
+        "images": [],
+        "buffers": []
+      },
+      "settings": {
+        "clouds": "default",
+        "dh_clouds": "default",
+        "old_hand_light": true,
+        "dynamic_hand_light": true,
+        "old_lighting": false,
+        "separate_ao": false,
+        "underwater_overlay": false,
+        "vignette": false,
+        "sun": true,
+        "moon": true,
+        "stars": true,
+        "sky": true,
+        "weather": true,
+        "weather_particles": true,
+        "rain_depth": false,
+        "beacon_beam_depth": false,
+        "frustum_culling": true,
+        "occlusion_culling": true,
+        "separate_entity_draws": false,
+        "allow_concurrent_compute": false,
+        "particles_ordering": "after",
+        "supports_color_correction": false,
+        "skip_all_rendering": false,
+        "voxelize_light_blocks": false,
+        "end_flash_shadows": false,
+        "fallback_tex": 0,
+        "back_face": {},
+        "sun_path_rotation": 0.0,
+        "ambient_occlusion_level": 1.0,
+        "wetness_half_life": 600.0,
+        "dryness_half_life": 200.0,
+        "eye_brightness_half_life": 10.0,
+        "center_depth_half_life": 1.0,
+        "raw": {}
+      },
+      "uniforms": {
+        "frame": {
+          "name": "",
+          "set": 0,
+          "binding": 0,
+          "size": 0,
+          "members": []
+        },
+        "draw": {
+          "name": "",
+          "set": 0,
+          "binding": 0,
+          "size": 0,
+          "members": []
+        }
+      },
+      "custom_uniforms": [],
+      "bindings": {
+        "entries": []
+      },
+      "programs": [],
+      "geometry": {},
+      "passes": [],
+      "gbuffer_attachments": [],
+      "shadow_attachments": [],
+      "end_of_frame_copies": [],
+      "distant_horizons": {
+        "strategy": "disabled",
+        "unified_projection": false,
+        "shadow_enabled": false
+      }
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "spv.compile",
+      "message": "'foo' : undeclared identifier",
+      "location": {
+        "file": "lib/a.glsl",
+        "line": 7,
+        "column": 12
+      },
+      "program": "world0/gbuffers_terrain",
+      "stage": "tess_eval"
+    },
+    {
+      "severity": "warning",
+      "code": "xf.unknown-builtin",
+      "message": "unknown",
+      "location": {
+        "file": "b.fsh",
+        "line": 3
+      }
+    },
+    {
+      "severity": "info",
+      "code": "opt.screen-unknown-option",
+      "message": "note"
+    }
+  ],
+  "blobs": [
+    {
+      "kind": "spirv",
+      "offset": 0,
+      "len": 20
+    },
+    {
+      "kind": "glsl",
+      "offset": 24,
+      "len": 13
+    },
+    {
+      "kind": "spirv",
+      "offset": 40,
+      "len": 20
+    },
+    {
+      "kind": "glsl",
+      "offset": 64,
+      "len": 13
+    },
+    {
+      "kind": "spirv",
+      "offset": 80,
+      "len": 20
+    },
+    {
+      "kind": "glsl",
+      "offset": 104,
+      "len": 13
+    },
+    {
+      "kind": "bytes",
+      "offset": 120,
+      "len": 3
+    }
+  ]
+}

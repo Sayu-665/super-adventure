@@ -85,25 +85,48 @@ fn param_treatment(ty: &TypeSpec) -> Option<Depth> {
 }
 
 fn fragment(w: &mut StageWork) {
-    let mut depth_compound = false;
-    w.unit.walk_exprs_mut(&mut |e| match e {
+    let mut unsupported = false;
+    w.unit.walk_exprs_mut(&mut |e| {
+        flip_fragment_depth(e, &mut unsupported);
+        Walk::Skip
+    });
+    if unsupported {
+        w.warn("xf.depth-write", "`gl_FragDepth++`/`--` is not converted for reversed depth", 0);
+    }
+}
+
+/// `1.0 - e`
+fn one_minus(e: Expr) -> Expr {
+    Expr::Binary(BinaryOp::Sub, Box::new(Expr::Float(1.0)), Box::new(e))
+}
+
+/// The pack sees forward depth; the attachment stores reversed depth:
+/// * `gl_FragCoord` -> `vec4(gl_FragCoord.xy, 1.0 - gl_FragCoord.z, gl_FragCoord.w)`;
+/// * `gl_FragDepth = v` -> `gl_FragDepth = 1.0 - (v)`;
+/// * `gl_FragDepth op= v` -> `gl_FragDepth = 1.0 - ((1.0 - gl_FragDepth) op (v))`;
+/// * other reads of `gl_FragDepth` (after a write) -> `(1.0 - gl_FragDepth)`.
+fn flip_fragment_depth(e: &mut Expr, unsupported: &mut bool) {
+    match e {
         Expr::Ident(n) if n == "gl_FragCoord" => {
             *e = Expr::raw("vec4(gl_FragCoord.xy, 1.0 - gl_FragCoord.z, gl_FragCoord.w)");
-            Walk::Skip
         }
+        Expr::Ident(n) if n == "gl_FragDepth" => *e = one_minus(Expr::ident("gl_FragDepth")),
         Expr::Assign(lhs, op, rhs) if lhs.as_ident() == Some("gl_FragDepth") => {
-            if *op == AssignOp::Equal {
-                let v = std::mem::replace(rhs.as_mut(), Expr::Int(0));
-                **rhs = Expr::Binary(BinaryOp::Sub, Box::new(Expr::Float(1.0)), Box::new(v));
-            } else {
-                depth_compound = true;
-            }
-            Walk::Children
+            flip_fragment_depth(rhs, unsupported);
+            let v = std::mem::replace(rhs.as_mut(), Expr::Int(0));
+            **rhs = match op.binary() {
+                None => one_minus(v),
+                Some(b) => one_minus(Expr::Binary(b, Box::new(one_minus(Expr::ident("gl_FragDepth"))), Box::new(v))),
+            };
+            *op = AssignOp::Equal;
         }
-        _ => Walk::Children,
-    });
-    if depth_compound {
-        w.warn("xf.depth-write", "compound assignment to gl_FragDepth is not converted for reversed depth", 0);
+        Expr::PostInc(a) | Expr::PostDec(a) | Expr::Unary(UnaryOp::Inc | UnaryOp::Dec, a) if a.as_ident() == Some("gl_FragDepth") => {
+            *unsupported = true;
+        }
+        _ => e.walk_children_mut(&mut |c| {
+            flip_fragment_depth(c, unsupported);
+            Walk::Skip
+        }),
     }
 }
 

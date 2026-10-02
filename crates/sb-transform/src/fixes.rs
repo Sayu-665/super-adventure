@@ -73,15 +73,6 @@ fn arity(p: &Prototype) -> usize {
     }
 }
 
-fn calls_in(e: &Expr, out: &mut Vec<(String, usize)>) {
-    e.walk(&mut |x| {
-        if let Expr::Call(Callee::Name(n), args) = x {
-            out.push((n.clone(), args.len()));
-        }
-        Walk::Children
-    });
-}
-
 /// Remove functions not reachable from `main` / `sb_user_main` or from global
 /// initializers (call graph by name and arity, so overloads are kept conservatively).
 pub(crate) fn remove_dead_functions(unit: &mut TranslationUnit) {
@@ -134,7 +125,6 @@ pub(crate) fn remove_dead_functions(unit: &mut TranslationUnit) {
         ItemKind::Prototype(p) => live.contains(&(p.name.clone(), arity(p))),
         _ => true,
     });
-    let _ = calls_in;
 }
 
 fn refs_any(e: &Expr, names: &HashSet<String>) -> bool {
