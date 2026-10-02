@@ -91,29 +91,49 @@ pack dir/zip ──sb-pack──► files, shaders.properties (raw + preprocesse
 ## 4. Clip-space, depth and winding conventions (contract)
 
 Mojang's Vulkan backend (from `VulkanRenderPass` and `VulkanRenderPipeline`):
-* The viewport has positive height, origin `(0,0)` and depth range `0..1`.
+* The viewport has positive height, origin `(0,0)` and depth range `0..1`. The
+  present blit flips Y.
 * `frontFace = CLOCKWISE`. This reproduces GL's CCW winding in framebuffer space.
 * On Vulkan, Mojang's projection matrices map depth to `[0,1]`
   (`RENDERPEARL_DEPTH_IS_ZERO_TO_ONE`).
+* Since 26.2, depth is **reversed-Z**: near maps to 1, far maps to 0, the
+  compare op is `GEQUAL`, and depth clears to `0.0`. DH ≥ 3.3 also renders
+  reversed-Z.
 
 Shader packs assume GL conventions throughout, for example
 `gbufferProjectionInverse * vec4(uv, depth, 1) * 2 - 1`. ShaderBridge therefore:
 
-1. **Feeds packs GL-style matrices** (NDC z in `[-1,1]`). The host converts
-   a `[0,1]` projection `P01` into GL form: `row2_gl = 2*row2_01 - row3_01`.
-2. **Remaps depth in the last pre-rasterization stage.** After the pack's
-   `main()` returns, a generated epilogue runs:
-   `gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;`
-   It is enabled by `TransformOptions::depth_remap`, which defaults to on. As a
-   result, depth-buffer contents equal GL window depth, exactly what packs read
-   from `depthtex*`. They are also bit-compatible with what vanilla writes using
-   the `[0,1]` matrix.
+1. **Feeds packs GL-style forward-Z matrices** (NDC z in `[-1,1]`, near→-1).
+   The host converts its own projection into this form, as Iris does.
+2. **Translates for a selectable `DepthMode`** (`TransformOptions::depth_mode`):
+   * `ForwardZeroToOne`, the `sb-runtime` default. The last pre-raster stage
+     runs `gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;` after the
+     pack's `main()`. Depth then equals GL window depth. The host uses
+     `LESS`/`LEQUAL` and clears to 1.0.
+   * `ReversedZeroToOne`, the Java-mod default on 26.2+. It shares depth with
+     vanilla and DH, following Iris's DepthTransformer:
+     * `gl_Position.z = (gl_Position.w - gl_Position.z) * 0.5`.
+     * Every depth-texture read becomes `1.0 - value` (`depthtex*`,
+       `dhDepthTex*`, `shadowtex*` sampled as non-shadow samplers).
+     * `gl_FragCoord.z` → `(1.0 - gl_FragCoord.z)`.
+     * Writes `gl_FragDepth = x` → `gl_FragDepth = 1.0 - (x)`.
+     * Shadow-comparison lookups flip their reference (`1.0 - ref`).
+
+     The host uses `GEQUAL` and clears to 0.0.
+   * `GlNegOneToOne` applies no remap. It is for hosts with GL's default clip control.
+
+   Packs observe identical depth values in both `ZeroToOne` modes. The
+   headless test renders the same pack in both modes and compares the
+   images, to verify the reversed-Z rewrite.
 3. **Does not flip Y.** With a positive viewport, NDC y=-1 maps to memory row 0,
    as in GL, where texture v=0 is row 0. Rendering and sampling therefore stay
    self-consistent, and `gl_FragCoord`/`dFdy` keep GL's memory-relative
    semantics. A `TransformOptions::flip_y` escape hatch exists for hosts that
    use a negative viewport.
 4. Hosts must use `frontFace = CLOCKWISE` for pack pipelines, as Mojang does.
+5. `gl_InstanceID` → `(gl_InstanceIndex - gl_BaseInstance)`. This needs
+   `GL_ARB_shader_draw_parameters`, so the plain `gl_InstanceIndex` is used when
+   the host guarantees base instance 0. `gl_VertexID` → `gl_VertexIndex`.
 
 ## 5. Descriptor and uniform conventions (contract)
 

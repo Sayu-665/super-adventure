@@ -154,6 +154,8 @@ pub struct CompileEnvironment {
     pub extra_macros: IndexMap<String, Option<String>>,
     /// Output target(s) to generate.
     pub targets: Vec<OutputTarget>,
+    /// Depth convention of the host (ARCHITECTURE §4).
+    pub depth_mode: DepthMode,
     /// Device capabilities relevant to translation.
     pub device: DeviceCaps,
 }
@@ -168,9 +170,22 @@ impl Default for CompileEnvironment {
             distant_horizons: true,
             extra_macros: IndexMap::new(),
             targets: vec![OutputTarget::Vulkan, OutputTarget::Renderpearl],
+            depth_mode: DepthMode::ForwardZeroToOne,
             device: DeviceCaps::default(),
         }
     }
+}
+
+/// Depth convention the translated shaders are generated for (ARCHITECTURE §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DepthMode {
+    /// NDC z in [0,1], near -> 0. Host: LESS/LEQUAL, clear 1.0.
+    ForwardZeroToOne,
+    /// NDC z in [0,1], near -> 1 (Minecraft 26.2+, DH 3.3+). Host: GEQUAL, clear 0.0.
+    ReversedZeroToOne,
+    /// GL default clip control, NDC z in [-1,1]; no remap.
+    GlNegOneToOne,
 }
 
 /// Which GLSL/SPIR-V flavour to emit (ARCHITECTURE §5).

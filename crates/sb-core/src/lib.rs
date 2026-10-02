@@ -9,12 +9,14 @@ pub mod format;
 pub mod glsl_type;
 pub mod model;
 pub mod program;
+pub mod source;
 pub mod stage;
 
 pub use diag::{Diagnostic, Diagnostics, Severity, SourceLocation};
 pub use format::TextureFormat;
 pub use glsl_type::{GlslType, ScalarKind};
 pub use program::{GeometryProgram, PassGroup, ProgramName};
+pub use source::{normalize_pack_path, MemorySources, SourceProvider};
 pub use stage::ShaderStage;
 
 /// Version of the CompiledPack JSON format. Bump on incompatible changes.
