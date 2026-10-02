@@ -1,0 +1,22 @@
+name = "vanilla_position"
+description = "Minecraft 26.3 POSITION format (sky, stars, void) with DynamicTransforms."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+
+[[blocks]]
+name = "DynamicTransforms"
+instance = "sb_hDynamic"
+members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset;"
+
+
+[semantics]
+position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
+color = "sb_hDynamic.ColorModulator"
+uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
+model_view = "sb_hDynamic.ModelViewMat"
+projection = "projectionMatrix"
+texture_matrix = "sb_hDynamic.TextureMat"
+chunk_offset = "sb_hDynamic.ModelOffset"

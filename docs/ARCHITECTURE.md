@@ -287,6 +287,13 @@ Key parts:
     Composite, Final) plus its programs, computes, and the **static flip
     schedule**: for each pass, the main/alt read/write state of every colortex,
     and the end-of-frame alt→main copies (as in Iris `CompositeRenderer`).
+  * `gbuffer_attachments` / `shadow_attachments`: the sorted union of the
+    colortex/shadowcolor indices written by all gbuffers/DH (resp. shadow)
+    programs, when it fits in 8 attachments. All world geometry is then drawn
+    in ONE render pass. Mojang's API fixes a pass's attachments when the pass
+    is created, and Vulkan pipelines must match them. Each program's
+    logical outputs are remapped to physical locations (`output_slots`) in
+    that list, and unused slots are write-masked.
 * `diagnostics`: severity, code, message, original file:line, program.
 
 ## 8. GLSL translation rules (sb-transform)

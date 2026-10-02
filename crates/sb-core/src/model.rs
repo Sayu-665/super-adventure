@@ -331,6 +331,15 @@ pub struct DimensionPipeline {
     /// geometry unshaded (vanilla) writing to `settings.fallback_tex`.
     pub geometry: IndexMap<GeometryProgram, GeometrySlot>,
     pub passes: Vec<Pass>,
+    /// Color attachments of the shared gbuffers render pass: the sorted union of every
+    /// gbuffers/DH program's `draw_buffers` (colortex indices, at most 8). Gbuffers programs
+    /// write logical output `i` to attachment slot `output_slots[i]` of this list, so all
+    /// world geometry can be drawn in ONE render pass without switching attachments.
+    /// Empty if the union exceeds the attachment limit (hosts then use per-program passes
+    /// and `output_slots` is the identity).
+    pub gbuffer_attachments: Vec<u32>,
+    /// Same for the shadow pass (shadowcolor indices).
+    pub shadow_attachments: Vec<u32>,
     /// End-of-frame copies alt -> main for colortex buffers flipped an odd number of times
     /// (and not cleared), as in Iris.
     pub end_of_frame_copies: Vec<u32>,
@@ -750,8 +759,12 @@ pub struct Program {
     /// storage images, SSBOs, compute, geometry/tessellation).
     pub requires_raw_vulkan: bool,
     pub stages: Vec<StageModule>,
-    /// `RENDERTARGETS` / `DRAWBUFFERS`: fragment output location i writes target `draw_buffers[i]`.
+    /// `RENDERTARGETS` / `DRAWBUFFERS`: logical fragment output i writes target `draw_buffers[i]`.
     pub draw_buffers: Vec<u32>,
+    /// Physical fragment output location of logical output i (equal to i unless the program
+    /// was remapped onto the shared `gbuffer_attachments` / `shadow_attachments` list, in which
+    /// case `output_slots[i]` is the index of `draw_buffers[i]` in that list).
+    pub output_slots: Vec<u32>,
     /// Output base type per location (`float`, `int`, `uint`).
     pub output_types: Vec<String>,
     pub blend: Option<BlendMode>,

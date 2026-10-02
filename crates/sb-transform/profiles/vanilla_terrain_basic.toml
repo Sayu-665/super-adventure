@@ -1,0 +1,65 @@
+name = "vanilla_terrain_basic"
+description = "Minecraft 26.3 terrain with the unmodified BLOCK format (no normals/tangents/ids). Normals default to up; mc_Entity.x = -1. Use only when the host cannot extend the vertex format."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "UV0"
+type = "vec2"
+location = 2
+[[inputs]]
+name = "UV2"
+type = "ivec2"
+location = 3
+[[inputs]]
+name = "ChunkPosition"
+type = "ivec3"
+location = 4
+instanced = true
+[[inputs]]
+name = "ChunkVisibility"
+type = "float"
+location = 5
+instanced = true
+
+[[blocks]]
+name = "Globals"
+instance = "sb_hGlobals"
+members = "ivec3 CameraBlockPos; float GlintAlpha; vec3 CameraOffset; float GameTime; vec2 ScreenSize; int MenuBlurRadius; int UseRgss;"
+[[blocks]]
+name = "TerrainUniform"
+instance = "sb_hTerrain"
+members = "mat4 ModelViewMat; ivec2 TextureSize;"
+
+[[samplers]]
+name = "Sampler0"
+type = "sampler2D"
+provides = ["gtexture"]
+[[samplers]]
+name = "Sampler2"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(Position + vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset, 1.0)"
+color = "Color"
+uv0 = "vec4(UV0, 0.0, 1.0)"
+lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
+normal = "vec3(0.0, 1.0, 0.0)"
+entity = "vec4(-1.0, 0.0, 0.0, 0.0)"
+mid_tex_coord = "vec4(UV0, 0.0, 1.0)"
+model_view = "sb_hTerrain.ModelViewMat"
+projection = "gbufferProjection"
+chunk_offset = "(vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset)"
+
+[[globals]]
+name = "mc_chunkFade"
+type = "float"
+stage = "vertex"
+init = "ChunkVisibility"

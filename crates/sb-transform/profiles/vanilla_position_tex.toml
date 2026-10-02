@@ -1,0 +1,31 @@
+name = "vanilla_position_tex"
+description = "Minecraft 26.3 POSITION_TEX format (sun, moon) with DynamicTransforms."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+
+[[inputs]]
+name = "UV0"
+type = "vec2"
+location = 1
+
+[[blocks]]
+name = "DynamicTransforms"
+instance = "sb_hDynamic"
+members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset;"
+
+[[samplers]]
+name = "Sampler0"
+type = "sampler2D"
+provides = ["gtexture"]
+
+[semantics]
+position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
+color = "sb_hDynamic.ColorModulator"
+uv0 = "vec4(UV0, 0.0, 1.0)"
+model_view = "sb_hDynamic.ModelViewMat"
+projection = "projectionMatrix"
+texture_matrix = "sb_hDynamic.TextureMat"
+chunk_offset = "sb_hDynamic.ModelOffset"

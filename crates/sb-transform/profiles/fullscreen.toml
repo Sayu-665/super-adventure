@@ -1,0 +1,23 @@
+name = "fullscreen"
+description = "Composite-style passes (setup/begin/shadowcomp/prepare/deferred/composite/final): a fullscreen triangle generated from gl_VertexIndex, no vertex buffer. Draw with 3 vertices. Matches Iris CompositeTransformer semantics: positions/UVs in [0,1], projection maps [0,1] to [-1,1], identity model-view/texture/normal matrices, white color."
+fullscreen = true
+
+[semantics]
+position = "vec4(sb_fullscreenUv(), 0.0, 1.0)"
+color = "vec4(1.0)"
+uv0 = "vec4(sb_fullscreenUv(), 0.0, 1.0)"
+lightmap = "vec4(240.0, 240.0, 0.0, 1.0)"
+normal = "vec3(0.0, 0.0, 1.0)"
+model_view = "mat4(1.0)"
+projection = "mat4(2.0, 0.0, 0.0, 0.0,  0.0, 2.0, 0.0, 0.0,  0.0, 0.0, 0.0, 0.0,  -1.0, -1.0, 0.0, 1.0)"
+texture_matrix = "mat4(1.0)"
+normal_matrix = "mat3(1.0)"
+chunk_offset = "vec3(0.0)"
+
+[code]
+vertex = """
+vec2 sb_fullscreenUv() {
+    // (0,0), (2,0), (0,2): one triangle covering the [0,1]^2 viewport
+    return vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+}
+"""

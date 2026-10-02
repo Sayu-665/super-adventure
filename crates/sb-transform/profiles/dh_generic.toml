@@ -1,0 +1,43 @@
+name = "dh_generic"
+description = "Distant Horizons 3.3 BLAZE_3D generic objects (beacon beams, clouds, custom API boxes): vPosition vec3, aColor vec4 (RGBA32_FLOAT), aMaterial uint, with vertUniformBlock."
+
+[[inputs]]
+name = "vPosition"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "aColor"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "aMaterial"
+type = "uint"
+location = 2
+
+[[blocks]]
+name = "vertUniformBlock"
+instance = "sb_hDhGeneric"
+members = "ivec3 uOffsetChunk; vec3 uOffsetSubChunk; ivec3 uCameraPosChunk; vec3 uCameraPosSubChunk; mat4 uProjectionMvm; int uSkyLight; int uBlockLight; float uNorthShading; float uSouthShading; float uEastShading; float uWestShading; float uTopShading; float uBottomShading;"
+
+[[samplers]]
+name = "uLightMap"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(vPosition + vec3(sb_hDhGeneric.uOffsetChunk - sb_hDhGeneric.uCameraPosChunk) * 16.0 + (sb_hDhGeneric.uOffsetSubChunk - sb_hDhGeneric.uCameraPosSubChunk), 1.0)"
+color = "aColor"
+uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
+lightmap = "vec4((float(sb_hDhGeneric.uBlockLight) + 0.5) / 16.0, (float(sb_hDhGeneric.uSkyLight) + 0.5) / 16.0, 0.0, 1.0)"
+lightmap_matrix = "mat4(1.0)"
+normal = "vec3(0.0, 1.0, 0.0)"
+entity = "vec4(-1.0, 0.0, 0.0, 0.0)"
+model_view = "gbufferModelView"
+projection = "dhProjection"
+texture_matrix = "mat4(1.0)"
+
+[[globals]]
+name = "dhMaterialId"
+type = "int"
+stage = "vertex"
+init = "int(aMaterial)"

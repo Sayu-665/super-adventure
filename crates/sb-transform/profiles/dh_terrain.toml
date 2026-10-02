@@ -1,0 +1,168 @@
+name = "dh_terrain"
+description = "Distant Horizons 3.3 BLAZE_3D LOD terrain (16-byte vertices; quads indexed 0,1,2,2,3,0) (pipelines 'opaque_terrain' / 'transparent_terrain'). Vertex format: vPosition RGB16_UINT, meta R16_UINT (low byte = light: block<<4 | sky; bits 8..15 = micro offset 0b00zzyyxx), vColor RGBA8_UNORM, irisMaterial R8_UINT (DH_BLOCK_* id), irisNormal R8_UINT (EDhDirection: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east), textureTile R16_UINT (0 = flat color). DH binds vertUniqueUniformBlock per buffer, vertSharedUniformBlock/fragUniformBlock per pass and the samplers uLightMap/uBlockAtlas by name. gl_Vertex is camera-relative (Iris semantics); the pack sees gbufferModelView and dhProjection."
+
+[[inputs]]
+name = "vPosition"
+type = "uvec3"
+location = 0
+[[inputs]]
+name = "meta"
+type = "uint"
+location = 1
+[[inputs]]
+name = "vColor"
+type = "vec4"
+location = 2
+[[inputs]]
+name = "irisMaterial"
+type = "uint"
+location = 3
+[[inputs]]
+name = "irisNormal"
+type = "uint"
+location = 4
+[[inputs]]
+name = "textureTile"
+type = "uint"
+location = 5
+
+[[blocks]]
+name = "vertUniqueUniformBlock"
+instance = "sb_hDhUnique"
+members = "vec3 uModelOffset;"
+[[blocks]]
+name = "vertSharedUniformBlock"
+instance = "sb_hDhShared"
+members = "bool uIsWhiteWorld; float uWorldYOffset; float uMircoOffset; float uEarthRadius; float uFrameMod8; float uViewWidth; float uViewHeight; vec3 uCameraPos; mat4 uCombinedMatrix;"
+
+[[samplers]]
+name = "uLightMap"
+type = "sampler2D"
+provides = ["lightmap"]
+[[samplers]]
+name = "uBlockAtlas"
+type = "sampler2D"
+provides = ["dhBlockAtlas"]
+
+[semantics]
+position = "vec4(sb_dhCameraRelativePosition(), 1.0)"
+color = "vColor"
+uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
+# Iris DHTerrainTransformer semantics: lightmap coords are pre-normalized ((level + 0.5) / 16, x = block, y = sky)
+# and gl_TextureMatrix[0/1] are identity. meta low byte = sky | block << 4.
+lightmap = "vec4((float((meta >> 4u) & 15u) + 0.5) / 16.0, (float(meta & 15u) + 0.5) / 16.0, 0.0, 1.0)"
+lightmap_matrix = "mat4(1.0)"
+normal = "sb_dhNormal(irisNormal)"
+entity = "vec4(float(sb_dhPackBlockId(irisMaterial)), 0.0, 0.0, 0.0)"
+mid_tex_coord = "vec4(0.0, 0.0, 0.0, 1.0)"
+tangent = "sb_dhTangent(irisNormal)"
+mid_block = "vec4(0.0)"
+model_view = "gbufferModelView"
+projection = "dhProjection"
+texture_matrix = "mat4(1.0)"
+chunk_offset = "(sb_hDhUnique.uModelOffset - sb_hDhShared.uCameraPos)"
+
+[[globals]]
+name = "dhMaterialId"
+type = "int"
+stage = "vertex"
+init = "int(irisMaterial)"
+[[globals]]
+name = "sb_dhBlockPos"
+varying = true
+type = "vec3"
+stage = "vertex"
+init = "vec3(vPosition)"
+[[globals]]
+name = "sb_dhNormalIndex"
+varying = true
+type = "uint"
+stage = "vertex"
+init = "irisNormal"
+[[globals]]
+name = "sb_dhTextureTile"
+varying = true
+type = "uint"
+stage = "vertex"
+init = "textureTile"
+
+[code]
+vertex = """
+vec3 sb_dhCameraRelativePosition() {
+    vec3 p = vec3(vPosition) + (sb_hDhUnique.uModelOffset - sb_hDhShared.uCameraPos);
+    uint micro = (meta & 0xFF00u) >> 8u;
+    float mx = (micro & 1u) != 0u ? sb_hDhShared.uMircoOffset : 0.0;
+    mx = (micro & 2u) != 0u ? -mx : mx;
+    float mz = (micro & 16u) != 0u ? sb_hDhShared.uMircoOffset : 0.0;
+    mz = (micro & 32u) != 0u ? -mz : mz;
+    p.x += mx;
+    p.z += mz;
+    if (sb_hDhShared.uEarthRadius < -1.0 || sb_hDhShared.uEarthRadius > 1.0) {
+        float localRadius = sb_hDhShared.uEarthRadius + float(vPosition.y) + sb_hDhShared.uWorldYOffset;
+        float phi = length(p.xz) / localRadius;
+        p.y += (cos(phi) - 1.0) * localRadius;
+        p.xz = p.xz * sin(phi) / max(phi, 1e-6);
+    }
+    return p;
+}
+vec3 sb_dhNormal(uint i) {
+    if (i == 0u) return vec3(0.0, -1.0, 0.0);
+    if (i == 1u) return vec3(0.0, 1.0, 0.0);
+    if (i == 2u) return vec3(0.0, 0.0, -1.0);
+    if (i == 3u) return vec3(0.0, 0.0, 1.0);
+    if (i == 4u) return vec3(-1.0, 0.0, 0.0);
+    return vec3(1.0, 0.0, 0.0);
+}
+vec4 sb_dhTangent(uint i) {
+    if (i <= 1u) return vec4(1.0, 0.0, 0.0, 1.0);
+    if (i <= 3u) return vec4(1.0, 0.0, 0.0, 1.0);
+    return vec4(0.0, 0.0, 1.0, 1.0);
+}
+// Maps a DH_BLOCK_* material to a representative block id from the pack's
+// block.properties (used for mc_Entity in synthesized DH programs). The caller
+// supplies SB_DH_BLOCK_ID_<n> through TransformOptions::profile_constants; they are
+// emitted as `const int` declarations before this code (default -1).
+int sb_dhPackBlockId(uint m) {
+    switch (int(m)) {
+        case 1: return SB_DH_BLOCK_ID_1;
+        case 2: return SB_DH_BLOCK_ID_2;
+        case 3: return SB_DH_BLOCK_ID_3;
+        case 4: return SB_DH_BLOCK_ID_4;
+        case 5: return SB_DH_BLOCK_ID_5;
+        case 6: return SB_DH_BLOCK_ID_6;
+        case 7: return SB_DH_BLOCK_ID_7;
+        case 8: return SB_DH_BLOCK_ID_8;
+        case 9: return SB_DH_BLOCK_ID_9;
+        case 10: return SB_DH_BLOCK_ID_10;
+        case 11: return SB_DH_BLOCK_ID_11;
+        case 12: return SB_DH_BLOCK_ID_12;
+        case 13: return SB_DH_BLOCK_ID_13;
+        case 15: return SB_DH_BLOCK_ID_15;
+        default: return -1;
+    }
+}
+"""
+fragment = """
+// Iris-compatible DH helpers available to dh_* fragment shaders. They read the
+// varyings sb_dhBlockPos / sb_dhNormalIndex / sb_dhTextureTile (forwarded from
+// the vertex globals of the same name) and the host sampler uBlockAtlas, which
+// pack code may also reference as dhBlockAtlas.
+bool dh_hasTexture() { return sb_dhTextureTile != 0u; }
+vec2 dh_blockFaceUv() {
+    vec3 pos = fract(sb_dhBlockPos);
+    switch (sb_dhNormalIndex) {
+        case 0u: return vec2(pos.x, 1.0 - pos.z);
+        case 1u: return vec2(pos.x, pos.z);
+        case 2u: return vec2(1.0 - pos.x, 1.0 - pos.y);
+        case 3u: return vec2(pos.x, 1.0 - pos.y);
+        case 4u: return vec2(pos.z, 1.0 - pos.y);
+        default: return vec2(1.0 - pos.z, 1.0 - pos.y);
+    }
+}
+vec4 dh_sampleTexture() {
+    ivec2 atlasSize = textureSize(uBlockAtlas, 0);
+    vec2 tileOrigin = vec2(float(sb_dhTextureTile % 256u), float(sb_dhTextureTile / 256u)) * 16.0;
+    vec2 uv = (tileOrigin + dh_blockFaceUv() * 16.0) / vec2(atlasSize);
+    return texture(uBlockAtlas, uv);
+}
+"""

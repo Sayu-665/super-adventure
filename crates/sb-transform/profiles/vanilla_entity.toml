@@ -1,0 +1,77 @@
+name = "vanilla_entity"
+description = "Minecraft 26.3 ENTITY format (entities, block entities, hand/items, armor glint): Position, Color, UV0, UV1 (overlay), UV2 (lightmap), Normal with DynamicTransforms. Entity/block-entity/item ids come from sb_Draw (entityId, blockEntityId, currentRenderedItemId)."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "UV0"
+type = "vec2"
+location = 2
+[[inputs]]
+name = "UV1"
+type = "ivec2"
+location = 3
+[[inputs]]
+name = "UV2"
+type = "ivec2"
+location = 4
+[[inputs]]
+name = "Normal"
+type = "vec3"
+location = 5
+
+[[blocks]]
+name = "DynamicTransforms"
+instance = "sb_hDynamic"
+members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset;"
+
+[[samplers]]
+name = "Sampler0"
+type = "sampler2D"
+provides = ["gtexture"]
+[[samplers]]
+name = "Sampler1"
+type = "sampler2D"
+provides = ["iris_overlay"]
+[[samplers]]
+name = "Sampler2"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
+color = "Color * sb_hDynamic.ColorModulator"
+uv0 = "vec4(UV0, 0.0, 1.0)"
+lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
+normal = "Normal"
+overlay = "UV1"
+entity = "vec4(float(entityId), 0.0, 0.0, 0.0)"
+mid_tex_coord = "vec4(UV0, 0.0, 1.0)"
+model_view = "sb_hDynamic.ModelViewMat"
+projection = "projectionMatrix"
+texture_matrix = "sb_hDynamic.TextureMat"
+chunk_offset = "sb_hDynamic.ModelOffset"
+
+# Iris EntityPatcher semantics: the hurt/creeper flash comes from the overlay texture.
+[[globals]]
+name = "entityColor"
+type = "vec4"
+stage = "vertex"
+varying = true
+init = "sb_entityOverlayColor()"
+
+[code]
+vertex = """
+vec4 sb_entityOverlayColor() {
+    vec4 o = texelFetch(Sampler1, UV1, 0);
+    vec4 c = vec4(o.rgb, 1.0 - o.a);
+    c.rgb *= float(c.a != 0.0);
+    return c;
+}
+"""

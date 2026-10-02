@@ -1,0 +1,88 @@
+name = "vanilla_terrain"
+description = "Minecraft 26.3 terrain (MultiDrawIndirect path: BLOCK format + CHUNK_DATA_INSTANCED) extended with the Iris attributes the host appends to the BLOCK format (sb_Normal, sb_Entity, sb_MidTexCoord, sb_Tangent, sb_MidBlock). Positions are chunk-section relative; gl_Vertex is camera-relative like OptiFine/Iris."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "UV0"
+type = "vec2"
+location = 2
+[[inputs]]
+name = "UV2"
+type = "ivec2"
+location = 3
+[[inputs]]
+name = "ChunkPosition"
+type = "ivec3"
+location = 4
+instanced = true
+[[inputs]]
+name = "ChunkVisibility"
+type = "float"
+location = 5
+instanced = true
+[[inputs]]
+name = "sb_Normal"
+type = "vec3"
+location = 6
+[[inputs]]
+name = "sb_Entity"
+type = "ivec2"
+location = 7
+[[inputs]]
+name = "sb_MidTexCoord"
+type = "vec2"
+location = 8
+[[inputs]]
+name = "sb_Tangent"
+type = "vec4"
+location = 9
+[[inputs]]
+name = "sb_MidBlock"
+type = "ivec4"
+location = 10
+
+[[blocks]]
+name = "Globals"
+instance = "sb_hGlobals"
+members = "ivec3 CameraBlockPos; float GlintAlpha; vec3 CameraOffset; float GameTime; vec2 ScreenSize; int MenuBlurRadius; int UseRgss;"
+[[blocks]]
+name = "TerrainUniform"
+instance = "sb_hTerrain"
+members = "mat4 ModelViewMat; ivec2 TextureSize;"
+
+[[samplers]]
+name = "Sampler0"
+type = "sampler2D"
+provides = ["gtexture"]
+[[samplers]]
+name = "Sampler2"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(Position + vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset, 1.0)"
+color = "Color"
+uv0 = "vec4(UV0, 0.0, 1.0)"
+lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
+normal = "sb_Normal"
+entity = "vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 0.0)"
+mid_tex_coord = "vec4(sb_MidTexCoord, 0.0, 1.0)"
+tangent = "sb_Tangent"
+mid_block = "vec4(sb_MidBlock)"
+model_view = "sb_hTerrain.ModelViewMat"
+projection = "gbufferProjection"
+texture_matrix = "mat4(1.0)"
+chunk_offset = "(vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset)"
+
+[[globals]]
+name = "mc_chunkFade"
+type = "float"
+stage = "vertex"
+init = "ChunkVisibility"

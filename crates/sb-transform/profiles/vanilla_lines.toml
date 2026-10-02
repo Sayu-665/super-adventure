@@ -1,0 +1,32 @@
+name = "vanilla_lines"
+description = "Minecraft 26.3 lines (block outline, leash, debug): Position, Color, Normal, LineWidth with DynamicTransforms. Line expansion to quads is done by the host's vertex format/geometry; the pack sees plain line vertices."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "Normal"
+type = "vec3"
+location = 2
+[[inputs]]
+name = "LineWidth"
+type = "float"
+location = 3
+
+[[blocks]]
+name = "DynamicTransforms"
+instance = "sb_hDynamic"
+members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset;"
+
+[semantics]
+position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
+color = "Color * sb_hDynamic.ColorModulator"
+normal = "Normal"
+model_view = "sb_hDynamic.ModelViewMat"
+projection = "projectionMatrix"
+chunk_offset = "sb_hDynamic.ModelOffset"
