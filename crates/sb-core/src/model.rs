@@ -208,6 +208,18 @@ pub struct DeviceCaps {
     pub depth_clip_control: bool,
     pub max_push_constants_size: u32,
     pub max_color_attachments: u32,
+    /// The host can create depth-comparison samplers. When false (Mojang's renderpearl
+    /// GpuSampler on 26.3), `sampler2DShadow` lookups are emulated in the shader.
+    #[serde(default = "default_true")]
+    pub comparison_samplers: bool,
+    /// Maximum descriptors (samplers + buffers) one program may use, if the host has a hard
+    /// limit (Mojang 26.3 push descriptors: 32). Programs above it get a diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_descriptors_per_program: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DeviceCaps {
@@ -220,6 +232,8 @@ impl Default for DeviceCaps {
             depth_clip_control: false,
             max_push_constants_size: 128,
             max_color_attachments: 8,
+            comparison_samplers: true,
+            max_descriptors_per_program: None,
         }
     }
 }
