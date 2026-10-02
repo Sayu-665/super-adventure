@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "shaderbridge",
+  "version": "${version}",
+  "name": "ShaderBridge",
+  "description": "Runs OptiFine/Iris shader packs on Minecraft's Vulkan backend, including Distant Horizons LODs, using a native Rust shader compiler.",
+  "authors": ["ShaderBridge contributors"],
+  "license": "MIT OR Apache-2.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.shaderbridge.ShaderBridgeClient"]
+  },
+  "mixins": ["shaderbridge.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "distanthorizons": ">=3.3.0"
+  },
+  "breaks": {
+    "iris": "*"
+  }
+}
