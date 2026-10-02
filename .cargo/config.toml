@@ -1,0 +1,6 @@
+# Build the embedded glslang (glslang-sys, via the cc crate) with assertions compiled out.
+# glslang's internal assert() would otherwise abort() the host process (Minecraft) on an
+# internal error instead of reporting a compile failure.
+[env]
+CXXFLAGS = "-DNDEBUG"
+CFLAGS = "-DNDEBUG"
