@@ -1,5 +1,6 @@
 [package]
 name = "sb-compile"
+description = "ShaderBridge: Vulkan GLSL -> SPIR-V via glslang, SPIR-V reflection via spirq, spirv-val validation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,3 +8,15 @@ license.workspace = true
 
 [dependencies]
 sb-core.workspace = true
+serde.workspace = true
+# `glslang` owns the process-wide glslang initialisation (`Compiler::acquire`);
+# `glslang-sys` is used directly because the safe wrapper cannot set shader
+# options before parsing, cannot run `mapIO`, and panics on some inputs.
+glslang.workspace = true
+glslang-sys = "0.8.1"
+spirq.workspace = true
+
+[dev-dependencies]
+rayon.workspace = true
+pretty_assertions.workspace = true
+serde_json.workspace = true

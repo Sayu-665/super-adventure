@@ -1,5 +1,6 @@
 [package]
 name = "sb-transform"
+description = "ShaderBridge: OptiFine/Iris compatibility GLSL -> strict Vulkan GLSL (analysis, draw profiles, rewriting, interface linking)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,3 +8,15 @@ license.workspace = true
 
 [dependencies]
 sb-core.workspace = true
+sb-preprocess.workspace = true
+sb-uniforms.workspace = true
+glsl-lang.workspace = true
+toml.workspace = true
+serde.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+sb-compile.workspace = true
+sb-pack.workspace = true
+rayon.workspace = true
+pretty_assertions.workspace = true
