@@ -1,0 +1,9 @@
+[package]
+name = "sb-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sb-core.workspace = true

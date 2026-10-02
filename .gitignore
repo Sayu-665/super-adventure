@@ -1,0 +1,7 @@
+/target
+/java/build
+/java/.gradle
+/java/run
+/out
+*.spv
+.idea/
