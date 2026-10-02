@@ -52,13 +52,27 @@ pub fn line_spans(text: &str) -> Vec<LineSpan<'_>> {
     while i < bytes.len() {
         match bytes[i] {
             b'\n' => {
-                out.push(LineSpan { text: &text[start..i], start, end: i, terminator_len: 1 });
+                out.push(LineSpan {
+                    text: &text[start..i],
+                    start,
+                    end: i,
+                    terminator_len: 1,
+                });
                 i += 1;
                 start = i;
             }
             b'\r' => {
-                let len = if bytes.get(i + 1) == Some(&b'\n') { 2 } else { 1 };
-                out.push(LineSpan { text: &text[start..i], start, end: i, terminator_len: len });
+                let len = if bytes.get(i + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                out.push(LineSpan {
+                    text: &text[start..i],
+                    start,
+                    end: i,
+                    terminator_len: len,
+                });
                 i += len;
                 start = i;
             }
@@ -66,7 +80,12 @@ pub fn line_spans(text: &str) -> Vec<LineSpan<'_>> {
         }
     }
     if start < bytes.len() {
-        out.push(LineSpan { text: &text[start..], start, end: bytes.len(), terminator_len: 0 });
+        out.push(LineSpan {
+            text: &text[start..],
+            start,
+            end: bytes.len(),
+            terminator_len: 0,
+        });
     }
     out
 }

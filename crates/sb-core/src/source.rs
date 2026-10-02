@@ -93,6 +93,35 @@ pub fn normalize_pack_path(base_file: &str, target: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Like [`normalize_pack_path`], but `..` segments that would climb above the shaders
+/// root are ignored instead of failing. This matches Iris's `AbsolutePackPath`, which
+/// packs rely on (e.g. `#include "../../lib/x.glsl"` from a shallow file still resolves).
+/// Returns `None` only if the result is empty.
+pub fn normalize_pack_path_clamped(base_file: &str, target: &str) -> Option<String> {
+    let target = target.replace('\\', "/");
+    let mut parts: Vec<String> = Vec::new();
+    if !target.starts_with('/') {
+        let base = base_file.replace('\\', "/");
+        if let Some(i) = base.rfind('/') {
+            for seg in base[..i].split('/') {
+                if !seg.is_empty() && seg != "." {
+                    parts.push(seg.to_string());
+                }
+            }
+        }
+    }
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s.to_string()),
+        }
+    }
+    if parts.is_empty() { None } else { Some(parts.join("/")) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +135,14 @@ mod tests {
         assert_eq!(normalize_pack_path("a/b/c.glsl", "./d/../e.glsl").as_deref(), Some("a/b/e.glsl"));
         assert_eq!(normalize_pack_path("a\\b.glsl", "c\\d.glsl").as_deref(), Some("a/c/d.glsl"));
         assert_eq!(normalize_pack_path("x.fsh", ".."), None);
+    }
+
+    #[test]
+    fn normalize_clamped() {
+        assert_eq!(normalize_pack_path_clamped("a.fsh", "../../lib/x.glsl").as_deref(), Some("lib/x.glsl"));
+        assert_eq!(normalize_pack_path_clamped("world0/a.fsh", "../lib/x.glsl").as_deref(), Some("lib/x.glsl"));
+        assert_eq!(normalize_pack_path_clamped("a/b.glsl", "c.glsl").as_deref(), Some("a/c.glsl"));
+        assert_eq!(normalize_pack_path_clamped("x.fsh", ".."), None);
     }
 
     #[test]

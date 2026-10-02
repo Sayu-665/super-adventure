@@ -21,6 +21,11 @@ macro_rules! formats {
         #[allow(non_camel_case_types)]
         pub enum TextureFormat { $( #[serde(rename = $name)] $variant, )* }
 
+        impl Default for TextureFormat {
+            /// `RGBA` (RGBA8), the OptiFine/Iris default render-target format.
+            fn default() -> Self { TextureFormat::RGBA }
+        }
+
         impl TextureFormat {
             pub const ALL: &'static [TextureFormat] = &[ $( TextureFormat::$variant, )* ];
 
@@ -133,12 +138,6 @@ impl TextureFormat {
     /// True for integer formats (sampled with isampler*/usampler*).
     pub fn is_integer(self) -> bool {
         matches!(self.component_kind(), ComponentKind::Uint | ComponentKind::Sint)
-    }
-}
-
-impl Default for TextureFormat {
-    fn default() -> Self {
-        TextureFormat::RGBA
     }
 }
 

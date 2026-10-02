@@ -1,5 +1,6 @@
 [package]
 name = "sb-uniforms"
+description = "ShaderBridge builtin-uniform registry, std140 pack layout and resource binding table"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,3 +8,11 @@ license.workspace = true
 
 [dependencies]
 sb-core.workspace = true
+serde.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
+regex = "1"

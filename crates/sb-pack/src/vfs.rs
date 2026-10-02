@@ -12,17 +12,23 @@
 
 use crate::error::PackError;
 use sb_core::normalize_pack_path;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
+use std::ops::Bound;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Largest single file a [`Vfs`] will read (guards against zip bombs / huge files).
 pub const MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Largest buffer pre-allocated from a size declared inside a zip archive.
+const MAX_PREALLOCATION: u64 = 16 * 1024 * 1024;
+
 /// A use of the case-insensitive fallback: `requested` was missing, `actual` was used.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct CaseFallback {
     pub requested: String,
     pub actual: String,
@@ -46,7 +52,9 @@ pub trait Vfs: Send + Sync {
         self.read(path).is_some()
     }
 
-    /// Whether `path` is a directory with at least one entry.
+    /// Whether `path` is a directory. The default implementation (and [`MemVfs`])
+    /// only knows directories that contain at least one file; [`DirVfs`] and [`ZipVfs`]
+    /// also report empty directories.
     fn is_dir(&self, path: &str) -> bool {
         !self.list_dir(path).is_empty()
     }
@@ -99,26 +107,78 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Lower-case path -> actual path index used for the case-insensitive fallback.
+/// Lower-case path -> actual path index used for the case-insensitive fallback, plus
+/// the exact spellings of every file and directory.
 #[derive(Debug, Default)]
 struct CaseIndex {
     files: HashMap<String, String>,
     dirs: HashMap<String, String>,
+    exact_files: HashSet<String>,
+    exact_dirs: HashSet<String>,
 }
 
 impl CaseIndex {
     fn build<'a>(files: impl IntoIterator<Item = &'a str>) -> Self {
         let mut index = CaseIndex::default();
         for f in files {
-            index.files.entry(f.to_lowercase()).or_insert_with(|| f.to_string());
+            index
+                .files
+                .entry(f.to_lowercase())
+                .or_insert_with(|| f.to_string());
+            index.exact_files.insert(f.to_string());
             let mut dir = f;
             while let Some((parent, _)) = dir.rsplit_once('/') {
-                index.dirs.entry(parent.to_lowercase()).or_insert_with(|| parent.to_string());
+                if !index.exact_dirs.insert(parent.to_string()) {
+                    // Every ancestor of `parent` is already indexed too.
+                    break;
+                }
+                index
+                    .dirs
+                    .entry(parent.to_lowercase())
+                    .or_insert_with(|| parent.to_string());
                 dir = parent;
             }
         }
         index
     }
+
+    fn add_dir(&mut self, dir: &str) {
+        self.exact_dirs.insert(dir.to_string());
+        self.dirs
+            .entry(dir.to_lowercase())
+            .or_insert_with(|| dir.to_string());
+    }
+
+    /// The differently-cased spelling of `rel` that exists, if `rel` itself does not.
+    fn mismatch<'a>(&'a self, rel: &str, dir: bool) -> Option<&'a str> {
+        let (exact, lower) = if dir {
+            (&self.exact_dirs, &self.dirs)
+        } else {
+            (&self.exact_files, &self.files)
+        };
+        if exact.contains(rel) {
+            return None;
+        }
+        lower
+            .get(&rel.to_lowercase())
+            .map(String::as_str)
+            .filter(|actual| *actual != rel)
+    }
+}
+
+/// Join a cleaned relative path (see [`clean_path`]) onto `root`, refusing segments
+/// that are not plain file names on this platform. On Windows a segment such as `C:`
+/// or `\\?\` would otherwise make [`Path::join`] replace the root entirely.
+fn safe_join(root: &Path, rel: &str) -> Option<PathBuf> {
+    let mut out = root.to_path_buf();
+    for seg in rel.split('/').filter(|s| !s.is_empty()) {
+        let mut components = Path::new(seg).components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(name)), None) => out.push(name),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Shared bookkeeping for fallbacks and warnings.
@@ -130,7 +190,10 @@ struct Journal {
 
 impl Journal {
     fn fallback(&self, requested: &str, actual: &str) {
-        lock(&self.fallbacks).insert(CaseFallback { requested: requested.to_string(), actual: actual.to_string() });
+        lock(&self.fallbacks).insert(CaseFallback {
+            requested: requested.to_string(),
+            actual: actual.to_string(),
+        });
     }
     fn warn(&self, message: String) {
         let mut w = lock(&self.warnings);
@@ -147,8 +210,16 @@ impl Journal {
 }
 
 /// Direct children of `dir` among a sorted set of file paths (dirs get a `/` suffix).
-fn children_of<'a>(files: impl IntoIterator<Item = &'a str>, extra_dirs: impl IntoIterator<Item = &'a str>, dir: &str) -> Vec<String> {
-    let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+fn children_of<'a>(
+    files: impl IntoIterator<Item = &'a str>,
+    extra_dirs: impl IntoIterator<Item = &'a str>,
+    dir: &str,
+) -> Vec<String> {
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
     let mut out = BTreeSet::new();
     let mut take = |p: &str, is_dir: bool| {
         if let Some(rest) = p.strip_prefix(&prefix) {
@@ -192,7 +263,11 @@ pub struct DirVfs {
 impl DirVfs {
     /// Use `root` as the `shaders/` root directly.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into(), index: OnceLock::new(), journal: Journal::default() }
+        Self {
+            root: root.into(),
+            index: OnceLock::new(),
+            journal: Journal::default(),
+        }
     }
 
     /// Open a pack directory: uses `<dir>/shaders` if it exists, else `dir` itself if
@@ -204,10 +279,15 @@ impl DirVfs {
                 if !dir.is_dir() {
                     return Err(PackError::Io {
                         path: dir.to_path_buf(),
-                        source: std::io::Error::new(std::io::ErrorKind::NotFound, "not a directory"),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "not a directory",
+                        ),
                     });
                 }
-                Err(PackError::NotAShaderPack { path: dir.to_path_buf() })
+                Err(PackError::NotAShaderPack {
+                    path: dir.to_path_buf(),
+                })
             }
         }
     }
@@ -227,14 +307,16 @@ impl DirVfs {
     /// A directory looks like a shaders root if it directly contains a program file
     /// (`.vsh`, `.fsh`, `.gsh`, `.csh`, `.tcs`, `.tes`) or `shaders.properties`.
     pub fn looks_like_shaders_root(dir: &Path) -> bool {
-        let Ok(entries) = fs::read_dir(dir) else { return false };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
         entries.flatten().any(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
             name == "shaders.properties"
-                || name
-                    .rsplit_once('.')
-                    .is_some_and(|(_, ext)| sb_core::ShaderStage::from_pack_extension(ext).is_some())
+                || name.rsplit_once('.').is_some_and(|(_, ext)| {
+                    sb_core::ShaderStage::from_pack_extension(ext).is_some()
+                })
         })
     }
 
@@ -250,12 +332,26 @@ impl DirVfs {
         })
     }
 
+    /// Record a case mismatch for a path the OS resolved although its spelling differs
+    /// from the file on disk (case-insensitive file systems: Windows, macOS). The pack
+    /// would fail on case-sensitive systems, so this is reported exactly like the
+    /// explicit fallback on Linux.
+    fn note_case(&self, rel: &str, dir: bool) {
+        if let Some(actual) = self.index().mismatch(rel, dir) {
+            self.journal.fallback(rel, actual);
+        }
+    }
+
     fn read_exact(&self, rel: &str) -> Result<Option<Vec<u8>>, ()> {
-        let full = self.root.join(rel);
+        let Some(full) = safe_join(&self.root, rel) else {
+            return Ok(None);
+        };
         match fs::metadata(&full) {
             Ok(m) if m.is_file() => {
                 if m.len() > MAX_FILE_SIZE {
-                    self.journal.warn(format!("{rel}: file larger than {MAX_FILE_SIZE} bytes, not read"));
+                    self.journal.warn(format!(
+                        "{rel}: file larger than {MAX_FILE_SIZE} bytes, not read"
+                    ));
                     return Err(());
                 }
                 match fs::read(&full) {
@@ -278,7 +374,10 @@ impl Vfs for DirVfs {
             return None;
         }
         match self.read_exact(&rel) {
-            Ok(Some(b)) => return Some(b),
+            Ok(Some(b)) => {
+                self.note_case(&rel, false);
+                return Some(b);
+            }
             Err(()) => return None,
             Ok(None) => {}
         }
@@ -292,8 +391,14 @@ impl Vfs for DirVfs {
     }
 
     fn list_dir(&self, dir: &str) -> Vec<String> {
-        let Some(mut rel) = clean_path(dir) else { return Vec::new() };
-        if !self.root.join(&rel).is_dir() {
+        let Some(mut rel) = clean_path(dir) else {
+            return Vec::new();
+        };
+        if safe_join(&self.root, &rel).is_some_and(|p| p.is_dir()) {
+            if !rel.is_empty() {
+                self.note_case(&rel, true);
+            }
+        } else {
             match self.index().dirs.get(&rel.to_lowercase()) {
                 Some(actual) => {
                     self.journal.fallback(&rel, actual);
@@ -302,12 +407,17 @@ impl Vfs for DirVfs {
                 None => return Vec::new(),
             }
         }
-        let full = self.root.join(&rel);
-        let Ok(entries) = fs::read_dir(&full) else { return Vec::new() };
+        let Some(full) = safe_join(&self.root, &rel) else {
+            return Vec::new();
+        };
+        let Ok(entries) = fs::read_dir(&full) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for e in entries.flatten() {
             let Ok(name) = e.file_name().into_string() else {
-                self.journal.warn(format!("{rel}: skipping entry with a non-UTF-8 name"));
+                self.journal
+                    .warn(format!("{rel}: skipping entry with a non-UTF-8 name"));
                 continue;
             };
             // Follow symlinks when classifying.
@@ -320,10 +430,14 @@ impl Vfs for DirVfs {
 
     fn all_files(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let walker = walkdir::WalkDir::new(&self.root).follow_links(true).into_iter().filter_entry(|e| {
-            // Skip hidden directories such as `.git` (never part of a pack's sources).
-            e.depth() == 0 || !(e.file_type().is_dir() && e.file_name().to_string_lossy().starts_with('.'))
-        });
+        let walker = walkdir::WalkDir::new(&self.root)
+            .follow_links(true)
+            .into_iter()
+            .filter_entry(|e| {
+                // Skip hidden directories such as `.git` (never part of a pack's sources).
+                e.depth() == 0
+                    || !(e.file_type().is_dir() && e.file_name().to_string_lossy().starts_with('.'))
+            });
         for entry in walker {
             let entry = match entry {
                 Ok(e) => e,
@@ -335,7 +449,9 @@ impl Vfs for DirVfs {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let Ok(rel) = entry.path().strip_prefix(&self.root) else { continue };
+            let Ok(rel) = entry.path().strip_prefix(&self.root) else {
+                continue;
+            };
             let mut parts = Vec::new();
             let mut ok = true;
             for c in rel.components() {
@@ -350,7 +466,10 @@ impl Vfs for DirVfs {
             if ok && !parts.is_empty() {
                 out.push(parts.join("/"));
             } else if !ok {
-                self.journal.warn(format!("skipping file with a non-UTF-8 path: {}", rel.display()));
+                self.journal.warn(format!(
+                    "skipping file with a non-UTF-8 path: {}",
+                    rel.display()
+                ));
             }
         }
         out.sort();
@@ -358,19 +477,24 @@ impl Vfs for DirVfs {
     }
 
     fn exists(&self, path: &str) -> bool {
-        let Some(rel) = clean_path(path) else { return false };
+        let Some(rel) = clean_path(path) else {
+            return false;
+        };
         if rel.is_empty() {
             return false;
         }
-        if self.root.join(&rel).is_file() {
+        if safe_join(&self.root, &rel).is_some_and(|p| p.is_file()) {
             return true;
         }
         self.index().files.contains_key(&rel.to_lowercase())
     }
 
     fn is_dir(&self, path: &str) -> bool {
-        let Some(rel) = clean_path(path) else { return false };
-        self.root.join(&rel).is_dir() || self.index().dirs.contains_key(&rel.to_lowercase())
+        let Some(rel) = clean_path(path) else {
+            return false;
+        };
+        safe_join(&self.root, &rel).is_some_and(|p| p.is_dir())
+            || self.index().dirs.contains_key(&rel.to_lowercase())
     }
 
     fn case_fallbacks(&self) -> Vec<CaseFallback> {
@@ -411,14 +535,21 @@ pub struct ZipVfs {
 
 impl std::fmt::Debug for ZipVfs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ZipVfs").field("label", &self.label).field("prefix", &self.prefix).field("files", &self.files.len()).finish()
+        f.debug_struct("ZipVfs")
+            .field("label", &self.label)
+            .field("prefix", &self.prefix)
+            .field("files", &self.files.len())
+            .finish()
     }
 }
 
 impl ZipVfs {
     /// Open a zip file from disk.
     pub fn open(path: &Path) -> Result<Self, PackError> {
-        let file = fs::File::open(path).map_err(|source| PackError::Io { path: path.to_path_buf(), source })?;
+        let file = fs::File::open(path).map_err(|source| PackError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Self::from_reader(Box::new(std::io::BufReader::new(file)), path)
     }
 
@@ -429,23 +560,33 @@ impl ZipVfs {
 
     /// Open a zip archive from any seekable reader; `label` is used in messages.
     pub fn from_reader(reader: Box<dyn ReadSeek>, label: &Path) -> Result<Self, PackError> {
-        let archive = zip::ZipArchive::new(reader)
-            .map_err(|e| PackError::Zip { path: label.to_path_buf(), message: e.to_string() })?;
+        let archive = zip::ZipArchive::new(reader).map_err(|e| PackError::Zip {
+            path: label.to_path_buf(),
+            message: e.to_string(),
+        })?;
         let mut names: Vec<(String, usize, bool)> = Vec::with_capacity(archive.len());
         for i in 0..archive.len() {
-            let Some(name) = archive.name_for_index(i) else { continue };
+            let Some(name) = archive.name_for_index(i) else {
+                continue;
+            };
             let is_dir = name.ends_with('/') || name.ends_with('\\');
-            let Some(clean) = clean_path(name) else { continue };
+            let Some(clean) = clean_path(name) else {
+                continue;
+            };
             if clean.is_empty() {
                 continue;
             }
             names.push((clean, i, is_dir));
         }
-        let prefix = Self::locate_root(&names).ok_or_else(|| PackError::NotAShaderPack { path: label.to_path_buf() })?;
+        let prefix = Self::locate_root(&names).ok_or_else(|| PackError::NotAShaderPack {
+            path: label.to_path_buf(),
+        })?;
         let mut files = BTreeMap::new();
         let mut dirs = BTreeSet::new();
         for (name, i, is_dir) in &names {
-            let Some(rel) = name.strip_prefix(&prefix) else { continue };
+            let Some(rel) = name.strip_prefix(&prefix) else {
+                continue;
+            };
             if rel.is_empty() {
                 continue;
             }
@@ -457,7 +598,7 @@ impl ZipVfs {
         }
         let mut index = CaseIndex::build(files.keys().map(String::as_str));
         for d in &dirs {
-            index.dirs.entry(d.to_lowercase()).or_insert_with(|| d.clone());
+            index.add_dir(d);
         }
         Ok(Self {
             label: label.display().to_string(),
@@ -473,13 +614,19 @@ impl ZipVfs {
     /// Locate the shaders root: `shaders/` at the archive root, else a single
     /// `<Name>/shaders/` (the first in sorted order if several exist).
     fn locate_root(names: &[(String, usize, bool)]) -> Option<String> {
-        if names.iter().any(|(n, _, _)| n == "shaders" || n.starts_with("shaders/")) {
+        if names
+            .iter()
+            .any(|(n, _, _)| n == "shaders" || n.starts_with("shaders/"))
+        {
             return Some("shaders/".to_string());
         }
         let mut nested = BTreeSet::new();
         for (n, _, _) in names {
             let mut parts = n.splitn(3, '/');
-            if let (Some(first), Some("shaders")) = (parts.next(), parts.next()) {
+            if let (Some(first), Some("shaders")) = (parts.next(), parts.next())
+                && first != "__MACOSX"
+            {
+                // `__MACOSX/` holds macOS resource-fork copies, never the real pack.
                 nested.insert(format!("{first}/shaders/"));
             }
         }
@@ -501,14 +648,21 @@ impl ZipVfs {
             }
         };
         if file.size() > MAX_FILE_SIZE {
-            self.journal.warn(format!("{rel}: entry larger than {MAX_FILE_SIZE} bytes, not read"));
+            self.journal.warn(format!(
+                "{rel}: entry larger than {MAX_FILE_SIZE} bytes, not read"
+            ));
             return None;
         }
-        let mut buf = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
+        // The declared size comes from the archive and may be forged: only use it as a
+        // bounded capacity hint.
+        let hint = file.size().min(MAX_PREALLOCATION);
+        let mut buf = Vec::with_capacity(usize::try_from(hint).unwrap_or(0));
         match file.by_ref().take(MAX_FILE_SIZE + 1).read_to_end(&mut buf) {
             Ok(_) if buf.len() as u64 <= MAX_FILE_SIZE => Some(buf),
             Ok(_) => {
-                self.journal.warn(format!("{rel}: entry larger than {MAX_FILE_SIZE} bytes, not read"));
+                self.journal.warn(format!(
+                    "{rel}: entry larger than {MAX_FILE_SIZE} bytes, not read"
+                ));
                 None
             }
             Err(e) => {
@@ -519,7 +673,7 @@ impl ZipVfs {
     }
 
     fn resolve_dir(&self, rel: &str) -> Option<String> {
-        if rel.is_empty() || self.dirs.contains(rel) || self.files.keys().any(|f| f.starts_with(&format!("{rel}/"))) {
+        if rel.is_empty() || self.index.exact_dirs.contains(rel) {
             return Some(rel.to_string());
         }
         let actual = self.index.dirs.get(&rel.to_lowercase())?;
@@ -542,9 +696,17 @@ impl Vfs for ZipVfs {
     }
 
     fn list_dir(&self, dir: &str) -> Vec<String> {
-        let Some(rel) = clean_path(dir) else { return Vec::new() };
-        let Some(actual) = self.resolve_dir(&rel) else { return Vec::new() };
-        children_of(self.files.keys().map(String::as_str), self.dirs.iter().map(String::as_str), &actual)
+        let Some(rel) = clean_path(dir) else {
+            return Vec::new();
+        };
+        let Some(actual) = self.resolve_dir(&rel) else {
+            return Vec::new();
+        };
+        children_of(
+            self.files.keys().map(String::as_str),
+            self.dirs.iter().map(String::as_str),
+            &actual,
+        )
     }
 
     fn all_files(&self) -> Vec<String> {
@@ -552,13 +714,15 @@ impl Vfs for ZipVfs {
     }
 
     fn exists(&self, path: &str) -> bool {
-        clean_path(path).is_some_and(|rel| self.files.contains_key(&rel) || self.index.files.contains_key(&rel.to_lowercase()))
+        clean_path(path).is_some_and(|rel| {
+            self.files.contains_key(&rel) || self.index.files.contains_key(&rel.to_lowercase())
+        })
     }
 
     fn is_dir(&self, path: &str) -> bool {
         clean_path(path).is_some_and(|rel| {
-            self.dirs.contains(&rel)
-                || self.files.keys().any(|f| f.starts_with(&format!("{rel}/")))
+            rel.is_empty()
+                || self.index.exact_dirs.contains(&rel)
                 || self.index.dirs.contains_key(&rel.to_lowercase())
         })
     }
@@ -612,12 +776,24 @@ impl MemVfs {
 
     fn find_ci(&self, rel: &str) -> Option<&str> {
         let lower = rel.to_lowercase();
-        self.files.keys().find(|k| k.to_lowercase() == lower).map(String::as_str)
+        self.files
+            .keys()
+            .find(|k| k.to_lowercase() == lower)
+            .map(String::as_str)
     }
 
     fn find_dir_ci(&self, rel: &str) -> Option<String> {
-        let lower = format!("{}/", rel.to_lowercase());
-        self.files.keys().find(|k| k.to_lowercase().starts_with(&lower)).map(|k| k[..rel.len()].to_string())
+        // Compare segment-wise: lower-casing may change byte lengths.
+        let wanted: Vec<String> = rel.split('/').map(str::to_lowercase).collect();
+        self.files.keys().find_map(|k| {
+            let segs: Vec<&str> = k.split('/').collect();
+            (segs.len() > wanted.len()
+                && segs
+                    .iter()
+                    .zip(&wanted)
+                    .all(|(s, w)| s.to_lowercase() == *w))
+            .then(|| segs[..wanted.len()].join("/"))
+        })
     }
 }
 
@@ -633,9 +809,16 @@ impl Vfs for MemVfs {
     }
 
     fn list_dir(&self, dir: &str) -> Vec<String> {
-        let Some(rel) = clean_path(dir) else { return Vec::new() };
+        let Some(rel) = clean_path(dir) else {
+            return Vec::new();
+        };
         let prefix = format!("{rel}/");
-        let actual = if rel.is_empty() || self.files.keys().any(|k| k.starts_with(&prefix)) {
+        let has_children = self
+            .files
+            .range::<str, _>((Bound::Included(prefix.as_str()), Bound::Unbounded))
+            .next()
+            .is_some_and(|(k, _)| k.starts_with(&prefix));
+        let actual = if rel.is_empty() || has_children {
             rel
         } else {
             match self.find_dir_ci(&rel) {
@@ -646,7 +829,11 @@ impl Vfs for MemVfs {
                 None => return Vec::new(),
             }
         };
-        children_of(self.files.keys().map(String::as_str), std::iter::empty(), &actual)
+        children_of(
+            self.files.keys().map(String::as_str),
+            std::iter::empty(),
+            &actual,
+        )
     }
 
     fn all_files(&self) -> Vec<String> {
@@ -654,7 +841,8 @@ impl Vfs for MemVfs {
     }
 
     fn exists(&self, path: &str) -> bool {
-        clean_path(path).is_some_and(|rel| self.files.contains_key(&rel) || self.find_ci(&rel).is_some())
+        clean_path(path)
+            .is_some_and(|rel| self.files.contains_key(&rel) || self.find_ci(&rel).is_some())
     }
 
     fn case_fallbacks(&self) -> Vec<CaseFallback> {
@@ -674,7 +862,10 @@ mod tests {
     fn clean_path_normalizes() {
         assert_eq!(clean_path("/lib/a.glsl").as_deref(), Some("lib/a.glsl"));
         assert_eq!(clean_path("lib\\a.glsl").as_deref(), Some("lib/a.glsl"));
-        assert_eq!(clean_path("./lib/./x/../a.glsl").as_deref(), Some("lib/a.glsl"));
+        assert_eq!(
+            clean_path("./lib/./x/../a.glsl").as_deref(),
+            Some("lib/a.glsl")
+        );
         assert_eq!(clean_path("").as_deref(), Some(""));
         assert_eq!(clean_path("/").as_deref(), Some(""));
         assert_eq!(clean_path("a/..").as_deref(), Some(""));
@@ -684,23 +875,85 @@ mod tests {
     }
 
     #[test]
+    fn case_index_reports_only_real_mismatches() {
+        let mut index = CaseIndex::build(["lib/common.glsl", "A.glsl", "a.glsl", "x/y/z.glsl"]);
+        index.add_dir("empty");
+        assert_eq!(
+            index.mismatch("lib/Common.glsl", false),
+            Some("lib/common.glsl")
+        );
+        assert_eq!(index.mismatch("lib/common.glsl", false), None);
+        // Two files that differ only in case are both exact.
+        assert_eq!(index.mismatch("a.glsl", false), None);
+        assert_eq!(index.mismatch("A.glsl", false), None);
+        assert_eq!(index.mismatch("LIB", true), Some("lib"));
+        assert_eq!(index.mismatch("X/Y", true), Some("x/y"));
+        assert_eq!(index.mismatch("x/y", true), None);
+        assert_eq!(index.mismatch("Empty", true), Some("empty"));
+        assert_eq!(index.mismatch("missing.glsl", false), None);
+    }
+
+    #[test]
+    fn safe_join_keeps_paths_inside_the_root() {
+        let root = Path::new("root");
+        assert_eq!(
+            safe_join(root, "lib/a.glsl"),
+            Some(root.join("lib").join("a.glsl"))
+        );
+        assert_eq!(safe_join(root, ""), Some(root.to_path_buf()));
+        assert_eq!(safe_join(root, ".."), None);
+        if cfg!(windows) {
+            // Drive prefixes would make `Path::join` discard the root.
+            assert_eq!(safe_join(root, "C:/Windows/win.ini"), None);
+            assert_eq!(safe_join(root, "lib/C:x"), None);
+        } else {
+            assert_eq!(safe_join(root, "C:"), Some(root.join("C:")));
+        }
+    }
+
+    #[test]
+    fn zip_and_mem_directory_lookups() {
+        let vfs = MemVfs::new()
+            .with("lib/a.glsl", "x")
+            .with("lib2/b.glsl", "y")
+            .with("libz.glsl", "z");
+        assert_eq!(vfs.list_dir("lib"), vec!["a.glsl"]);
+        assert_eq!(vfs.list_dir("lib2"), vec!["b.glsl"]);
+        assert!(vfs.list_dir("li").is_empty(), "a prefix is not a directory");
+        assert!(vfs.list_dir("libz.glsl").is_empty());
+    }
+
+    #[test]
     fn children_listing() {
-        let files = ["a.fsh", "lib/x.glsl", "lib/y/z.glsl", "world0/composite.fsh"];
+        let files = [
+            "a.fsh",
+            "lib/x.glsl",
+            "lib/y/z.glsl",
+            "world0/composite.fsh",
+        ];
         assert_eq!(children_of(files, [], ""), vec!["a.fsh", "lib/", "world0/"]);
         assert_eq!(children_of(files, [], "lib"), vec!["x.glsl", "y/"]);
-        assert_eq!(children_of(files, ["empty"], ""), vec!["a.fsh", "empty/", "lib/", "world0/"]);
+        assert_eq!(
+            children_of(files, ["empty"], ""),
+            vec!["a.fsh", "empty/", "lib/", "world0/"]
+        );
         assert!(children_of(files, [], "nope").is_empty());
     }
 
     #[test]
     fn mem_vfs_basics_and_case_fallback() {
-        let vfs = MemVfs::new().with("lib/common.glsl", "x").with("/composite.fsh", "y");
+        let vfs = MemVfs::new()
+            .with("lib/common.glsl", "x")
+            .with("/composite.fsh", "y");
         assert_eq!(vfs.read("lib/common.glsl").as_deref(), Some(&b"x"[..]));
         assert!(vfs.case_fallbacks().is_empty());
         assert_eq!(vfs.read("/lib/Common.glsl").as_deref(), Some(&b"x"[..]));
         assert_eq!(
             vfs.case_fallbacks(),
-            vec![CaseFallback { requested: "lib/Common.glsl".into(), actual: "lib/common.glsl".into() }]
+            vec![CaseFallback {
+                requested: "lib/Common.glsl".into(),
+                actual: "lib/common.glsl".into()
+            }]
         );
         assert_eq!(vfs.list_dir(""), vec!["composite.fsh", "lib/"]);
         assert_eq!(vfs.list_dir("LIB"), vec!["common.glsl"]);
@@ -709,6 +962,18 @@ mod tests {
         assert!(vfs.exists("COMPOSITE.FSH"));
         assert!(vfs.read("../etc/passwd").is_none());
         assert_eq!(vfs.all_files(), vec!["composite.fsh", "lib/common.glsl"]);
+    }
+
+    #[test]
+    fn case_fallback_with_length_changing_lowercase() {
+        // 'İ' (2 bytes) lower-cases to "i̇" (3 bytes).
+        let vfs = MemVfs::new().with("\u{130}dir/a.glsl", "x");
+        assert_eq!(vfs.list_dir("\u{130}DIR"), vec!["a.glsl"]);
+        assert!(vfs.list_dir("i\u{307}dir/a.glsl/deeper").is_empty());
+        assert!(
+            vfs.list_dir("\u{130}dir/a.glsl").is_empty(),
+            "a file is not a directory"
+        );
     }
 
     #[test]
@@ -726,9 +991,15 @@ mod tests {
         let vfs = DirVfs::open_pack(tmp.path()).unwrap();
         assert_eq!(vfs.root(), root.as_path());
         assert_eq!(vfs.read("composite.fsh").unwrap(), b"void main(){}");
-        assert_eq!(vfs.list_dir(""), vec![".git/", "composite.fsh", "lib/", "world0/"]);
+        assert_eq!(
+            vfs.list_dir(""),
+            vec![".git/", "composite.fsh", "lib/", "world0/"]
+        );
         assert_eq!(vfs.list_dir("world0"), vec!["final.fsh"]);
-        assert_eq!(vfs.all_files(), vec!["composite.fsh", "lib/common.glsl", "world0/final.fsh"]);
+        assert_eq!(
+            vfs.all_files(),
+            vec!["composite.fsh", "lib/common.glsl", "world0/final.fsh"]
+        );
         assert!(vfs.read("lib").is_none(), "directories are not files");
         assert!(vfs.read("../outside").is_none());
         assert_eq!(vfs.read("lib/Common.glsl").unwrap(), b"// common");
@@ -742,6 +1013,9 @@ mod tests {
         assert_eq!(direct.root(), root.as_path());
         // A directory without shaders is rejected.
         let empty = tempfile::tempdir().unwrap();
-        assert!(matches!(DirVfs::open_pack(empty.path()), Err(PackError::NotAShaderPack { .. })));
+        assert!(matches!(
+            DirVfs::open_pack(empty.path()),
+            Err(PackError::NotAShaderPack { .. })
+        ));
     }
 }

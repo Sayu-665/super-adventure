@@ -1,5 +1,6 @@
 [package]
 name = "sb-expr"
+description = "ShaderBridge expression language: OptiFine/Iris custom uniforms and program.X.enabled conditions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,3 +8,8 @@ license.workspace = true
 
 [dependencies]
 sb-core.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

@@ -241,6 +241,9 @@ pub struct OptionsModel {
     pub profiles: IndexMap<String, IndexMap<String, String>>,
     /// Detected active profile, if current values match one.
     pub current_profile: Option<String>,
+    /// Programs each profile disables (`!program.[dim/]name` entries): profile -> program paths.
+    #[serde(default)]
+    pub profile_disabled_programs: IndexMap<String, Vec<String>>,
     /// Lang strings for the selected language (fallback en_us): key -> text.
     pub lang: IndexMap<String, String>,
 }
@@ -364,8 +367,8 @@ pub struct RenderTargets {
     pub uses_depthtex1: bool,
     pub uses_depthtex2: bool,
     pub noise_texture_resolution: u32,
-    /// `texture.noise=` override path (relative to shaders/), if any.
-    pub noise_texture_path: Option<String>,
+    /// `texture.noise=` override (pack image or resource location), if any.
+    pub noise_texture: Option<TextureSource>,
     pub custom_textures: Vec<CustomTexture>,
     pub images: Vec<CustomImage>,
     pub buffers: Vec<StorageBuffer>,
@@ -391,6 +394,34 @@ pub enum TargetSize {
     Relative { x: f32, y: f32 },
     /// Absolute pixels.
     Absolute { width: u32, height: u32 },
+    /// Mixed per-axis sizes (`size.buffer.colortexN = 0.5 64` is valid in Iris).
+    PerAxis { x: AxisSize, y: AxisSize },
+}
+
+/// One axis of a [`TargetSize::PerAxis`] size.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type", content = "value")]
+pub enum AxisSize {
+    /// Fraction of the screen extent.
+    Relative(f32),
+    /// Pixels.
+    Absolute(u32),
+}
+
+impl TargetSize {
+    /// Resolve to pixels for a screen of `width` x `height` (at least 1x1).
+    pub fn resolve(&self, width: u32, height: u32) -> (u32, u32) {
+        let rel = |f: f32, e: u32| ((e as f32 * f).ceil() as u32).max(1);
+        let axis = |a: AxisSize, e: u32| match a {
+            AxisSize::Relative(f) => rel(f, e),
+            AxisSize::Absolute(p) => p.max(1),
+        };
+        match *self {
+            TargetSize::Relative { x, y } => (rel(x, width), rel(y, height)),
+            TargetSize::Absolute { width: w, height: h } => (w.max(1), h.max(1)),
+            TargetSize::PerAxis { x, y } => (axis(x, width), axis(y, height)),
+        }
+    }
 }
 
 impl Default for TargetSize {
@@ -481,6 +512,8 @@ pub enum TextureSource {
     /// Raw binary texture.
     Raw {
         path: String,
+        /// Texture target: `1d`, `2d`, `3d` or `2d_rect` (`TEXTURE_RECTANGLE`).
+        target: String,
         dimensions: u8,
         format: TextureFormat,
         size: [u32; 3],
@@ -584,7 +617,7 @@ impl Default for PackSettings {
             occlusion_culling: true,
             separate_entity_draws: false,
             allow_concurrent_compute: false,
-            particles_ordering: "mixed".into(),
+            particles_ordering: "after".into(),
             supports_color_correction: false,
             skip_all_rendering: false,
             voxelize_light_blocks: false,
@@ -638,7 +671,9 @@ pub struct BlockMember {
     pub ty: GlslType,
     pub offset: u32,
     pub source: UniformSource,
-    /// Constant default (from a `uniform T x = init;` initializer), as std140 bytes.
+    /// Constant default from a `uniform T x = init;` initializer: unpadded component values
+    /// in GLSL constructor order (column-major for matrices, element by element for arrays),
+    /// `rows * cols * array_len` entries. Hosts pad them into std140 when uploading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Vec<f32>>,
 }
@@ -662,6 +697,9 @@ pub struct CustomUniform {
     pub expression: String,
     /// `variable.*` (not uploaded, usable by later expressions) vs `uniform.*`.
     pub is_variable: bool,
+    /// Where it was defined (`shaders.properties` line), for diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<crate::diag::SourceLocation>,
 }
 
 // ---------------------------------------------------------------------------------
@@ -695,7 +733,8 @@ pub struct BindingEntry {
 pub enum ResourceKind {
     /// Combined image sampler.
     Sampler {
-        /// `1d`, `2d`, `3d`, `cube`, `2d_array`, `cube_array`, `2d_rect`, `buffer`, `2d_ms`.
+        /// `1d`, `1d_array`, `2d`, `2d_array`, `3d`, `cube`, `cube_array`, `2d_rect`,
+        /// `buffer`, `2d_ms`, `2d_ms_array`.
         dim: String,
         /// Shadow (comparison) sampler.
         shadow: bool,
@@ -732,6 +771,12 @@ pub enum ResourceRef {
     Overlay,
     DhDepthTex(u32),
     DhBlockAtlas,
+    /// Constant 1x1 white texture (Iris binds it for the albedo/overlay samplers of programs
+    /// whose geometry has no texture, e.g. Distant Horizons programs).
+    White,
+    /// A custom texture. Payload: `"<stage>.<sampler>"` for image textures and
+    /// `customTexture.*` (stage `custom`), `"<stage>.<sampler>.<dim>"` for raw textures
+    /// (dim `1d`/`2d`/`3d`/`2d_rect`); see sb-uniforms `custom_texture_id`.
     CustomTexture(String),
     Image(String),
     ColorImage(u32),

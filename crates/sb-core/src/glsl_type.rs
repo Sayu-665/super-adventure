@@ -96,10 +96,9 @@ impl GlslType {
             (Double, r)
         } else if let Some(r) = name.strip_prefix("dmat") {
             return parse_mat(r).map(|(c, rw)| Self { scalar: Double, rows: rw, cols: c, array: None });
-        } else if let Some(r) = name.strip_prefix("mat") {
-            return parse_mat(r).map(|(c, rw)| Self::matrix(c, rw));
         } else {
-            return None;
+            let r = name.strip_prefix("mat")?;
+            return parse_mat(r).map(|(c, rw)| Self::matrix(c, rw));
         };
         match rest {
             "2" => Some(Self::vector(kind, 2)),
@@ -160,7 +159,8 @@ impl GlslType {
         if self.array.is_some() { round_up(a, 16) } else { a }
     }
 
-    /// std140 size in bytes (for arrays: stride * length).
+    /// std140 size in bytes (for arrays: stride * length). Saturates at `u32::MAX` for
+    /// absurd array lengths from malformed input.
     pub fn std140_size(&self) -> u32 {
         let n = self.scalar_size();
         let elem = if self.cols > 1 {
@@ -170,7 +170,7 @@ impl GlslType {
             n * self.rows as u32
         };
         match self.array {
-            Some(len) => self.std140_array_stride() * len.max(1),
+            Some(len) => self.std140_array_stride().saturating_mul(len.max(1)),
             None => elem,
         }
     }
@@ -254,5 +254,6 @@ mod tests {
         assert_eq!(GlslType::FLOAT.with_array(4).std140_align(), 16);
         assert_eq!(GlslType::VEC3.with_array(2).std140_array_stride(), 16);
         assert_eq!(GlslType::MAT4.with_array(2).std140_size(), 128);
+        assert_eq!(GlslType::MAT4.with_array(u32::MAX).std140_size(), u32::MAX);
     }
 }

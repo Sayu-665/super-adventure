@@ -1,5 +1,6 @@
 [package]
 name = "sb-preprocess"
+description = "ShaderBridge GLSL preprocessor compatible with Iris/JCPP (includes, macros, conditionals, line maps) plus the .properties preprocessing mode"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,3 +8,11 @@ license.workspace = true
 
 [dependencies]
 sb-core.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+glsl-lang.workspace = true
+pretty_assertions.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true

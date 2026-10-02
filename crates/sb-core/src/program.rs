@@ -340,13 +340,12 @@ impl ProgramName {
 
     /// Split a compute file stem like `composite3_b` into (`composite3`, Some('b')).
     pub fn split_compute_letter(stem: &str) -> (&str, Option<char>) {
-        if let Some((base, letter)) = stem.rsplit_once('_') {
-            if letter.len() == 1 {
-                let c = letter.chars().next().unwrap();
-                if c.is_ascii_lowercase() && Self::parse(base).is_some() {
-                    return (base, Some(c));
-                }
-            }
+        if let Some((base, letter)) = stem.rsplit_once('_')
+            && let [c] = letter.as_bytes()
+            && c.is_ascii_lowercase()
+            && Self::parse(base).is_some()
+        {
+            return (base, Some(*c as char));
         }
         (stem, None)
     }

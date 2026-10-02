@@ -37,7 +37,11 @@ pub struct PropEntry {
 
 impl PropEntry {
     pub fn new(key: impl Into<String>, value: impl Into<String>, line: u32) -> Self {
-        Self { key: key.into(), value: value.into(), line }
+        Self {
+            key: key.into(),
+            value: value.into(),
+            line,
+        }
     }
 }
 
@@ -46,14 +50,53 @@ pub fn parse(text: &str) -> Vec<PropEntry> {
     parse_inner(text, &mut |_, _| {})
 }
 
+/// Parse the *output of the properties preprocessor* the way Iris does: every line is
+/// trimmed first, so whitespace after a trailing `\` still continues the line (Iris's
+/// `PropertiesPreprocessor` trims lines before handing them to `Properties.load`).
+/// Line numbers are preserved. Raw (unpreprocessed) text should use [`parse`].
+pub fn parse_preprocessed(text: &str) -> Vec<PropEntry> {
+    let mut trimmed = String::with_capacity(text.len());
+    for l in crate::text::lines(text) {
+        trimmed.push_str(l.trim());
+        trimmed.push('\n');
+    }
+    parse(&trimmed)
+}
+
 /// Parse properties text, reporting malformed `\uXXXX` escapes as warnings located in
 /// `file`.
 pub fn parse_with_diagnostics(text: &str, file: &str) -> (Vec<PropEntry>, Diagnostics) {
     let mut diags = Diagnostics::new();
     let entries = parse_inner(text, &mut |line, msg| {
-        diags.push(Diagnostic::warning("props.bad-escape", msg).at(SourceLocation::new(file, line)));
+        diags
+            .push(Diagnostic::warning("props.bad-escape", msg).at(SourceLocation::new(file, line)));
     });
     (entries, diags)
+}
+
+/// Map line numbers of a parsed *derived* text (e.g. preprocessor output that dropped
+/// blank and comment lines) back to the original file: `line_map[i]` is the original
+/// 1-based line of line `i + 1` of the derived text. Lines outside the map are kept.
+pub fn remap_entry_lines(entries: &mut [PropEntry], line_map: &[u32]) {
+    for e in entries {
+        e.line = map_line(e.line, line_map);
+    }
+}
+
+/// [`remap_entry_lines`] for diagnostics located in `file` (other files are untouched).
+pub fn remap_diagnostic_lines(diags: &mut Diagnostics, file: &str, line_map: &[u32]) {
+    for d in &mut diags.0 {
+        if let Some(loc) = d.location.as_mut().filter(|l| l.file == file) {
+            loc.line = map_line(loc.line, line_map);
+        }
+    }
+}
+
+fn map_line(line: u32, line_map: &[u32]) -> u32 {
+    line.checked_sub(1)
+        .and_then(|i| line_map.get(usize::try_from(i).ok()?))
+        .copied()
+        .unwrap_or(line)
 }
 
 /// Parse into an ordered map (key -> value).
@@ -74,7 +117,9 @@ fn parse_inner(text: &str, on_error: &mut dyn FnMut(u32, String)) -> Vec<PropEnt
             }
         }
     }
-    map.into_iter().map(|(key, (value, line))| PropEntry { key, value, line }).collect()
+    map.into_iter()
+        .map(|(key, (value, line))| PropEntry { key, value, line })
+        .collect()
 }
 
 fn is_ws(c: char) -> bool {
@@ -83,6 +128,11 @@ fn is_ws(c: char) -> bool {
 
 /// Join natural lines into logical lines (comments and blank lines removed, escapes
 /// still present). Returns `(first line number, logical line)`.
+///
+/// This follows the state machine of `Properties.LineReader` in Java 9 and later
+/// (Iris runs on Java 21+): a `#`/`!` starts a comment whenever the logical line read
+/// so far is *empty*, including right after a continuation of an empty line (a line
+/// holding only `\`). Verified against OpenJDK 21 with a differential test.
 pub(crate) fn logical_lines(text: &str) -> Vec<(u32, String)> {
     let mut out = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -98,6 +148,9 @@ pub(crate) fn logical_lines(text: &str) -> Vec<(u32, String)> {
         let c = chars[i];
         i += 1;
         let is_nl = c == '\n' || c == '\r';
+        // Java checks for EOF right after the line-break character itself (before
+        // skipping the `\n` of a `\r\n` pair).
+        let eof_after_break = is_nl && i >= chars.len();
         if is_nl {
             // Count a "\r\n" pair as one line break.
             if c == '\r' && chars.get(i) == Some(&'\n') {
@@ -131,7 +184,11 @@ pub(crate) fn logical_lines(text: &str) -> Vec<(u32, String)> {
 
         if !is_nl {
             buf.push(c);
-            preceding_backslash = if c == '\\' { !preceding_backslash } else { false };
+            preceding_backslash = if c == '\\' {
+                !preceding_backslash
+            } else {
+                false
+            };
             continue;
         }
 
@@ -143,6 +200,11 @@ pub(crate) fn logical_lines(text: &str) -> Vec<(u32, String)> {
         }
         if preceding_backslash {
             buf.pop();
+            if eof_after_break {
+                // At EOF Java returns the line even if only the backslash was in it.
+                out.push((start_line, std::mem::take(&mut buf)));
+                break;
+            }
             skip_ws = true;
             appended_line_begin = true;
             preceding_backslash = false;
@@ -180,7 +242,11 @@ fn split_key_value(line: &str) -> (&str, &str) {
             value_start = pos + c.len_utf8();
             break;
         }
-        preceding_backslash = if c == '\\' { !preceding_backslash } else { false };
+        preceding_backslash = if c == '\\' {
+            !preceding_backslash
+        } else {
+            false
+        };
         idx += 1;
     }
     let rest = &line[value_start..];
@@ -222,7 +288,10 @@ fn unescape(s: &str, line: u32, on_error: &mut dyn FnMut(u32, String)) -> String
             'u' => {
                 let hex: String = it.clone().take(4).collect();
                 let Some(unit) = parse_hex4(&hex) else {
-                    on_error(line, format!("malformed \\uXXXX escape `\\u{hex}`, kept literally"));
+                    on_error(
+                        line,
+                        format!("malformed \\uXXXX escape `\\u{hex}`, kept literally"),
+                    );
                     out.push('u');
                     continue;
                 };
@@ -234,7 +303,9 @@ fn unescape(s: &str, line: u32, on_error: &mut dyn FnMut(u32, String)) -> String
                     let mut look = it.clone();
                     if look.next() == Some('\\') && look.next() == Some('u') {
                         let low_hex: String = look.take(4).collect();
-                        if let Some(low) = parse_hex4(&low_hex).filter(|l| (0xDC00..0xE000).contains(l)) {
+                        if let Some(low) =
+                            parse_hex4(&low_hex).filter(|l| (0xDC00..0xE000).contains(l))
+                        {
                             let cp = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00);
                             out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
                             for _ in 0..6 {
@@ -256,7 +327,11 @@ fn unescape(s: &str, line: u32, on_error: &mut dyn FnMut(u32, String)) -> String
 }
 
 fn parse_hex4(s: &str) -> Option<u32> {
-    if s.len() == 4 && s.chars().all(|h| h.is_ascii_hexdigit()) { u32::from_str_radix(s, 16).ok() } else { None }
+    if s.len() == 4 && s.chars().all(|h| h.is_ascii_hexdigit()) {
+        u32::from_str_radix(s, 16).ok()
+    } else {
+        None
+    }
 }
 
 /// Escape a key for writing (`Properties.store` conventions).
@@ -322,15 +397,18 @@ mod tests {
 
     #[test]
     fn separators() {
-        assert_eq!(kv("a=1\nb:2\nc 3\nd\t4\ne = 5\nf : 6\ng   =   7"), vec![
-            pair("a", "1"),
-            pair("b", "2"),
-            pair("c", "3"),
-            pair("d", "4"),
-            pair("e", "5"),
-            pair("f", "6"),
-            pair("g", "7"),
-        ]);
+        assert_eq!(
+            kv("a=1\nb:2\nc 3\nd\t4\ne = 5\nf : 6\ng   =   7"),
+            vec![
+                pair("a", "1"),
+                pair("b", "2"),
+                pair("c", "3"),
+                pair("d", "4"),
+                pair("e", "5"),
+                pair("f", "6"),
+                pair("g", "7"),
+            ]
+        );
         // Only one separator character is consumed after whitespace.
         assert_eq!(kv("a = = b"), vec![pair("a", "= b")]);
         assert_eq!(kv("a==b"), vec![pair("a", "=b")]);
@@ -341,17 +419,20 @@ mod tests {
 
     #[test]
     fn comments_and_blank_lines() {
-        assert_eq!(kv("# comment\n! also\n\n   \n  a=1\n   # indented comment\nb=2 # not a comment"), vec![
-            pair("a", "1"),
-            pair("b", "2 # not a comment"),
-        ]);
+        assert_eq!(
+            kv("# comment\n! also\n\n   \n  a=1\n   # indented comment\nb=2 # not a comment"),
+            vec![pair("a", "1"), pair("b", "2 # not a comment"),]
+        );
         // A comment line ending in a backslash does not continue.
         assert_eq!(kv("# comment \\\na=1"), vec![pair("a", "1")]);
     }
 
     #[test]
     fn continuation_lines() {
-        assert_eq!(kv("a=one \\\n    two \\\n\tthree"), vec![pair("a", "one two three")]);
+        assert_eq!(
+            kv("a=one \\\n    two \\\n\tthree"),
+            vec![pair("a", "one two three")]
+        );
         // A continuation line starting with # is not a comment.
         assert_eq!(kv("a=x \\\n  #y"), vec![pair("a", "x #y")]);
         // An even number of backslashes does not continue.
@@ -361,7 +442,29 @@ mod tests {
         // Continuation at EOF.
         assert_eq!(kv("a=x\\"), vec![pair("a", "x")]);
         // CRLF and CR line endings.
-        assert_eq!(kv("a=1 \\\r\n  2\r\nb=3\rc=4"), vec![pair("a", "1 2"), pair("b", "3"), pair("c", "4")]);
+        assert_eq!(
+            kv("a=1 \\\r\n  2\r\nb=3\rc=4"),
+            vec![pair("a", "1 2"), pair("b", "3"), pair("c", "4")]
+        );
+    }
+
+    #[test]
+    fn comment_rules_match_java_21() {
+        // Pinned against OpenJDK 21 (`Properties.load`, Java 9+ LineReader): a `#`/`!`
+        // is a comment whenever the logical line read so far is empty — also right after
+        // a continuation of an empty line — but not after a continuation of content.
+        assert_eq!(parse("\\\n#x=1\nb=2"), vec![PropEntry::new("b", "2", 3)]);
+        assert_eq!(kv("  \\\r\n  !y:2"), Vec::<(String, String)>::new());
+        assert_eq!(kv("a=1 \\\n#x"), vec![pair("a", "1 #x")]);
+        // A comment line itself never continues, even with a trailing backslash.
+        assert_eq!(kv("# c \\\nz=1"), vec![pair("z", "1")]);
+        // A lone backslash at EOF is an (empty) entry, as in Java — also when followed
+        // by a final `\n`, but not by a final `\r\n` (Java's EOF check happens before it
+        // skips the `\n` of the pair).
+        assert_eq!(kv("\\"), vec![pair("", "")]);
+        assert_eq!(kv("x=1\n\\\n"), vec![pair("x", "1"), pair("", "")]);
+        assert_eq!(kv("x=1\n\\\r\n"), vec![pair("x", "1")]);
+        assert_eq!(kv("x=1\\\n"), vec![pair("x", "1")]);
     }
 
     #[test]
@@ -369,7 +472,10 @@ mod tests {
         assert_eq!(kv(r"a=tab\there"), vec![pair("a", "tab\there")]);
         assert_eq!(kv(r"a=\n\r\f"), vec![pair("a", "\n\r\u{c}")]);
         assert_eq!(kv(r"a=\u0041\u00e9"), vec![pair("a", "A\u{e9}")]);
-        assert_eq!(kv(r"key\=with\:seps\ and\ space=v"), vec![pair("key=with:seps and space", "v")]);
+        assert_eq!(
+            kv(r"key\=with\:seps\ and\ space=v"),
+            vec![pair("key=with:seps and space", "v")]
+        );
         assert_eq!(kv(r"a=\q\#\\"), vec![pair("a", "q#\\")]);
         assert_eq!(kv(r"\#notcomment=1"), vec![pair("#notcomment", "1")]);
     }
@@ -380,7 +486,10 @@ mod tests {
         assert_eq!(entries[0].value, "u12G4");
         assert_eq!(entries[1].value, "ok");
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags.iter().next().unwrap().location.as_ref().unwrap().line, 1);
+        assert_eq!(
+            diags.iter().next().unwrap().location.as_ref().unwrap().line,
+            1
+        );
     }
 
     #[test]
@@ -389,25 +498,70 @@ mod tests {
     }
 
     #[test]
+    fn preprocessed_parsing_trims_lines() {
+        // Whitespace after the backslash breaks the continuation in Java...
+        // (`\ ` is an escaped space.)
+        assert_eq!(kv("a=x \\  \n  y"), vec![pair("a", "x   "), pair("y", "")]);
+        // ...but not after Iris's preprocessor trimmed the lines.
+        let e = parse_preprocessed("a=x \\  \n  y\nb = 2  ");
+        assert_eq!(
+            e,
+            vec![PropEntry::new("a", "x y", 1), PropEntry::new("b", "2", 3)]
+        );
+    }
+
+    #[test]
+    fn line_remapping() {
+        // Derived text lines 1..=3 came from original lines 2, 5 and 9.
+        let map = [2, 5, 9];
+        let mut entries = parse("a=1\nb=2\nc=3\nd=4");
+        remap_entry_lines(&mut entries, &map);
+        let lines: Vec<u32> = entries.iter().map(|e| e.line).collect();
+        assert_eq!(lines, vec![2, 5, 9, 4], "lines outside the map are kept");
+        let (_, mut diags) = parse_with_diagnostics("x=1\ny=\\u12", "f.properties");
+        diags.push(Diagnostic::warning("other", "elsewhere").at(SourceLocation::new("g", 2)));
+        remap_diagnostic_lines(&mut diags, "f.properties", &map);
+        let lines: Vec<u32> = diags
+            .iter()
+            .map(|d| d.location.as_ref().unwrap().line)
+            .collect();
+        assert_eq!(lines, vec![5, 2]);
+    }
+
+    #[test]
     fn duplicates_keep_first_position_and_last_value() {
         let entries = parse("a=1\nb=2\na=3");
-        assert_eq!(entries, vec![PropEntry::new("a", "3", 3), PropEntry::new("b", "2", 2)]);
+        assert_eq!(
+            entries,
+            vec![PropEntry::new("a", "3", 3), PropEntry::new("b", "2", 2)]
+        );
     }
 
     #[test]
     fn line_numbers_are_first_physical_line() {
         let entries = parse("\n# c\nx=1 \\\n  2\n\ny=3");
-        assert_eq!(entries, vec![PropEntry::new("x", "1 2", 3), PropEntry::new("y", "3", 6)]);
+        assert_eq!(
+            entries,
+            vec![PropEntry::new("x", "1 2", 3), PropEntry::new("y", "3", 6)]
+        );
     }
 
     #[test]
     fn unicode_text() {
-        assert_eq!(kv("option.X=Rendu \u{e9}l\u{e9}gant"), vec![pair("option.X", "Rendu \u{e9}l\u{e9}gant")]);
+        assert_eq!(
+            kv("option.X=Rendu \u{e9}l\u{e9}gant"),
+            vec![pair("option.X", "Rendu \u{e9}l\u{e9}gant")]
+        );
     }
 
     #[test]
     fn write_roundtrip() {
-        let entries = [("a b", " lead"), ("c=d", "x:y#z!"), ("uni", "\u{e9}\u{1F600}"), ("t", "a\tb\\")];
+        let entries = [
+            ("a b", " lead"),
+            ("c=d", "x:y#z!"),
+            ("uni", "\u{e9}\u{1F600}"),
+            ("t", "a\tb\\"),
+        ];
         let text = write(entries.iter().map(|(k, v)| (*k, *v)));
         let back = kv(&text);
         let expect: Vec<_> = entries.iter().map(|(k, v)| pair(k, v)).collect();
