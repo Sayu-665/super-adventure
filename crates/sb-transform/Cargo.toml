@@ -18,5 +18,6 @@ indexmap.workspace = true
 [dev-dependencies]
 sb-compile.workspace = true
 sb-pack.workspace = true
+sb-expr.workspace = true
 rayon.workspace = true
 pretty_assertions.workspace = true

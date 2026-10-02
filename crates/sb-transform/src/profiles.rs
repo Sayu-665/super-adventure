@@ -201,6 +201,13 @@ pub struct DrawProfile {
     pub code_vertex: String,
     /// Helper code injected before the pack's code in the fragment stage.
     pub code_fragment: String,
+    /// Positions are world-space (camera-relative) world geometry: in the shadow pass the
+    /// `model_view`/`projection` semantics become `shadowModelView`/`shadowProjection`
+    /// (Iris shadow programs see `gl_ModelViewMatrix == shadowModelView`).
+    pub world_space: bool,
+    /// Push-constant members (`layout(push_constant) uniform sb_hPush { ... }`, accessed
+    /// unqualified); empty for none.
+    pub push_constants: String,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +230,10 @@ struct RawProfile {
     host: Option<String>,
     #[serde(default)]
     fullscreen: bool,
+    #[serde(default)]
+    world_space: bool,
+    #[serde(default)]
+    push_constants: Option<String>,
     #[serde(default)]
     inputs: Vec<ProfileInput>,
     #[serde(default)]
@@ -261,6 +272,8 @@ pub fn parse_profile(toml_text: &str) -> Result<DrawProfile, String> {
         globals: raw.globals,
         code_vertex: code.vertex,
         code_fragment: code.fragment,
+        world_space: raw.world_space,
+        push_constants: raw.push_constants.unwrap_or_default(),
     };
     validate(&p)?;
     Ok(p)
@@ -359,6 +372,8 @@ static EMBEDDED: LazyLock<Embedded> = LazyLock::new(|| {
             globals: Vec::new(),
             code_vertex: String::new(),
             code_fragment: String::new(),
+            world_space: false,
+            push_constants: String::new(),
         })
     };
     Embedded {

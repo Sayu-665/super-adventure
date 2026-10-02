@@ -56,7 +56,7 @@ pub(crate) const MAX_EXPR_DEPTH: usize = 4000;
 
 /// Parse preprocessed GLSL `code` (no directives) of source version `version`.
 pub(crate) fn parse_glsl(code: &str, version: u32) -> Result<TranslationUnit, ParseFailure> {
-    let (text, _wrapped) = crate::text::wrap_large_int_literals(code);
+    let (text, _wrapped) = crate::text::sanitize_for_parse(code);
     let lines = Lines::new(&text);
     let first = parse_with_version(&text, 460, &lines);
     let fallback_version = version.clamp(130, 460) as u16;
@@ -516,4 +516,29 @@ pub(crate) fn parse_expr(text: &str) -> Result<Expr, ParseFailure> {
         }
     }
     Err(ParseFailure { line: 0, message: format!("`{text}` is not a single expression") })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_comments() {
+        for src in [
+            "/***/\nvoid main() {}\n",
+            "/****/\nvoid main() {}\n",
+            "/*****************/\nvoid main() {}\n",
+            "/* a **/\nvoid main() {}\n",
+            "float x = 1e-8+y;\n",
+            "float x = (1e-8+y);\n",
+            "float x = 1e-8 + y;\n",
+            "struct S { uint a; };\nlayout(binding=2) readonly buffer B { S m[]; };\nvoid f(const in int i) { S s = m[i]; }\n",
+            "struct S { uint a; };\nvoid f(const in int i) { S s; }\n",
+            "struct S { uint a; };\nlayout(binding=2) readonly buffer B { S m[]; };\nvoid f() { S s; }\n",
+            "struct S { uint a; };\nuniform B { S m[2]; };\nvoid f() { S s; }\n",
+            "struct S { uint a; };\nuniform B { S m[2]; } b;\nvoid f() { S s; }\n",
+        ] {
+            eprintln!("{src:?} -> {:?}", parse_glsl(src, 330).err());
+        }
+    }
 }

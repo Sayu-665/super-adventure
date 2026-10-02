@@ -12,7 +12,7 @@ struct Scanner<'a> {
 enum Tok<'a> {
     Ident(&'a str),
     Number(&'a str),
-    Punct(u8),
+    Punct(u8, &'a str),
     /// Comment or whitespace (`text` is the raw source).
     Trivia(&'a str),
 }
@@ -72,7 +72,7 @@ impl<'a> Scanner<'a> {
         // Any other character (multi-byte UTF-8 included) is punctuation.
         let len = self.s[start..].chars().next().map_or(1, char::len_utf8);
         self.i = start + len;
-        Some((start, Tok::Punct(c)))
+        Some((start, Tok::Punct(c, &self.s[start..start + len])))
     }
 }
 
@@ -98,11 +98,11 @@ pub(crate) fn defined_functions(code: &str) -> Vec<String> {
     let mut depth = 0i32;
     for (k, t) in toks.iter().enumerate() {
         match t {
-            Tok::Punct(b'{') => depth += 1,
-            Tok::Punct(b'}') => depth -= 1,
+            Tok::Punct(b'{', _) => depth += 1,
+            Tok::Punct(b'}', _) => depth -= 1,
             Tok::Ident(name) if depth == 0 => {
                 let prev_is_type = k > 0 && matches!(toks[k - 1], Tok::Ident(_));
-                if prev_is_type && toks.get(k + 1) == Some(&Tok::Punct(b'(')) {
+                if prev_is_type && matches!(toks.get(k + 1), Some(Tok::Punct(b'(', _))) {
                     out.push((*name).to_string());
                 }
             }
@@ -126,34 +126,49 @@ fn int_literal_value(tok: &str) -> Option<u64> {
     tok.parse::<u64>().ok()
 }
 
-/// Work around glsl-lang 0.8 rejecting unsuffixed integer literals in
-/// `0x80000000..=0xFFFFFFFF` (legal GLSL: they denote negative `int`s): rewrite them to
-/// `int(<literal>u)`. Comments are left untouched and line structure is preserved.
-/// Returns the new text and the number of literals rewritten.
-pub(crate) fn wrap_large_int_literals(code: &str) -> (String, usize) {
-    let mut out = String::new();
-    let mut last = 0;
+/// Prepare preprocessed code for glsl-lang 0.8, preserving the line structure:
+///
+/// * comments become spaces (newlines inside block comments are kept): its lexer
+///   rejects block comments ending in an odd run of `*` (`/* a **/`);
+/// * unsuffixed integer literals in `0x80000000..=0xFFFFFFFF` (legal GLSL, they denote
+///   negative `int`s) become `int(<literal>u)`: its lexer rejects them;
+/// * a space is inserted between a number and a directly following `+`/`-`: its lexer
+///   reads `1e-8+y` as one malformed float.
+///
+/// Returns the new text and the number of rewritten integer literals.
+pub(crate) fn sanitize_for_parse(code: &str) -> (String, usize) {
+    let mut out = String::with_capacity(code.len() + 64);
     let mut count = 0;
-    for (pos, t) in Scanner::new(code) {
-        if let Tok::Number(n) = t
-            && let Some(v) = int_literal_value(n)
-            && (0x8000_0000..=0xFFFF_FFFF).contains(&v)
-        {
-            if out.is_empty() {
-                out.reserve(code.len() + 64);
+    let mut toks = Scanner::new(code).peekable();
+    while let Some((_, t)) = toks.next() {
+        match t {
+            Tok::Trivia(text) => {
+                if text.starts_with("/*") || text.starts_with("//") {
+                    for ch in text.chars() {
+                        out.push(if ch == '\n' { '\n' } else { ' ' });
+                    }
+                } else {
+                    out.push_str(text);
+                }
             }
-            out.push_str(&code[last..pos]);
-            out.push_str("int(");
-            out.push_str(n);
-            out.push_str("u)");
-            last = pos + n.len();
-            count += 1;
+            Tok::Number(n) => {
+                if let Some(v) = int_literal_value(n)
+                    && (0x8000_0000..=0xFFFF_FFFF).contains(&v)
+                {
+                    out.push_str("int(");
+                    out.push_str(n);
+                    out.push_str("u)");
+                    count += 1;
+                } else {
+                    out.push_str(n);
+                }
+                if matches!(toks.peek(), Some((_, Tok::Punct(b'+' | b'-', _)))) {
+                    out.push(' ');
+                }
+            }
+            Tok::Ident(s) | Tok::Punct(_, s) => out.push_str(s),
         }
     }
-    if count == 0 {
-        return (code.to_string(), 0);
-    }
-    out.push_str(&code[last..]);
     (out, count)
 }
 
@@ -175,13 +190,15 @@ mod tests {
 
     #[test]
     fn large_literals_wrapped() {
-        let (s, n) = wrap_large_int_literals("int a = 0x80000000; uint b = 0xFFFFFFFFu; int c = 4294967295; // 0x80000000\nint d = 2147483647; float e = 3e10;");
+        let (s, n) = sanitize_for_parse("int a = 0x80000000; uint b = 0xFFFFFFFFu; int c = 4294967295; // 0x80000000\nint d = 2147483647; float e = 3e10;");
         assert_eq!(n, 2);
         assert_eq!(
             s,
-            "int a = int(0x80000000u); uint b = 0xFFFFFFFFu; int c = int(4294967295u); // 0x80000000\nint d = 2147483647; float e = 3e10;"
+            "int a = int(0x80000000u); uint b = 0xFFFFFFFFu; int c = int(4294967295u);              \nint d = 2147483647; float e = 3e10;"
         );
-        assert_eq!(wrap_large_int_literals("x = 020000000000;").0, "x = int(020000000000u);");
-        assert_eq!(wrap_large_int_literals("x = 0x1p+5;").1, 0);
+        assert_eq!(sanitize_for_parse("x = 020000000000;").0, "x = int(020000000000u);");
+        assert_eq!(sanitize_for_parse("x = 1e-8+y-2;").0, "x = 1e-8 +y-2;");
+        assert_eq!(sanitize_for_parse("a /* x\n **/ b // c\nd").0, "a     \n     b     \nd");
+        assert_eq!(sanitize_for_parse("é = \"ü\";").0, "é = \"ü\";");
     }
 }

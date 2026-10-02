@@ -817,7 +817,7 @@ impl Stmt {
                 }
                 body.walk_exprs_mut(f);
             }
-            StmtKind::Empty | StmtKind::Break | StmtKind::Continue | StmtKind::Discard | StmtKind::Raw(_) => {}
+            StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard | StmtKind::Raw(_) => {}
         }
     }
 
