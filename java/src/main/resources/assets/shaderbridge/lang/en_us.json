@@ -1,0 +1,38 @@
+{
+  "key.category.shaderbridge.main": "ShaderBridge",
+  "key.shaderbridge.open_packs": "Shader Packs",
+  "key.shaderbridge.reload": "Reload Shader Pack",
+  "key.shaderbridge.toggle": "Toggle Shaders",
+
+  "shaderbridge.button.shader_packs": "Shader Packs...",
+
+  "shaderbridge.screen.packs.title": "Shader Packs",
+  "shaderbridge.screen.packs.apply": "Apply",
+  "shaderbridge.screen.packs.shaders": "Shaders",
+  "shaderbridge.screen.packs.options": "Pack Options...",
+  "shaderbridge.screen.packs.open_folder": "Open Folder",
+  "shaderbridge.screen.packs.reload": "Reload",
+  "shaderbridge.screen.packs.invalid": "Not a shader pack: %s",
+
+  "shaderbridge.screen.options.title": "%s",
+  "shaderbridge.screen.options.reset": "Reset",
+  "shaderbridge.screen.options.profile": "Profile",
+  "shaderbridge.screen.options.profile.custom": "Custom",
+  "shaderbridge.screen.options.loading": "Loading pack options...",
+  "shaderbridge.screen.options.error": "Cannot load the pack options: %s",
+
+  "shaderbridge.status.native_loaded": "Native library %s",
+  "shaderbridge.status.native_failed": "Shaders are unavailable: %s",
+  "shaderbridge.status.idle": "No shader pack is active",
+  "shaderbridge.status.disabled": "Shaders are disabled",
+  "shaderbridge.status.pending": "%s will be compiled when a world is joined",
+  "shaderbridge.status.compiling": "Compiling %s...",
+  "shaderbridge.status.ready": "%s is active",
+  "shaderbridge.status.failed": "%s failed: %s",
+  "shaderbridge.status.unsupported_features": "Requires unsupported features: %s",
+
+  "shaderbridge.message.compiled": "Compiled %s: %s",
+  "shaderbridge.message.failed": "%s is not active: %s",
+  "shaderbridge.message.enabled": "Shaders enabled",
+  "shaderbridge.message.disabled": "Shaders disabled"
+}

@@ -1,0 +1,8 @@
+classTweaker	v1	official
+# Biome downfall for the Iris "rainfall" uniform.
+accessible	class	net/minecraft/world/level/biome/Biome$ClimateSettings
+accessible	field	net/minecraft/world/level/biome/Biome	climateSettings	Lnet/minecraft/world/level/biome/Biome$ClimateSettings;
+# Active boss bars for OptiFine's "bossBattle" uniform.
+accessible	field	net/minecraft/client/gui/components/BossHealthOverlay	events	Ljava/util/Map;
+# Cloud texture width for Iris' "cloudTime" uniform.
+accessible	field	net/minecraft/client/renderer/CloudRenderer	texture	Lnet/minecraft/client/renderer/CloudRenderer$TextureData;

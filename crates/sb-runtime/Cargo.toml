@@ -1,9 +1,28 @@
 [package]
 name = "sb-runtime"
+description = "ShaderBridge headless Vulkan executor: runs a CompiledPack on a synthetic Minecraft-like scene (with Distant Horizons LODs) and returns images"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Integration tests that compile real corpus packs with `sb_pipeline::compile_pack`
+# (`tests/corpus_packs.rs`, `#[ignore]` by default). Enable once sb-pipeline exists:
+# `cargo test -p sb-runtime --features pipeline-tests -- --ignored`.
+pipeline-tests = ["dep:sb-pipeline", "dep:sb-pack"]
+
 [dependencies]
 sb-core.workspace = true
+sb-uniforms.workspace = true
+sb-expr.workspace = true
+sb-compile.workspace = true
+ash.workspace = true
+gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"] }
+image.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+log.workspace = true
+sb-pipeline = { workspace = true, optional = true }
+sb-pack = { workspace = true, optional = true }

@@ -1,0 +1,143 @@
+package dev.shaderbridge.uniforms;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import dev.shaderbridge.model.GlslType;
+import dev.shaderbridge.model.ScalarKind;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.List;
+import org.joml.Matrix3f;
+import org.joml.Matrix4f;
+import org.junit.jupiter.api.Test;
+
+/** std140 rules, checked against the values of {@code sb_core::GlslType}'s layout tests and the GLSL spec. */
+class Std140WriterTest {
+    private static GlslType t(ScalarKind kind, int rows, int cols, Integer array) {
+        return new GlslType(kind, rows, cols, array);
+    }
+
+    private static void layout(GlslType type, int alignment, int size) {
+        assertEquals(alignment, Std140Writer.alignment(type), "alignment of " + type);
+        assertEquals(size, Std140Writer.size(type), "size of " + type);
+    }
+
+    @Test
+    void scalarsAndVectors() {
+        for (ScalarKind kind : List.of(ScalarKind.FLOAT, ScalarKind.INT, ScalarKind.UINT, ScalarKind.BOOL)) {
+            layout(t(kind, 1, 1, null), 4, 4);
+            layout(t(kind, 2, 1, null), 8, 8);
+            layout(t(kind, 3, 1, null), 16, 12);
+            layout(t(kind, 4, 1, null), 16, 16);
+        }
+        layout(t(ScalarKind.DOUBLE, 1, 1, null), 8, 8);
+        layout(t(ScalarKind.DOUBLE, 2, 1, null), 16, 16);
+        layout(t(ScalarKind.DOUBLE, 3, 1, null), 32, 24);
+        layout(t(ScalarKind.DOUBLE, 4, 1, null), 32, 32);
+    }
+
+    @Test
+    void matricesPadColumnsTo16Bytes() {
+        layout(GlslType.matrix(2, 2), 16, 32);
+        layout(GlslType.matrix(3, 3), 16, 48);
+        layout(GlslType.matrix(4, 4), 16, 64);
+        layout(GlslType.matrix(3, 4), 16, 48);
+        layout(GlslType.matrix(4, 3), 16, 64);
+        layout(GlslType.matrix(2, 4), 16, 32);
+        layout(t(ScalarKind.DOUBLE, 4, 4, null), 32, 128);
+        assertEquals(16, Std140Writer.columnStride(GlslType.matrix(4, 2)));
+    }
+
+    @Test
+    void arraysUse16ByteStrides() {
+        layout(GlslType.FLOAT.withArray(4), 16, 64);
+        assertEquals(16, Std140Writer.arrayStride(GlslType.FLOAT.withArray(4)));
+        assertEquals(16, Std140Writer.arrayStride(GlslType.VEC3.withArray(2)));
+        layout(GlslType.VEC3.withArray(2), 16, 32);
+        layout(GlslType.MAT4.withArray(2), 16, 128);
+        layout(GlslType.matrix(3, 3).withArray(2), 16, 96);
+        layout(t(ScalarKind.BOOL, 1, 1, 3), 16, 48);
+        layout(GlslType.FLOAT.withArray(0), 16, 16);
+    }
+
+    private static ByteBuffer buffer(int size) {
+        return ByteBuffer.allocateDirect(size).order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    @Test
+    void componentsConvertToTheDeclaredKind() {
+        ByteBuffer b = buffer(32);
+        Std140Writer w = new Std140Writer(b);
+        w.putComponent(0, ScalarKind.BOOL, 7);
+        w.putComponent(4, ScalarKind.BOOL, 0.0);
+        w.putComponent(8, ScalarKind.INT, -2.75);
+        w.putComponent(12, ScalarKind.UINT, -1);
+        w.putComponent(16, ScalarKind.FLOAT, 3);
+        w.putComponent(24, ScalarKind.DOUBLE, 0.5);
+        assertEquals(1, b.getInt(0));
+        assertEquals(0, b.getInt(4));
+        assertEquals(-2, b.getInt(8));
+        assertEquals(0xFFFFFFFF, b.getInt(12));
+        assertEquals(3.0f, b.getFloat(16));
+        assertEquals(0.5, b.getDouble(24));
+    }
+
+    @Test
+    void matrixColumnsLandOnTheirStride() {
+        ByteBuffer b = buffer(64);
+        Matrix3f m = new Matrix3f(1, 2, 3, 4, 5, 6, 7, 8, 9);
+        new Std140Writer(b).putMatrix(0, GlslType.matrix(3, 3), m);
+        assertEquals(1, b.getFloat(0));
+        assertEquals(3, b.getFloat(8));
+        assertEquals(0, b.getFloat(12), "padding");
+        assertEquals(4, b.getFloat(16));
+        assertEquals(9, b.getFloat(40));
+
+        ByteBuffer c = buffer(64);
+        Matrix4f m4 = new Matrix4f().translation(10, 20, 30);
+        new Std140Writer(c).putMatrix(0, GlslType.MAT4, m4);
+        assertEquals(10, c.getFloat(48));
+        assertEquals(30, c.getFloat(56));
+        assertEquals(1, c.getFloat(60));
+
+        ByteBuffer d = buffer(48);
+        new Std140Writer(d).putMatrix(0, GlslType.matrix(3, 3), new Matrix4f().scaling(2, 3, 4).setTranslation(10, 20, 30));
+        assertEquals(2, d.getFloat(0), "the upper-left 3x3 of a mat4");
+        assertEquals(3, d.getFloat(20));
+        assertEquals(4, d.getFloat(40));
+        assertEquals(0, d.getFloat(44), "the translation column is not part of a mat3");
+    }
+
+    @Test
+    void defaultsAreSpreadToStd140Positions() {
+        ByteBuffer b = buffer(128);
+        Std140Writer w = new Std140Writer(b);
+        w.putDefault(0, GlslType.matrix(3, 3), List.of(1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f));
+        assertEquals(3, b.getFloat(8));
+        assertEquals(4, b.getFloat(16));
+        assertEquals(9, b.getFloat(40));
+        w.putDefault(48, GlslType.VEC3.withArray(2), List.of(1f, 2f, 3f, 4f, 5f, 6f));
+        assertEquals(3, b.getFloat(56));
+        assertEquals(4, b.getFloat(64));
+        assertEquals(6, b.getFloat(72));
+        w.putDefault(80, GlslType.vector(ScalarKind.INT, 2), List.of(5f, -1f));
+        assertEquals(5, b.getInt(80));
+        assertEquals(-1, b.getInt(84));
+        w.putDefault(96, GlslType.BOOL, List.of(1f));
+        assertEquals(1, b.getInt(96));
+    }
+
+    @Test
+    void writerConvertsBuiltinValuesToTheDeclaredType() {
+        ByteBuffer b = buffer(16);
+        Std140Writer target = new Std140Writer(b);
+        UniformWriter out = new UniformWriter();
+        out.bind(target, 0, GlslType.INT).putBool(true);
+        out.bind(target, 4, GlslType.BOOL).putInt(5);
+        out.bind(target, 8, GlslType.vector(ScalarKind.FLOAT, 2)).putVec3(1, 2, 3);
+        assertEquals(1, b.getInt(0));
+        assertEquals(1, b.getInt(4));
+        assertEquals(1.0f, b.getFloat(8));
+        assertEquals(2.0f, b.getFloat(12));
+    }
+}

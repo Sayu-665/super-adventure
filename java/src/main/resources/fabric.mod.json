@@ -11,6 +11,7 @@
     "client": ["dev.shaderbridge.ShaderBridgeClient"]
   },
   "mixins": ["shaderbridge.mixins.json"],
+  "accessWidener": "shaderbridge.classtweaker",
   "depends": {
     "fabricloader": ">=0.19.5",
     "minecraft": "~26.3",

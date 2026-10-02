@@ -17,6 +17,10 @@ repositories {
     }
 }
 
+loom {
+    accessWidenerPath = file("src/main/resources/shaderbridge.classtweaker")
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -27,15 +31,109 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+// ---------------------------------------------------------------------------------------------
+// Native library (crates/sb-jni) built with cargo and packaged as /natives/<os>-<arch>/<lib>.
+// Skippable with -PskipNative; skipped with a warning when cargo or the sb-jni crate is missing.
+// ---------------------------------------------------------------------------------------------
+
+def repositoryRoot = rootProject.projectDir.parentFile
+def skipNative = project.hasProperty("skipNative")
+def nativeResourceRoot = layout.buildDirectory.dir("generated/natives")
+
+static String nativePlatform() {
+    String os = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+    String arch = System.getProperty("os.arch").toLowerCase(Locale.ROOT)
+    String osName = os.contains("win") ? "windows" : (os.contains("mac") || os.contains("darwin")) ? "macos" : "linux"
+    String archName = (arch == "amd64" || arch == "x86_64") ? "x86_64" : (arch == "aarch64" || arch == "arm64") ? "aarch64" : arch
+    return osName + "-" + archName
+}
+
+static String nativeLibraryFile() {
+    String os = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+    return os.contains("win") ? "sb_jni.dll" : (os.contains("mac") || os.contains("darwin")) ? "libsb_jni.dylib" : "libsb_jni.so"
+}
+
+abstract class BuildNativeTask extends DefaultTask {
+    @Internal abstract DirectoryProperty getRepoRoot()
+    @Internal abstract DirectoryProperty getCargoTargetDir()
+    @Input abstract Property<String> getPlatform()
+    @Input abstract Property<String> getLibraryFile()
+    @OutputDirectory abstract DirectoryProperty getOutputRoot()
+
+    @Inject abstract ExecOperations getExecOperations()
+
+    @TaskAction
+    void build() {
+        File stagingDir = new File(outputRoot.get().asFile, "natives/" + platform.get())
+        stagingDir.deleteDir()
+        File root = repoRoot.get().asFile
+        if (!new File(root, "crates/sb-jni/Cargo.toml").isFile()) {
+            logger.warn("buildNative: crates/sb-jni not found; the jar will not contain the native library")
+            return
+        }
+        if (!cargoAvailable()) {
+            logger.warn("buildNative: cargo not found on PATH; the jar will not contain the native library")
+            return
+        }
+        execOperations.exec {
+            workingDir root
+            commandLine "cargo", "build", "-p", "sb-jni", "--release"
+        }
+        File library = new File(cargoTargetDir.get().asFile, "release/" + libraryFile.get())
+        if (!library.isFile()) {
+            logger.warn("buildNative: cargo did not produce {} (sb-jni is not a cdylib yet); skipping", library)
+            return
+        }
+        stagingDir.mkdirs()
+        java.nio.file.Files.copy(library.toPath(), new File(stagingDir, libraryFile.get()).toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        logger.lifecycle("buildNative: packaged {} as natives/{}/{}", library, platform.get(), libraryFile.get())
+    }
+
+    private boolean cargoAvailable() {
+        try {
+            def output = new ByteArrayOutputStream()
+            def result = execOperations.exec {
+                commandLine "cargo", "--version"
+                standardOutput = output
+                errorOutput = output
+                ignoreExitValue = true
+            }
+            return result.exitValue == 0
+        } catch (Exception ignored) {
+            return false
+        }
+    }
+}
+
+def buildNative = tasks.register("buildNative", BuildNativeTask) {
+    group = "build"
+    description = "Builds crates/sb-jni with cargo and stages it as a jar resource (skip with -PskipNative)."
+    repoRoot.set(repositoryRoot)
+    cargoTargetDir.set(new File(System.getenv("CARGO_TARGET_DIR") ?: new File(repositoryRoot, "target").path))
+    platform.set(nativePlatform())
+    libraryFile.set(nativeLibraryFile())
+    outputRoot.set(nativeResourceRoot)
+    onlyIf("not disabled with -PskipNative") { !skipNative }
+    // cargo tracks its own inputs; always ask it.
+    outputs.upToDateWhen { false }
+}
+
+sourceSets.main.resources.srcDir(nativeResourceRoot)
+
 processResources {
-    inputs.property "version", project.version
+    def modVersion = project.version
+    dependsOn buildNative
+    inputs.property "version", modVersion
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version": modVersion
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
     it.options.release = 25
+    it.options.encoding = "UTF-8"
+    it.options.compilerArgs += ["-Xlint:all,-serial,-processing,-classfile", "-Werror"]
 }
 
 java {
@@ -44,6 +142,17 @@ java {
     targetCompatibility = JavaVersion.VERSION_25
 }
 
+tasks.named("sourcesJar") {
+    dependsOn buildNative
+    exclude "natives/**"
+}
+
 test {
     useJUnitPlatform()
+    // Minecraft's log4j configuration writes logs/ into the working directory.
+    def testRunDir = layout.buildDirectory.dir("test-run").get().asFile
+    workingDir = testRunDir
+    doFirst { testRunDir.mkdirs() }
+    systemProperty "shaderbridge.repoRoot", repositoryRoot.absolutePath
+    systemProperty "shaderbridge.nativeDir", nativeResourceRoot.get().asFile.absolutePath
 }
