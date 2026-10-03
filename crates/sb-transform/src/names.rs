@@ -59,6 +59,21 @@ pub fn is_extension_builtin(name: &str) -> bool {
     matches!(name, "min3" | "max3" | "mid3" | "cubeFaceIndexAMD" | "cubeFaceCoordAMD" | "timeAMD")
 }
 
+/// The `GL_KHR_shader_subgroup_vote` equivalent of a GLSL 4.60 / `GL_ARB_shader_group_vote`
+/// vote function (`anyInvocation[ARB]` -> `subgroupAny`, ...). glslang lowers the
+/// former to `SPV_KHR_subgroup_vote`, which Vulkan accepts only with the
+/// `VK_EXT_shader_subgroup_vote` extension; the subgroup forms are core Vulkan 1.1
+/// operations. Both act on an implementation-defined group of invocations, so the
+/// subgroup is a valid choice of group.
+pub fn group_vote_function(name: &str) -> Option<&'static str> {
+    match name.strip_suffix("ARB").unwrap_or(name) {
+        "anyInvocation" => Some("subgroupAny"),
+        "allInvocations" => Some("subgroupAll"),
+        "allInvocationsEqual" => Some("subgroupAllEqual"),
+        _ => None,
+    }
+}
+
 /// Whether `name` is a GLSL 4.60 built-in function.
 pub fn is_builtin_function(name: &str) -> bool {
     BUILTIN_FUNCTIONS.contains(&name)
@@ -312,6 +327,16 @@ pub fn is_kept_extension(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_vote_functions_map_to_subgroup_vote() {
+        assert_eq!(group_vote_function("anyInvocation"), Some("subgroupAny"));
+        assert_eq!(group_vote_function("anyInvocationARB"), Some("subgroupAny"));
+        assert_eq!(group_vote_function("allInvocations"), Some("subgroupAll"));
+        assert_eq!(group_vote_function("allInvocationsEqualARB"), Some("subgroupAllEqual"));
+        assert_eq!(group_vote_function("subgroupAny"), None);
+        assert_eq!(group_vote_function("ARB"), None);
+    }
 
     #[test]
     fn legacy_texture_names() {

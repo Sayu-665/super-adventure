@@ -182,20 +182,40 @@ tasks.named("sourcesJar") {
     exclude "natives/**"
 }
 
-test {
-    useJUnitPlatform()
-    // Minecraft's log4j configuration writes logs/ into the working directory.
-    def testRunDir = layout.buildDirectory.dir("test-run").get().asFile
-    workingDir = testRunDir
-    doFirst { testRunDir.mkdirs() }
-    systemProperty "shaderbridge.repoRoot", repositoryRoot.absolutePath
-    systemProperty "shaderbridge.nativeDir", nativeResourceRoot.get().asFile.absolutePath
+// Loading the native library is process-wide and permanent, so the tests that load it run in
+// their own JVM (nativeTest); the others (test) must see the "library missing" state.
+def nativeTestClasses = ["dev.shaderbridge.pack.NativeSmokeTest", "dev.shaderbridge.natives.NativeCorpusSmokeTest"]
 
-    // The native smoke tests load the library cargo built (target/release/libsb_jni.so, honouring
-    // $CARGO_TARGET_DIR) when buildNative produced it, and skip themselves otherwise (-PskipNative,
-    // no cargo). NativeCorpusSmokeTest also needs a shader pack corpus directory containing
-    // ComplementaryReimagined: -Pshaderbridge.corpus=<dir> or $SB_CORPUS_DIR.
+tasks.withType(Test).configureEach { Test task ->
+    task.useJUnitPlatform()
+    // Minecraft's log4j configuration writes logs/ into the working directory.
+    def testRunDir = layout.buildDirectory.dir(task.name + "-run").get().asFile
+    task.workingDir = testRunDir
+    task.doFirst { testRunDir.mkdirs() }
+    task.systemProperty "shaderbridge.repoRoot", repositoryRoot.absolutePath
+    task.systemProperty "shaderbridge.nativeDir", nativeResourceRoot.get().asFile.absolutePath
+}
+
+test {
+    filter {
+        nativeTestClasses.each { excludeTestsMatching it }
+    }
+}
+
+// The native tests load the library cargo built (target/release/libsb_jni.so, honouring
+// $CARGO_TARGET_DIR) when buildNative produced it, and skip themselves otherwise (-PskipNative,
+// no cargo). NativeCorpusSmokeTest also needs a shader pack corpus directory containing
+// ComplementaryReimagined: -Pshaderbridge.corpus=<dir> or $SB_CORPUS_DIR.
+def nativeTest = tasks.register("nativeTest", Test) {
+    group = "verification"
+    description = "Runs the tests that load the real native library (in a JVM of their own)."
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter {
+        nativeTestClasses.each { includeTestsMatching it }
+    }
     dependsOn buildNative
+    shouldRunAfter test
     def builtLibrary = new File(cargoTargetRoot, "release/" + nativeLibraryFile())
     def corpusDir = project.findProperty("shaderbridge.corpus") ?: System.getenv("SB_CORPUS_DIR")
     inputs.property("shaderbridge.corpus", corpusDir == null ? "" : file(corpusDir).absolutePath)
@@ -207,4 +227,8 @@ test {
             systemProperty "shaderbridge.corpus", file(corpusDir).absolutePath
         }
     }
+}
+
+tasks.named("check") {
+    dependsOn nativeTest
 }

@@ -4,11 +4,12 @@
 //!
 //! * reads of depth textures (`depthtex*`, `dhDepthTex*`, `shadowtex*` sampled without
 //!   comparison) become `vec4(1.0 - read.x)` (`vec4(1.0) - read` for gathers);
-//! * comparison lookups flip their reference (`1.0 - ref`); the host compares with
-//!   `GEQUAL`;
+//! * comparison lookups flip their reference (`1.0 - ref`, including the separate
+//!   `refZ` argument of comparison `textureGather*`); the host compares with `GEQUAL`;
 //! * user functions that receive a depth sampler are cloned (`sb_depth_<mask>_<name>`)
 //!   with their reads rewritten;
-//! * fragment `gl_FragCoord.z` reads and `gl_FragDepth` writes are flipped.
+//! * fragment `gl_FragCoord.z` reads and `gl_FragDepth` writes are flipped, and with
+//!   them the `depth_greater`/`depth_less` conservative-depth layouts.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -93,6 +94,31 @@ fn fragment(w: &mut StageWork) {
     if unsupported {
         w.warn("xf.depth-write", "`gl_FragDepth++`/`--` is not converted for reversed depth", 0);
     }
+    flip_conservative_depth(&mut w.unit);
+}
+
+/// The stored depth is `1 - x` of the depth the pack writes, so a conservative-depth
+/// promise about the pack's value is the opposite promise about the stored one:
+/// `layout(depth_greater) out float gl_FragDepth;` becomes `depth_less` and vice versa
+/// (left unchanged, the device could resolve the depth test early on a promise the
+/// written depth breaks). `depth_any` and `depth_unchanged` hold either way.
+fn flip_conservative_depth(unit: &mut TranslationUnit) {
+    for item in &mut unit.items {
+        let ItemKind::Decl(d) = &mut item.kind else { continue };
+        if !d.vars.iter().any(|v| v.name == "gl_FragDepth") {
+            continue;
+        }
+        for q in &mut d.ty.quals {
+            let Qualifier::Layout(ids) = q else { continue };
+            for id in ids.iter_mut() {
+                if id.name.eq_ignore_ascii_case("depth_greater") {
+                    id.name = "depth_less".into();
+                } else if id.name.eq_ignore_ascii_case("depth_less") {
+                    id.name = "depth_greater".into();
+                }
+            }
+        }
+    }
 }
 
 /// `1.0 - e`
@@ -171,13 +197,21 @@ fn rewrite_expr(
             Some(Depth::Compare(shape)) => {
                 let proj = name.starts_with("textureProj");
                 match shape {
+                    // textureGather[Offset[s]](s, P, refZ[, offset]): the reference is a
+                    // separate argument for every comparison sampler type.
+                    _ if name.starts_with("textureGather") => {
+                        if args.len() >= 3 {
+                            let r = std::mem::replace(&mut args[2], Expr::Int(0));
+                            args[2] = one_minus(r);
+                        }
+                    }
                     CmpShape::Arg => {
                         if args.len() >= 3 {
                             let r = std::mem::replace(&mut args[2], Expr::Int(0));
                             args[2] = Expr::Binary(BinaryOp::Sub, Box::new(Expr::Float(1.0)), Box::new(r));
                         }
                     }
-                    _ if args.len() >= 2 && !name.starts_with("textureGather") => {
+                    _ if args.len() >= 2 => {
                         let helper = match (shape, proj) {
                             (_, true) => "sb_revRefProj",
                             (CmpShape::W4, false) => "sb_revRef4",

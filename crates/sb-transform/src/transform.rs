@@ -22,7 +22,11 @@ pub struct TransformOptions {
     /// viewport). Default false.
     pub flip_y: bool,
     /// Alpha test on fragment output 0 (`alphaTest.<prog>` or the program default);
-    /// `None` for fullscreen/compute programs.
+    /// `None` for fullscreen/compute programs. As in Iris (`CommonTransformer`), it is
+    /// applied (after the pack's `main`, so early returns are tested too) only to
+    /// compatibility-path fragment stages (version below 150, or the `compatibility`
+    /// profile) that write `gl_FragData[0]` / `gl_FragColor`; other stages test alpha
+    /// themselves against `alphaTestRef` (an `xf.alpha-test` info is reported).
     pub alpha_test: Option<AlphaTest>,
     /// Sampler visibility class of the program.
     pub program_class: ProgramClass,

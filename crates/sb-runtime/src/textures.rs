@@ -17,6 +17,8 @@ pub trait TextureSource {
     fn read(&self, path: &str) -> Option<Vec<u8>>;
 
     /// Read a resource location such as `minecraft:textures/block/stone.png` (PNG bytes).
+    /// When this returns `None`, the block atlas, sun, moon and cloud locations fall back to
+    /// the synthetic scene's own textures.
     fn resource(&self, location: &str) -> Option<Vec<u8>> {
         let _ = location;
         None
@@ -350,6 +352,28 @@ pub(crate) fn sun_texture() -> TextureData {
     TextureData::rgba8(32, 32, px)
 }
 
+/// The cloud map (256x256, like vanilla `clouds.png`): opaque white cells where smoothed
+/// block noise is high, transparent elsewhere.
+pub(crate) fn cloud_texture() -> TextureData {
+    const SIZE: u32 = 256;
+    const CELL: u32 = 8;
+    let cells = SIZE / CELL;
+    let coarse = |cx: u32, cy: u32| pixel_noise(cx % cells, cy % cells, 900);
+    let mut px = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (cx, cy) = (x / CELL + cells, y / CELL + cells);
+            let mut sum = 0.0;
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (cells - 1, 0), (0, cells - 1)] {
+                sum += coarse(cx + dx, cy + dy);
+            }
+            let v = sum / 5.0 + 0.15 * (pixel_noise(x / 2, y / 2, 901) - 0.5);
+            px.extend_from_slice(&if v > 0.56 { [255, 255, 255, 255] } else { [255, 255, 255, 0] });
+        }
+    }
+    TextureData::rgba8(SIZE, SIZE, px)
+}
+
 /// The moon phases texture (64x32, 4x2 phases of 16 px).
 pub(crate) fn moon_texture() -> TextureData {
     let mut px = Vec::with_capacity(64 * 32 * 4);
@@ -385,6 +409,26 @@ fn decode_png(bytes: &[u8]) -> Result<TextureData, String> {
     Ok(TextureData::rgba8(w, h, rgba.into_raw()))
 }
 
+/// The synthetic scene's own texture for a vanilla resource location, used when the
+/// [`TextureSource`] has no resources: packs bind `minecraft:textures/atlas/blocks.png`
+/// as a custom texture (Rethinking Voxels voxelizes block colours from it), the
+/// celestial textures and `clouds.png` (bloop samples it as a cloud map). The namespace
+/// defaults to `minecraft`, as in resource locations.
+pub(crate) fn builtin_resource(location: &str) -> Option<TextureData> {
+    let location = location.trim();
+    let path = location.strip_prefix("minecraft:").unwrap_or(location);
+    if location.contains(':') && !location.starts_with("minecraft:") {
+        return None;
+    }
+    match path {
+        "textures/atlas/blocks.png" => Some(block_atlas()),
+        "textures/environment/sun.png" => Some(sun_texture()),
+        "textures/environment/moon_phases.png" => Some(moon_texture()),
+        "textures/environment/clouds.png" => Some(cloud_texture()),
+        _ => None,
+    }
+}
+
 /// Load a pack texture. `dynamic` resolves `minecraft:dynamic/*` names.
 pub(crate) fn load(src: &model::TextureSource, files: &dyn TextureSource, dynamic: &dyn Fn(&str) -> Option<TextureData>) -> Result<TextureData, String> {
     match src {
@@ -392,10 +436,10 @@ pub(crate) fn load(src: &model::TextureSource, files: &dyn TextureSource, dynami
             let bytes = files.read(path).ok_or_else(|| format!("`{path}` not found"))?;
             decode_png(&bytes).map_err(|e| format!("`{path}`: {e}"))
         }
-        model::TextureSource::Resource { location } => {
-            let bytes = files.resource(location).ok_or_else(|| format!("resource `{location}` not available"))?;
-            decode_png(&bytes).map_err(|e| format!("`{location}`: {e}"))
-        }
+        model::TextureSource::Resource { location } => match files.resource(location) {
+            Some(bytes) => decode_png(&bytes).map_err(|e| format!("`{location}`: {e}")),
+            None => builtin_resource(location).ok_or_else(|| format!("resource `{location}` not available")),
+        },
         model::TextureSource::Dynamic { name } => dynamic(name).ok_or_else(|| format!("dynamic texture `{name}` is not provided")),
         model::TextureSource::Raw { path, target, format, size, pixel_format, pixel_type, .. } => {
             let transfer = PixelTransfer::parse(pixel_format, pixel_type).ok_or_else(|| format!("`{path}`: unsupported pixel format {pixel_format}/{pixel_type}"))?;
@@ -441,6 +485,39 @@ mod tests {
         assert!(holes > 10 && holes < 128, "{holes}");
         let (wu, wv, _, _) = Tile::Water.uv_rect();
         assert_eq!(px((wu * 64.0) as u32, (wv * 64.0) as u32)[3], 184);
+    }
+
+    #[test]
+    fn vanilla_resources_fall_back_to_scene_textures() {
+        let atlas = model::TextureSource::Resource { location: "minecraft:textures/atlas/blocks.png".into() };
+        let loaded = load(&atlas, &NoTextures, &|_| None).expect("atlas");
+        assert_eq!(loaded, block_atlas());
+        let clouds = load(&model::TextureSource::Resource { location: "minecraft:textures/environment/clouds.png".into() }, &NoTextures, &|_| None).expect("clouds");
+        let covered = clouds.levels[0].chunks(4).filter(|p| p[3] == 255).count() as f64 / f64::from(256 * 256);
+        assert!((0.1..0.6).contains(&covered), "cloud cover {covered}");
+        let bare = model::TextureSource::Resource { location: "textures/environment/sun.png".into() };
+        assert_eq!(load(&bare, &NoTextures, &|_| None).expect("sun"), sun_texture());
+        for missing in ["minecraft:textures/block/stone.png", "mymod:textures/atlas/blocks.png", ""] {
+            let src = model::TextureSource::Resource { location: missing.into() };
+            assert!(load(&src, &NoTextures, &|_| None).is_err(), "{missing}");
+        }
+        // A source that has the resource wins over the built-in texture.
+        let png = {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 4])).write_to(&mut buf, image::ImageFormat::Png).expect("png");
+            buf.into_inner()
+        };
+        struct One(Vec<u8>);
+        impl TextureSource for One {
+            fn read(&self, _: &str) -> Option<Vec<u8>> {
+                None
+            }
+            fn resource(&self, _: &str) -> Option<Vec<u8>> {
+                Some(self.0.clone())
+            }
+        }
+        let own = load(&atlas, &One(png), &|_| None).expect("own atlas");
+        assert_eq!((own.width, own.height), (2, 2));
     }
 
     #[test]

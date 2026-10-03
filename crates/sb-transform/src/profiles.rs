@@ -484,7 +484,7 @@ fn hardcoded_default(key: &str) -> Option<&'static str> {
         "color" => "vec4(1.0)",
         "uv0" | "mid_tex_coord" => "vec4(0.0, 0.0, 0.0, 1.0)",
         "lightmap" => "vec4(240.0, 240.0, 0.0, 1.0)",
-        "normal" => "vec3(0.0, 1.0, 0.0)",
+        "normal" => "vec3(0.0, 0.0, 1.0)",
         "entity" => "vec4(-1.0, 0.0, 0.0, 0.0)",
         "tangent" => "vec4(1.0, 0.0, 0.0, 1.0)",
         "mid_block" => "vec4(0.0)",

@@ -437,8 +437,10 @@ impl<'r> Executor<'r> {
         };
         let dynamic = |name: &str| (name.contains("lightmap") || name.contains("light_map")).then(|| lightmap_data.clone());
         for ct in &dim.targets.custom_textures {
+            // Raw `texture.<stage>.<name>` entries carry their dimension in the id; every
+            // `customTexture.<name>` (stage `custom`), raw or not, is `custom.<name>`.
             let id = match &ct.source {
-                sb_core::model::TextureSource::Raw { target, .. } => sb_uniforms::raw_texture_id(&ct.stage, &ct.sampler, target),
+                sb_core::model::TextureSource::Raw { target, .. } if ct.stage != sb_uniforms::CUSTOM_STAGE => sb_uniforms::raw_texture_id(&ct.stage, &ct.sampler, target),
                 _ => sb_uniforms::custom_texture_id(&ct.stage, &ct.sampler),
             };
             let key = SamplerKey { linear: ct.blur, mipmapped: false, mip_linear: false, repeat: !ct.clamp, compare: None };

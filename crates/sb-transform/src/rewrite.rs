@@ -37,10 +37,19 @@ pub(crate) fn rewrite_stage(w: &mut StageWork, ctx: &Ctx) {
 
 /// After linking: geometry-stage `EmitVertex()` hooks.
 pub(crate) fn finish_stage(w: &mut StageWork, _ctx: &Ctx) {
-    if w.stage != ShaderStage::Geometry || w.emit_hooks.is_empty() {
+    if w.stage != ShaderStage::Geometry || (w.emit_hooks.is_empty() && w.emit_position.is_empty()) {
         return;
     }
-    let hooks = w.emit_hooks.join("\n    ");
+    let mut pre: Vec<String> = w.emit_hooks.clone();
+    let mut post: Vec<String> = Vec::new();
+    if !w.emit_position.is_empty() {
+        // The remap applies to the emitted vertex only (see `StageWork::emit_position`).
+        pre.push("vec4 sb_packPosition = gl_Position;".into());
+        pre.extend(w.emit_position.iter().cloned());
+        post.push("gl_Position = sb_packPosition;".into());
+    }
+    let hooks = pre.join("\n    ");
+    let restore: String = post.iter().map(|s| format!("\n    {s}")).collect();
     // `EmitStreamVertex` needs a constant stream: one helper per stream expression (a
     // literal or a global constant in practice).
     let mut streams: Vec<String> = Vec::new();
@@ -62,11 +71,11 @@ pub(crate) fn finish_stage(w: &mut StageWork, _ctx: &Ctx) {
     });
     // Prototypes before the pack code, definitions after it (hooks reference pack outputs).
     w.piece(Section::Late, &["sb_emitVertex"], "void sb_emitVertex();");
-    w.piece(Section::Tail, &["sb_emitVertex"], format!("void sb_emitVertex() {{\n    {hooks}\n    EmitVertex();\n}}"));
+    w.piece(Section::Tail, &["sb_emitVertex"], format!("void sb_emitVertex() {{\n    {hooks}\n    EmitVertex();{restore}\n}}"));
     for (k, stream) in streams.iter().enumerate() {
         let name = format!("sb_emitStreamVertex{k}");
         w.piece(Section::Late, &[&name], format!("void {name}();"));
-        w.piece(Section::Tail, &[&name], format!("void {name}() {{\n    {hooks}\n    EmitStreamVertex({stream});\n}}"));
+        w.piece(Section::Tail, &[&name], format!("void {name}() {{\n    {hooks}\n    EmitStreamVertex({stream});{restore}\n}}"));
     }
 }
 
@@ -314,7 +323,8 @@ pub(crate) fn is_builtin_type(n: &str) -> bool {
     GlslType::parse(n).is_some() || matches!(n, "void" | "atomic_uint") || sb_uniforms::is_opaque_type(n) || n.starts_with("sampler") || n.starts_with("isampler") || n.starts_with("usampler") || n.starts_with("image") || n.starts_with("iimage") || n.starts_with("uimage")
 }
 
-/// Legacy sampling calls (`texture2D` -> `texture`, `shadow2D(..)` -> `vec4(texture(..))`)
+/// Legacy sampling calls (`texture2D` -> `texture`, `shadow2D(..)` -> `vec4(texture(..))`),
+/// group votes (`anyInvocation` -> `subgroupAny`, see [`names::group_vote_function`])
 /// and pack functions that clash with GLSL 4.60 built-ins or legacy names (renamed to
 /// `sb_u_<name>` with the calls that match their arity).
 fn legacy_and_collisions(w: &mut StageWork) {
@@ -349,10 +359,16 @@ fn legacy_and_collisions(w: &mut StageWork) {
     }
     let trinary = w.src.extensions.iter().any(|e| e.name == "GL_AMD_shader_trinary_minmax" && e.behavior != "disable");
     let mut polyfills: BTreeSet<&'static str> = BTreeSet::new();
+    let mut vote = false;
     w.unit.walk_exprs_mut(&mut |e| {
         if let Expr::Call(Callee::Name(n), args) = e {
             if user.get(n.as_str()).is_some_and(|a| a.contains(&args.len())) {
                 *n = format!("sb_u_{n}");
+                return Walk::Children;
+            }
+            if let Some(core) = names::group_vote_function(n) {
+                *n = core.to_string();
+                vote = true;
                 return Walk::Children;
             }
             if trinary && args.len() == 3 {
@@ -378,6 +394,9 @@ fn legacy_and_collisions(w: &mut StageWork) {
         }
         Walk::Children
     });
+    if vote {
+        w.extensions.insert("GL_KHR_shader_subgroup_vote".into());
+    }
     // GL_AMD_shader_trinary_minmax only exists on AMD hardware: emulate it.
     let half = w.src.extensions.iter().any(|e| e.name.starts_with("GL_EXT_shader_explicit_arithmetic_types") && e.behavior != "disable");
     for p in polyfills {
@@ -832,12 +851,6 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
             _ => "float",
         });
         d.ty.quals.retain(|q| !matches!(q, Qualifier::Layout(_)));
-        if logical == 0 {
-            alpha_target = Some(if count > 1 { format!("{name}[0]") } else { name.clone() });
-            if d.ty.ty.name() != Some("vec4") {
-                alpha_target = None;
-            }
-        }
         let physical: Vec<Option<u32>> = (0..count).map(|k| phys(logical + k)).collect();
         let consecutive = physical[0].is_some_and(|p0| physical.iter().zip(0..).all(|(p, k)| *p == Some(p0 + k)));
         if consecutive {
@@ -875,7 +888,10 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
     }
     // gl_FragData.
     if dynamic {
-        let n = ctx.opts.output_locations.as_ref().map_or(8, |v| v.len().max(1) as u32).max(literal.iter().max().map_or(0, |m| m + 1));
+        // gl_FragData has gl_MaxDrawBuffers (8) elements whatever the attachments: a
+        // dynamic index may address any of them (indices without an attachment are
+        // simply not copied out), so the array never shrinks below 8.
+        let n = ctx.opts.output_locations.as_ref().map_or(8, |v| v.len() as u32).max(8).max(literal.iter().max().map_or(0, |m| m + 1));
         w.unit.walk_exprs_mut(&mut |e| {
             if let Expr::Ident(n) = e
                 && n == "gl_FragData"
@@ -895,7 +911,7 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
                 w.epilogue.push(format!("sb_FragData{i} = sb_FragDataArr[{i}];"));
             }
         }
-        if alpha_target.is_none() {
+        if literal.contains(&0) {
             alpha_target = Some("sb_FragDataArr[0]".into());
         }
     } else if !literal.is_empty() {
@@ -950,25 +966,36 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
         w.unit.items.retain(|i| !matches!(&i.kind, ItemKind::Decl(d) if d.vars.iter().any(|v| v.name == "gl_FragDepth")));
         w.warn("xf.frag-depth", "gl_FragDepth is read but never written; reads use gl_FragCoord.z", 0);
     }
-    // Alpha test.
-    if let Some(at) = ctx.opts.alpha_test
-        && let Some(target) = alpha_target
-    {
-        use sb_core::program::AlphaFunc;
-        match at.func {
-            AlphaFunc::Always => {}
-            AlphaFunc::Never => w.epilogue.push("discard;".into()),
-            func => {
-                let op = func.glsl_op().unwrap_or(">");
-                let reference = if ctx.pack.members.get("alphaTestRef", GlslType::FLOAT).is_some_and(|m| m.member == "alphaTestRef") {
-                    "alphaTestRef".to_string()
-                } else {
-                    let mut s = String::new();
-                    s.push_str(&format!("{:?}", at.reference));
-                    s
-                };
-                w.epilogue.push(format!("if (!({target}.a {op} {reference})) discard;"));
+    // Alpha test (Iris `CommonTransformer`): only compatibility-path stages (version
+    // below 150 or the `compatibility` profile) that write `gl_FragData[0]` /
+    // `gl_FragColor` are tested. Core-profile stages and user-declared outputs test
+    // alpha themselves (with `alphaTestRef`); location 0 of such programs often holds
+    // packed data whose alpha is not coverage.
+    if let Some(at) = ctx.opts.alpha_test {
+        match alpha_target {
+            Some(target) if w.src.info.compat => {
+                use sb_core::program::AlphaFunc;
+                match at.func {
+                    AlphaFunc::Always => {}
+                    AlphaFunc::Never => w.epilogue.push("discard;".into()),
+                    func => {
+                        let op = func.glsl_op().unwrap_or(">");
+                        let reference =
+                            if ctx.pack.members.get("alphaTestRef", GlslType::FLOAT).is_some_and(|m| m.member == "alphaTestRef") {
+                                "alphaTestRef".to_string()
+                            } else {
+                                crate::print::expr(&Expr::Float(at.reference))
+                            };
+                        w.epilogue.push(format!("if (!({target}.a {op} {reference})) discard;"));
+                    }
+                }
             }
+            _ if !matches!(at.func, sb_core::program::AlphaFunc::Always) => w.info(
+                "xf.alpha-test",
+                "no alpha test is applied: the stage does not write gl_FragData[0]/gl_FragColor in the compatibility profile (as in Iris, it tests alpha itself)",
+                0,
+            ),
+            _ => {}
         }
     }
 }
@@ -1041,7 +1068,7 @@ fn epilogues(w: &mut StageWork, ctx: &Ctx) {
         stmts.push("gl_Position.y = -gl_Position.y;".into());
     }
     if w.stage == ShaderStage::Geometry {
-        w.emit_hooks.extend(stmts);
+        w.emit_position.extend(stmts);
     } else {
         w.epilogue.extend(stmts);
     }

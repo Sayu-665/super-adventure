@@ -138,6 +138,23 @@ fn rule_c_type_mismatches_are_converted_to_the_consumer_type() {
     );
     assert!(out.has_diag("xf.varying-type"));
     linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+    // Each repair is reported once (the link diagnostics used to be reported twice).
+    assert_eq!(out.prog.diagnostics.iter().filter(|d| d.code == "xf.varying-type").count(), 2);
+}
+
+#[test]
+fn rule_c_pads_wider_consumer_vectors_with_zeros() {
+    // Iris pads with zeros, `w` included (`vec4(tmp, vec4(0))`); 1 in `w` is only for
+    // vertex attributes.
+    let vs = "#version 130\nout vec3 normal;\nout vec2 uv;\nflat out int id;\nvoid main() { gl_Position = ftransform(); normal = vec3(0.0, 1.0, 0.0); uv = vec2(0.5); id = 3; }\n";
+    let fs = "#version 130\nin vec4 normal;\nin vec4 uv;\nflat in ivec4 id;\nvoid main() { gl_FragData[0] = normal + uv + vec4(id); }\n";
+    let out = T::fullscreen().vs(vs).fs(fs).run();
+    contains_all(
+        out.vs(),
+        &["normal = vec4((sb_tmp_normal), float(0));", "uv = vec4((sb_tmp_uv), float(0), float(0));", "id = ivec4((sb_tmp_id), int(0), int(0), int(0));"],
+    );
+    contains_none(out.vs(), &["float(1)", "int(1)"]);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
 }
 
 #[test]

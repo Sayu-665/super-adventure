@@ -139,7 +139,7 @@ fn vertex_attributes_follow_the_profile_semantics() {
     contains_all(
         out.vs(),
         &[
-            "vec4 sb_mc_Entity = vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 0.0);",
+            "vec4 sb_mc_Entity = vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 1.0);",
             "vec4 mc_Entity = sb_mc_Entity;",
             "vec2 mc_midTexCoord = vec2((sb_mc_midTexCoord).xy);",
             "vec4 sb_gl_MultiTexCoord1 = vec4(vec2(UV2), 0.0, 1.0);",
@@ -355,4 +355,63 @@ fn dh_generic_provides_iris_texture_stubs() {
     let fs = "#version 330\nout vec4 c;\nvoid main() { c = dh_hasTexture() ? dh_sampleTexture() : vec4(0.5); }\n";
     let out = T::new("dh_generic").vs(vs).fs(fs).run();
     contains_all(out.fs(), &["bool dh_hasTexture()", "return false;", "vec4 dh_sampleTexture()"]);
+}
+
+/// Vertex-stage expression a profile feeds a compatibility builtin with (the generated
+/// semantic global's initializer).
+fn semantic_init(out: &Out, global: &str) -> String {
+    let v = out.vs();
+    let start = v.find(&format!(" {global} = ")).unwrap_or_else(|| panic!("no `{global}` in\n{v}"));
+    let rest = &v[start + global.len() + 4..];
+    rest[..rest.find(";\n").unwrap()].to_string()
+}
+
+#[test]
+fn builtins_missing_from_a_vertex_format_read_iris_defaults() {
+    // Iris VanillaTransformer: formats without normals read gl_Normal = (0, 0, 1) (GL's
+    // initial normal); formats without texture coordinates read (0.5, 0.5, 0, 1).
+    let vs = "#version 120\nvarying vec4 v;\nvoid main() { gl_Position = ftransform(); v = vec4(gl_Normal, 1.0) + gl_MultiTexCoord0; }\n";
+    let fs = "#version 120\nvarying vec4 v;\nvoid main() { gl_FragData[0] = v; }\n";
+    for (p, normal, uv0) in [
+        ("vanilla_particle", "vec3(0.0, 0.0, 1.0)", "vec4(UV0, 0.0, 1.0)"),
+        ("vanilla_position", "vec3(0.0, 0.0, 1.0)", "vec4(0.5, 0.5, 0.0, 1.0)"),
+        ("vanilla_position_color", "vec3(0.0, 0.0, 1.0)", "vec4(0.5, 0.5, 0.0, 1.0)"),
+        ("vanilla_position_tex", "vec3(0.0, 0.0, 1.0)", "vec4(UV0, 0.0, 1.0)"),
+        ("vanilla_position_tex_color", "vec3(0.0, 0.0, 1.0)", "vec4(UV0, 0.0, 1.0)"),
+        ("vanilla_entity", "Normal", "vec4(UV0, 0.0, 1.0)"),
+        ("fullscreen", "vec3(0.0, 0.0, 1.0)", "vec4(sb_fullscreenUv(), 0.0, 1.0)"),
+    ] {
+        let out = T::new(p).vs(vs).fs(fs).run();
+        assert_eq!(semantic_init(&out, "sb_gl_Normal"), normal, "{p}");
+        assert_eq!(semantic_init(&out, "sb_gl_MultiTexCoord0"), uv0, "{p}");
+    }
+}
+
+#[test]
+fn fullscreen_lightmap_coordinates_follow_iris_composite() {
+    // Iris CompositeTransformer: gl_MultiTexCoord1..7 = vec4(0, 0, 0, 1) and every
+    // gl_TextureMatrix[i] is the identity.
+    let vs = "#version 120\nvarying vec2 lm;\nvoid main() { gl_Position = ftransform(); lm = (gl_TextureMatrix[1] * gl_MultiTexCoord1).st + (gl_TextureMatrix[2] * gl_MultiTexCoord2).st; }\n";
+    let fs = "#version 120\nvarying vec2 lm;\nvoid main() { gl_FragData[0] = vec4(lm, 0.0, 1.0); }\n";
+    let out = T::fullscreen().vs(vs).fs(fs).run();
+    assert_eq!(semantic_init(&out, "sb_gl_MultiTexCoord1"), "vec4(0.0, 0.0, 0.0, 1.0)");
+    assert_eq!(semantic_init(&out, "sb_LightmapMatrix"), "mat4(1.0)");
+    // World geometry keeps the OptiFine lightmap matrix (scale 1/256, offset 1/32).
+    let out = T::gbuffers().vs(vs).fs(fs).run();
+    assert!(semantic_init(&out, "sb_LightmapMatrix").contains("vec4(0.03125, 0.03125, 0.03125, 1.0)"));
+}
+
+#[test]
+fn dh_generic_normals_follow_the_box_face() {
+    // DH generic boxes are 24 vertices (north, south, west, east, bottom, top faces of 4
+    // vertices each): Iris DHGenericTransformer and DH's own shading derive the face
+    // from the vertex index.
+    let vs = "#version 120\nvarying vec3 n;\nvoid main() { gl_Position = ftransform(); n = gl_Normal; }\n";
+    let fs = "#version 120\nvarying vec3 n;\nvoid main() { gl_FragData[0] = vec4(n, 1.0); }\n";
+    let out = T::new("dh_generic").vs(vs).fs(fs).run();
+    assert_eq!(semantic_init(&out, "sb_gl_Normal"), "sb_dhGenericNormal()");
+    contains_all(
+        out.vs(),
+        &["int face = gl_VertexIndex % 24 / 4;", "if (face == 0) {\n        return vec3(0.0, 0.0, -1.0);", "if (face == 4) {\n        return vec3(0.0, -1.0, 0.0);", "return vec3(0.0, 1.0, 0.0);"],
+    );
 }

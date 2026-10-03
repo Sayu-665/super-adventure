@@ -56,12 +56,15 @@ fn dynamic_frag_data_index_uses_an_array() {
         &["vec4 sb_FragDataArr[8];", "sb_FragDataArr[i] = vec4(float(i));", "layout(location = 7) out vec4 sb_FragData7;", "sb_FragData7 = sb_FragDataArr[7];"],
     );
     assert_eq!(out.prog.fragment_outputs.len(), 8);
-    // With an attachment list, the array has one element per entry.
+    // With an attachment list, only the entries with an attachment are copied out; the
+    // array keeps gl_MaxDrawBuffers (8) elements, so a dynamic index past the list
+    // (legal in GL, the write is just dropped) stays in bounds.
     let out = T::fullscreen().vs(VS).fs(fs).with(|o| o.output_locations = Some(vec![4, 1, 2])).run();
     contains_all(
         out.fs(),
-        &["vec4 sb_FragDataArr[3];", "layout(location = 4) out vec4 sb_FragData0;", "layout(location = 1) out vec4 sb_FragData1;", "sb_FragData0 = sb_FragDataArr[0];"],
+        &["vec4 sb_FragDataArr[8];", "layout(location = 4) out vec4 sb_FragData0;", "layout(location = 1) out vec4 sb_FragData1;", "sb_FragData0 = sb_FragDataArr[0];"],
     );
+    contains_none(out.fs(), &["sb_FragData3 ="]);
     assert_eq!(outputs(&out), [(1, "float"), (2, "float"), (4, "float")]);
 }
 
@@ -174,10 +177,30 @@ fn alpha_test_epilogue() {
     let fs = "#version 150\nlayout(location = 0) out vec2 v;\nvoid main() { v = vec2(1.0); }\n";
     let out = T::gbuffers().with(at(AlphaFunc::Greater, 0.1)).vs(vs).fs(fs).run();
     contains_none(out.fs(), &["discard"]);
-    // A user output at location 0.
-    let fs = "#version 150\nout vec4 albedo;\nvoid main() { albedo = vec4(1.0); }\n";
-    let out = T::gbuffers().with(at(AlphaFunc::Less, 0.9)).vs(vs).fs(fs).run();
-    contains_all(out.fs(), &["if (!(albedo.a < alphaTestRef)) discard;"]);
+    // Iris tests alpha only in compatibility-path stages writing gl_FragData[0] /
+    // gl_FragColor: a user output at location 0 (here Photon's packed data: its alpha is
+    // light levels, not coverage) or a core-profile stage tests alpha itself.
+    for fs in [
+        "#version 150\nout vec4 albedo;\nvoid main() { albedo = vec4(1.0); }\n",
+        "#version 400 compatibility\nlayout(location = 0) out vec4 gbuffer_data_0;\nvoid main() { gbuffer_data_0 = vec4(0.5, 0.5, 0.5, 0.0); }\n",
+        "#version 330 core\nvoid main() { gl_FragData[0] = vec4(1.0); }\n",
+        "#version 150\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+        // Only a dynamically indexed gl_FragData: Iris leaves it alone (no iris_FragData0).
+        "#version 120\nuniform int frameCounter;\nvoid main() { gl_FragData[frameCounter & 1] = vec4(1.0); }\n",
+    ] {
+        let out = T::gbuffers().with(at(AlphaFunc::Greater, 0.1)).vs(vs).fs(fs).run();
+        contains_none(out.fs(), &["discard"]);
+        assert!(out.has_diag("xf.alpha-test"), "{fs}");
+    }
+    // The compatibility profile at a newer version is tested, as are mixed outputs.
+    for fs in [
+        "#version 330 compatibility\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+        "#version 130\nuniform int frameCounter;\nvoid main() { gl_FragData[0] = vec4(1.0); gl_FragData[frameCounter & 1] *= 0.5; }\n",
+    ] {
+        let out = T::gbuffers().with(at(AlphaFunc::Greater, 0.1)).vs(vs).fs(fs).run();
+        contains_all(out.fs(), &["alphaTestRef)) discard;"]);
+        assert!(!out.has_diag("xf.alpha-test"), "{fs}");
+    }
 }
 
 #[test]

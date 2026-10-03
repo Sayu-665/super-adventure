@@ -15,7 +15,8 @@ members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOf
 [semantics]
 position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
 color = "sb_hDynamic.ColorModulator"
-uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
+# No texture coordinates in this format: Iris's VanillaTransformer uses the texel centre.
+uv0 = "vec4(0.5, 0.5, 0.0, 1.0)"
 model_view = "sb_hDynamic.ModelViewMat"
 projection = "projectionMatrix"
 texture_matrix = "sb_hDynamic.TextureMat"

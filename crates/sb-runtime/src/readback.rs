@@ -43,6 +43,13 @@ pub(crate) fn to_rgba8(format: vk::Format, width: u32, height: u32, bytes: &[u8]
     out
 }
 
+/// Set the alpha of every pixel to 255.
+pub(crate) fn force_opaque(img: &mut image::RgbaImage) {
+    for p in img.pixels_mut() {
+        p[3] = 255;
+    }
+}
+
 impl Executor<'_> {
     /// Read level 0 of an image.
     pub(crate) fn read_image(&mut self, id: ImageId) -> Result<image::RgbaImage, RuntimeError> {
@@ -70,9 +77,14 @@ impl Executor<'_> {
         Ok(to_rgba8(format, ext.width, ext.height, &bytes, &|d| depth.gl_depth(d)))
     }
 
-    /// The final image.
+    /// The final image, opaque: it stands for Minecraft's window, which has no alpha
+    /// (Iris' final pass writes the main framebuffer, and the window is composited
+    /// opaque). A `final` program may leave alpha undefined (photon and Bliss declare
+    /// `out vec3`), so alpha is forced to 255 instead of keeping whatever the driver wrote.
     pub(crate) fn read_output(&mut self) -> Result<image::RgbaImage, RuntimeError> {
-        self.read_image(self.targets.output)
+        let mut img = self.read_image(self.targets.output)?;
+        force_opaque(&mut img);
+        Ok(img)
     }
 
     /// Every colortex / shadowcolor / depth target of the last frame.
@@ -129,5 +141,15 @@ mod tests {
         // Short data does not panic.
         let img = to_rgba8(vk::Format::R8G8B8A8_UNORM, 2, 2, &[1, 2], &|d| d);
         assert_eq!(img.dimensions(), (2, 2));
+    }
+
+    /// The final image is opaque even when the `final` program leaves alpha at 0
+    /// (`out vec3`), as Minecraft's window is.
+    #[test]
+    fn final_output_is_forced_opaque() {
+        let mut img = to_rgba8(vk::Format::R8G8B8A8_UNORM, 2, 1, &[10, 20, 30, 0, 40, 50, 60, 7], &|d| d);
+        force_opaque(&mut img);
+        assert_eq!(img.get_pixel(0, 0).0, [10, 20, 30, 255]);
+        assert_eq!(img.get_pixel(1, 0).0, [40, 50, 60, 255]);
     }
 }

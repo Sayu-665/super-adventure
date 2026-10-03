@@ -47,6 +47,36 @@ fn loose_uniforms_become_offset_members_of_the_frame_block() {
 }
 
 #[test]
+fn reflected_frame_members_sit_at_the_pack_layout_offsets() {
+    // Two programs declare overlapping sets of uniforms of every std140 shape (scalars,
+    // vec3 followed by a scalar, bool, matrices, arrays): every member a stage declares
+    // must sit, after glslang's own std140 layout, exactly at the pack-global offset,
+    // with std140 array and matrix strides, so the host writes one buffer for all.
+    let other = "#version 130\nuniform float a;\nuniform vec3 b;\nuniform int c;\nuniform mat3 m3;\nuniform float arr[3];\nuniform bool flag;\nuniform vec2 v2;\nuniform mat2 m2;\n\
+                 void main() { gl_FragData[0] = vec4(a + b.x + float(c) + m3[0][0] + arr[1] + float(flag) + v2.x + m2[1][1]); }\n";
+    let fs = "#version 130\nuniform vec2 v2;\nuniform float arr[3];\nuniform mat3 m3;\nuniform vec3 b;\nuniform ivec3 iv;\nuniform mat4 m4;\nuniform uint u;\nuniform mat2 m2;\nuniform bool flag;\nvarying vec2 uv;\n\
+              void main() { gl_FragData[0] = vec4(v2.x + arr[2] + m3[2][2] + b.z + float(iv.y) + m4[3][3] + float(u) + m2[1][0] + float(flag)); }\n";
+    let out = T::fullscreen().other(ShaderStage::Fragment, other, ProgramClass::Fullscreen).vs(VS).fs(fs).run();
+    let block = out.refl(ShaderStage::Fragment).descriptors.iter().find(|d| d.block_type_name.as_deref() == Some("sb_Frame")).unwrap();
+    let members = block.kind.members().unwrap();
+    assert_eq!(members.len(), 9);
+    for m in members {
+        let l = out.pack.layout.frame.member(&m.name).unwrap_or_else(|| panic!("{} is not in the layout", m.name));
+        assert_eq!(m.offset, l.offset, "offset of {}", m.name);
+        if l.ty.array.is_some() {
+            assert_eq!(m.array_stride, Some(16), "std140 array stride of {}", m.name);
+        }
+        if l.ty.is_matrix() {
+            assert_eq!(m.matrix_stride, Some(16), "std140 matrix stride of {}", m.name);
+        }
+    }
+    // Members never overlap.
+    let mut spans: Vec<(u32, u32)> = members.iter().map(|m| (m.offset, m.offset + m.size)).collect();
+    spans.sort();
+    assert!(spans.windows(2).all(|w| w[0].1 <= w[1].0), "{spans:?}");
+}
+
+#[test]
 fn renderpearl_target_has_no_set_or_binding() {
     let fs = "#version 130\nuniform float frameTimeCounter;\nuniform sampler2D colortex0;\nuniform sampler2D gaux1;\nvarying vec2 uv;\nvoid main() { gl_FragData[0] = texture2D(colortex0, uv) * texture2D(gaux1, uv) * frameTimeCounter; }\n";
     let out = T::fullscreen().with(|o| o.target = OutputTarget::Renderpearl).vs(VS).fs(fs).run();

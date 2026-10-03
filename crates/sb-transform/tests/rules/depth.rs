@@ -111,6 +111,30 @@ fn reversed_fragcoord_and_fragdepth() {
 }
 
 #[test]
+fn reversed_depth_flips_conservative_depth_layouts() {
+    // Parallax terrain (arc-shader) pushes depth away with `depth_greater`. The stored
+    // reversed depth (`1 - x`) then decreases: the promise must become `depth_less`, or
+    // the device may resolve the depth test early on a broken promise.
+    let modes = |out: &Out| -> Vec<String> {
+        out.refl(ShaderStage::Fragment).execution_modes.iter().map(|m| m.mode.clone()).filter(|m| m.starts_with("Depth")).collect()
+    };
+    for (decl, forward, reversed_mode) in [
+        ("depth_greater", "DepthGreater", "DepthLess"),
+        ("depth_less", "DepthLess", "DepthGreater"),
+        ("depth_unchanged", "DepthUnchanged", "DepthUnchanged"),
+    ] {
+        let fs = format!(
+            "#version 130\n#extension GL_ARB_conservative_depth : enable\nlayout({decl}) out float gl_FragDepth;\nvoid main() {{ gl_FragDepth = gl_FragCoord.z + 0.001; gl_FragData[0] = vec4(1.0); }}\n"
+        );
+        let out = T::fullscreen().vs(VS_UV).fs(&fs).run();
+        assert!(modes(&out).contains(&forward.to_string()), "{decl}: {:?}", modes(&out));
+        let out = reversed().vs(VS_UV).fs(&fs).run();
+        assert!(modes(&out).contains(&reversed_mode.to_string()), "{decl}: {:?}", modes(&out));
+        assert!(modes(&out).contains(&"DepthReplacing".to_string()));
+    }
+}
+
+#[test]
 fn reversed_comparison_lookups_flip_the_reference() {
     let fs = "#version 130\nuniform sampler2DShadow shadowtex0;\nuniform sampler2DShadow shadow;\nvarying vec2 texcoord;\nvoid main() {\n  float a = shadow2D(shadowtex0, vec3(texcoord, 0.5)).r;\n  float b = shadow2DProj(shadowtex0, vec4(texcoord, 0.5, 1.0)).x;\n  float c = texture(shadowtex0, vec3(texcoord, 0.25));\n  gl_FragData[0] = vec4(a + b + c);\n}\n";
     let out = reversed().vs(VS_UV.replace("uv", "texcoord").as_str()).fs(fs).run();
@@ -124,6 +148,55 @@ fn reversed_comparison_lookups_flip_the_reference() {
             "vec4 sb_revRefProj(vec4 p) { return vec4(p.xy, p.w - p.z, p.w); }",
         ],
     );
+}
+
+#[test]
+fn reversed_comparison_gathers_flip_their_reference_argument() {
+    // textureGather*(sampler*Shadow, P, refZ[, offset]): the reference is a separate
+    // argument; with GEQUAL on reversed depth it must be `1 - refZ` like every other
+    // comparison lookup.
+    let fs = "#version 400\nuniform sampler2DShadow shadowtex0;\nin vec2 uv;\nout vec4 c;\n\
+              void main() { c = textureGather(shadowtex0, uv, 0.25) + textureGatherOffset(shadowtex0, uv, 0.75, ivec2(1, 0)); }\n";
+    let vs = "#version 400\nout vec2 uv;\nvoid main() { gl_Position = vec4(0.0); uv = vec2(0.0); }\n";
+    let out = reversed().vs(vs).fs(fs).run();
+    contains_all(out.fs(), &["textureGather(shadowtex0, uv, 1.0 - 0.25)", "textureGatherOffset(shadowtex0, uv, 1.0 - 0.75, ivec2(1, 0))"]);
+    // Emulated comparisons (no comparison samplers) compare GEQUAL against the flipped
+    // reference too.
+    let out = reversed().with(|o| o.emulate_shadow_samplers = true).vs(vs).fs(fs).run();
+    contains_all(
+        out.fs(),
+        &["sb_shadowGather(shadowtex0, uv, 1.0 - 0.25)", "sb_shadowGatherOffset(shadowtex0, uv, 1.0 - 0.75, ivec2(1, 0))", "greaterThanEqual("],
+    );
+    // Forward depth leaves the reference alone.
+    let out = T::fullscreen().vs(vs).fs(fs).run();
+    contains_all(out.fs(), &["textureGather(shadowtex0, uv, 0.25)"]);
+}
+
+#[test]
+fn geometry_remap_applies_to_the_emitted_vertex_only() {
+    // Lenient drivers keep gl_Position after EmitVertex(): a pack that offsets it and
+    // emits again must not see the depth remap applied twice.
+    let gs = "#version 150\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 4) out;\n\
+              void main() {\n  gl_Position = gl_in[0].gl_Position; EmitVertex();\n  gl_Position.x += 0.1; EmitVertex();\n  EndPrimitive();\n}\n";
+    let vs = "#version 150\nin vec3 vaPosition;\nvoid main() { gl_Position = vec4(vaPosition, 1.0); }\n";
+    let fs = "#version 150\nout vec4 outColor0;\nvoid main() { outColor0 = vec4(1.0); }\n";
+    for (mode, remap) in [(DepthMode::ForwardZeroToOne, FORWARD), (DepthMode::ReversedZeroToOne, REVERSED)] {
+        let out = T::gbuffers().with(|o| {
+            o.depth_mode = mode;
+            o.flip_y = true;
+        });
+        let out = out.vs(vs).gs(gs).fs(fs).run();
+        let g = out.glsl(ShaderStage::Geometry);
+        contains_all(
+            g,
+            &[&format!(
+                "void sb_emitVertex() {{\n    vec4 sb_packPosition = gl_Position;\n    {remap}\n    gl_Position.y = -gl_Position.y;\n    EmitVertex();\n    gl_Position = sb_packPosition;\n}}"
+            )],
+        );
+    }
+    // Without a remap (GL depth convention) the hook is not generated at all.
+    let out = T::gbuffers().with(|o| o.depth_mode = DepthMode::GlNegOneToOne).vs(vs).gs(gs).fs(fs).run();
+    contains_none(out.glsl(ShaderStage::Geometry), &["sb_emitVertex", "sb_packPosition"]);
 }
 
 #[test]

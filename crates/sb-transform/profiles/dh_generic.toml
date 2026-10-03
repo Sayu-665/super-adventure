@@ -30,7 +30,9 @@ color = "aColor"
 uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
 lightmap = "vec4((float(sb_hDhGeneric.uBlockLight) + 0.5) / 16.0, (float(sb_hDhGeneric.uSkyLight) + 0.5) / 16.0, 0.0, 1.0)"
 lightmap_matrix = "mat4(1.0)"
-normal = "vec3(0.0, 1.0, 0.0)"
+# Face normal from the vertex index (24 vertices per box: N, S, W, E, bottom, top), as in
+# Iris DHGenericTransformer and DH's own directional shading.
+normal = "sb_dhGenericNormal()"
 entity = "vec4(-1.0, 0.0, 0.0, 0.0)"
 model_view = "gbufferModelView"
 projection = "dhProjection"
@@ -43,6 +45,17 @@ stage = "vertex"
 init = "int(aMaterial)"
 
 [code]
+vertex = """
+vec3 sb_dhGenericNormal() {
+    int face = (gl_VertexIndex % 24) / 4;
+    if (face == 0) return vec3(0.0, 0.0, -1.0);
+    if (face == 1) return vec3(0.0, 0.0, 1.0);
+    if (face == 2) return vec3(-1.0, 0.0, 0.0);
+    if (face == 3) return vec3(1.0, 0.0, 0.0);
+    if (face == 4) return vec3(0.0, -1.0, 0.0);
+    return vec3(0.0, 1.0, 0.0);
+}
+"""
 fragment = """
 // Iris DHGenericTransformer: generic DH objects (beacon beams, clouds, API boxes) have no
 // block texture; packs share their dh_terrain fragment code, which calls these.

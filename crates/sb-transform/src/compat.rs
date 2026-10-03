@@ -257,8 +257,21 @@ pub(crate) fn fixed_function_varyings(w: &mut StageWork, ctx: &Ctx) {
     }
 }
 
-/// Conversion of a semantic expression of type `from` to the declared type `to`.
+/// Conversion of a semantic expression of type `from` to the declared type `to`
+/// (attributes: a wider vector is padded with zeros and 1 in the `w` slot, as GL
+/// attribute fetch and Iris's `patchIntegerAttribute` do).
 pub(crate) fn convert(expr: &str, from: GlslType, to: GlslType) -> String {
+    convert_padded(expr, from, to, true)
+}
+
+/// Conversion of a varying of type `from` to the consumer's type `to` (Iris
+/// `transformGrouped` rule c: `T(tmp, vec4(0))`, i.e. padding with zeros, `w`
+/// included).
+pub(crate) fn convert_varying(expr: &str, from: GlslType, to: GlslType) -> String {
+    convert_padded(expr, from, to, false)
+}
+
+fn convert_padded(expr: &str, from: GlslType, to: GlslType, w_one: bool) -> String {
     if from == to {
         return expr.to_string();
     }
@@ -278,7 +291,7 @@ pub(crate) fn convert(expr: &str, from: GlslType, to: GlslType) -> String {
     let scalar = GlslType::scalar(to.scalar).glsl_name();
     let mut parts = vec![format!("({expr})")];
     for i in fr..tr {
-        parts.push(format!("{scalar}({})", if i == 3 { "1" } else { "0" }));
+        parts.push(format!("{scalar}({})", if i == 3 && w_one { "1" } else { "0" }));
     }
     format!("{to_name}({})", parts.join(", "))
 }

@@ -97,6 +97,11 @@ pub(crate) struct StageWork<'a> {
     pub epilogue: Vec<String>,
     /// Geometry stage: statements run before every `EmitVertex()`.
     pub emit_hooks: Vec<String>,
+    /// Geometry stage: `gl_Position` remap (depth convention, Y flip) applied to the
+    /// emitted vertex only: `gl_Position` is saved before and restored after every
+    /// `EmitVertex()`, so a pack that keeps modifying it between emits (as lenient
+    /// drivers allow) never sees the remap twice.
+    pub emit_position: Vec<String>,
     /// Extensions to enable.
     pub extensions: BTreeSet<String>,
     /// Resources declared (by GLSL name).
@@ -124,6 +129,7 @@ impl<'a> StageWork<'a> {
             prologue: Vec::new(),
             epilogue: Vec::new(),
             emit_hooks: Vec::new(),
+            emit_position: Vec::new(),
             extensions: BTreeSet::new(),
             resources: Vec::new(),
             frag_outputs: Vec::new(),
@@ -282,8 +288,9 @@ pub(crate) fn run(
     for w in &mut works {
         crate::rewrite::finish_stage(w, &ctx);
     }
-    for w in &works {
-        diags.extend(w.diags.iter().cloned());
+    for w in &mut works {
+        // Taken, so that the emission phase below reports only its own diagnostics.
+        diags.extend(std::mem::take(&mut w.diags).0);
     }
     if diags.has_errors() {
         return Err(diags);

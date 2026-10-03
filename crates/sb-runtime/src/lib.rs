@@ -121,7 +121,8 @@ pub struct RenderRequest<'a> {
 /// The result of a render.
 #[derive(Debug, Clone)]
 pub struct RenderOutput {
-    /// The final image (top row first).
+    /// The final image (top row first). It stands for Minecraft's window, so its alpha is
+    /// always 255, whatever the pack's `final` program writes.
     pub image: image::RgbaImage,
     /// Render targets of the last frame when [`RenderRequest::capture_targets`] is set:
     /// `colortexN`, `shadowcolorN`, `depthtexN`, `shadowtexN`, `dhDepthTexN` (depth in

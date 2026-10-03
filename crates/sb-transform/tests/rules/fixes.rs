@@ -119,6 +119,13 @@ fn reserved_words_and_vulkan_type_keywords_are_escaped() {
         out.fs(),
         &["float sb_kw_sampler = 1.0;", "float sb_kw_texture2D = 2.0;", "float sb_kw_resource = 3.0;", "sb_kw_common", "sb_kw_shared(vec3(sb_kw_common))"],
     );
+    // Struct members and their field accesses are escaped consistently.
+    let out = fs("#version 120\nstruct S { float filter; vec3 input; };\nfloat sample(S s) { return s.filter + s.input.x; }\n\
+                  void main() { S s; s.filter = 1.0; s.input = vec3(2.0); float output = sample(s); gl_FragData[0] = vec4(output); }\n");
+    contains_all(
+        out.fs(),
+        &["struct S { float sb_kw_filter; vec3 sb_kw_input; };", "return s.sb_kw_filter + s.sb_kw_input.x;", "float sb_kw_output = sb_kw_sample(s);"],
+    );
 }
 
 #[test]

@@ -1,10 +1,11 @@
 //! The pure-Rust API behind every native method of
 //! `dev.shaderbridge.natives.ShaderBridgeNative`, one function per method. The JNI exports
-//! ([`crate::exports`]) only convert arguments and results; everything else, including the
-//! handle registry and running heavy calls on the 64 MiB worker thread, happens here, so
-//! it can be tested without a JVM.
+//! only convert arguments and results; everything else, including the handle registry and
+//! running heavy calls on the 64 MiB worker thread ([`WORKER_STACK_BYTES`](crate::WORKER_STACK_BYTES)), happens here,
+//! so it can be tested without a JVM.
 //!
-//! Handles are opaque positive ids (see [`crate::registry`]); 0 is never a valid handle.
+//! Handles are opaque positive ids into a process-wide registry, never pointers; 0 is never
+//! a valid handle, and ids are not reused.
 //! Functions never panic on bad input: unknown handles, malformed JSON, missing compiles
 //! and the like are [`Error`]s. Panics inside the pipeline are caught and reported as
 //! [`Error::Internal`].

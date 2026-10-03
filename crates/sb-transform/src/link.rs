@@ -581,12 +581,12 @@ fn repair_mismatch(
         None => {
             // Zero-initialized: the pack may never write it (rule b).
             p.piece(Section::Late, &[&tmp], format!("{} {tmp} = {}(0);", pt.glsl_name(), pt.glsl_name()));
-            stmts.push(format!("{pname} = {};", crate::compat::convert(&tmp, pt, ct)));
+            stmts.push(format!("{pname} = {};", crate::compat::convert_varying(&tmp, pt, ct)));
         }
         Some((np, nc)) => {
             p.piece(Section::Late, &[&tmp], format!("{} {tmp}[{np}];", pt.glsl_name()));
             for k in 0..nc {
-                let value = if k < np { crate::compat::convert(&format!("{tmp}[{k}]"), pt, ct) } else { format!("{}(0)", ct.glsl_name()) };
+                let value = if k < np { crate::compat::convert_varying(&format!("{tmp}[{k}]"), pt, ct) } else { format!("{}(0)", ct.glsl_name()) };
                 stmts.push(format!("{pname}[{k}] = {value};"));
             }
         }
