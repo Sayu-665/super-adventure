@@ -4,7 +4,7 @@ use sb_compile::{CompileOptions, Reflection, ValidationResult, VulkanTarget, com
 use sb_core::model::OutputTarget;
 use sb_core::{Diagnostics, MemorySources, ShaderStage};
 use sb_preprocess::{PreprocessOptions, Preprocessor};
-use sb_transform::{AnalyzedStage, PackBuilder, TransformOptions, TransformedProgram, analyze, profile, transform_program};
+use sb_transform::{AnalyzedStage, DrawProfile, PackBuilder, PackData, TransformOptions, TransformedProgram, analyze, profile, transform_program};
 use sb_uniforms::{ProgramClass, ResourceContext};
 
 /// File name used for a stage of the test program.
@@ -31,7 +31,7 @@ pub fn analyze_file(src: &MemorySources, stage: ShaderStage, file: &str) -> Resu
 pub struct T {
     stages: Vec<(ShaderStage, String)>,
     extra: Vec<(ShaderStage, String, ProgramClass)>,
-    profile: String,
+    profile: DrawProfile,
     /// Translation options (`program_class` defaults from the profile).
     pub opts: TransformOptions,
     resources: Option<ResourceContext>,
@@ -44,6 +44,8 @@ pub struct Out {
     pub prog: TransformedProgram,
     /// Reflection of every stage, in pipeline order.
     pub refl: Vec<Reflection>,
+    /// The pack layout and binding table the program was translated against.
+    pub pack: PackData,
 }
 
 impl Out {
@@ -89,10 +91,10 @@ pub fn contains_none(haystack: &str, needles: &[&str]) {
     }
 }
 
-fn default_class(profile: &str) -> ProgramClass {
-    if profile == sb_transform::FULLSCREEN_PROFILE {
+fn default_class(profile: &DrawProfile) -> ProgramClass {
+    if profile.fullscreen {
         ProgramClass::Fullscreen
-    } else if profile.starts_with("dh_") {
+    } else if profile.name.starts_with("dh_") {
         ProgramClass::Dh
     } else {
         ProgramClass::Gbuffers
@@ -101,12 +103,18 @@ fn default_class(profile: &str) -> ProgramClass {
 
 impl T {
     /// A program drawn with draw profile `profile`.
-    pub fn new(profile: &str) -> Self {
+    pub fn new(profile_name: &str) -> Self {
+        let p = profile(profile_name).unwrap_or_else(|| panic!("no profile {profile_name}"));
+        Self::custom(p.clone())
+    }
+
+    /// A program drawn with a custom (runtime-registered) draw profile.
+    pub fn custom(profile: DrawProfile) -> Self {
         Self {
             stages: Vec::new(),
             extra: Vec::new(),
-            profile: profile.to_string(),
-            opts: TransformOptions { program_class: default_class(profile), ..TransformOptions::default() },
+            opts: TransformOptions { program_class: default_class(&profile), ..TransformOptions::default() },
+            profile,
             resources: None,
             files: Vec::new(),
         }
@@ -144,7 +152,7 @@ impl T {
     }
 
     /// Add a stage of another program of the pack (it only contributes to the pack
-    /// layout and binding table).
+    /// layout and binding table, before the program's own stages).
     pub fn other(mut self, stage: ShaderStage, src: &str, class: ProgramClass) -> Self {
         self.extra.push((stage, src.to_string(), class));
         self
@@ -170,6 +178,11 @@ impl T {
 
     /// Translate (no compilation).
     pub fn translate(&self) -> Result<TransformedProgram, Diagnostics> {
+        self.translate_with_pack().map(|(p, _)| p)
+    }
+
+    /// Translate (no compilation); also returns the pack data.
+    pub fn translate_with_pack(&self) -> Result<(TransformedProgram, PackData), Diagnostics> {
         let mut src = MemorySources::new();
         for (p, s) in &self.files {
             src = src.with(p, s.as_str());
@@ -189,7 +202,7 @@ impl T {
         for (i, (st, _, c)) in self.extra.iter().enumerate() {
             others.push((analyze_file(&src, *st, &file_of(*st, &format!("other{i}")))?, *c));
         }
-        let prof = profile(&self.profile).unwrap_or_else(|| panic!("no profile {}", self.profile));
+        let prof = &self.profile;
         let declared: Vec<String> = stages
             .iter()
             .chain(others.iter().map(|(s, _)| s))
@@ -200,19 +213,21 @@ impl T {
             .clone()
             .unwrap_or_else(|| ResourceContext::new(class))
             .detect_watershadow(declared.iter().map(String::as_str));
+        // Other programs come first: they win uniform type conflicts.
         let mut b = PackBuilder::new(rc.clone());
-        for s in &stages {
-            b.add_stage(s, class, Some("p"));
-        }
         for (s, c) in &others {
             b.add_stage(s, *c, Some("other"));
+        }
+        for s in &stages {
+            b.add_stage(s, class, Some("p"));
         }
         if !stages.iter().any(|s| s.stage == ShaderStage::Compute) {
             b.add_profile(prof, class);
         }
         let data = b.finish();
         let ctx = data.context(&rc);
-        transform_program(&stages, prof, &ctx, &self.opts)
+        let prog = transform_program(&stages, prof, &ctx, &self.opts)?;
+        Ok((prog, data))
     }
 
     /// Translate, panicking on errors.
@@ -224,9 +239,9 @@ impl T {
     /// Translate and compile every stage (with `spirv-val` when installed).
     #[track_caller]
     pub fn run(&self) -> Out {
-        let prog = self.translate_ok();
+        let (prog, pack) = self.translate_with_pack().unwrap_or_else(|d| panic!("transform failed: {d:#?}"));
         let refl = compile_program(&prog, self.opts.target);
-        Out { prog, refl }
+        Out { prog, refl, pack }
     }
 
     /// The translation error codes (panics if the translation succeeds).

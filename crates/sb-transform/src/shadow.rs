@@ -109,18 +109,21 @@ pub(crate) fn apply(w: &mut StageWork, ctx: &Ctx) {
         .filter(|(_, t)| t.ends_with("Shadow") && *t != SHADOW_TYPE)
         .map(|(n, t)| format!("`{n}` ({t})"))
         .collect();
+    let renamed = colliding_overloads(&w.unit);
     let mut used: BTreeSet<Helper> = BTreeSet::new();
     let mut unsupported: BTreeSet<String> = BTreeSet::new();
     for item in &mut w.unit.items {
         match &mut item.kind {
             ItemKind::Function(f) => {
+                rename_overload(&mut f.proto, &renamed);
                 let params = retype_params(&mut f.proto, &mut others);
                 crate::scope::walk_function_exprs(f, &mut |root, is_local| {
                     let is_shadow = |n: &str| if is_local(n) { params.contains(n) } else { globals.contains(n) };
-                    rewrite(root, &is_shadow, &mut used, &mut unsupported);
+                    rewrite(root, &is_shadow, &renamed, &mut used, &mut unsupported);
                 });
             }
             ItemKind::Prototype(p) => {
+                rename_overload(p, &renamed);
                 retype_params(p, &mut others);
             }
             _ => {}
@@ -154,6 +157,43 @@ pub(crate) fn apply(w: &mut StageWork, ctx: &Ctx) {
     }
 }
 
+/// Overloads that differ only by `sampler2D` vs `sampler2DShadow` parameters collide
+/// once the comparison samplers are retyped: (name, parameter types) of the comparison
+/// overloads, which are renamed `sb_cmp_<name>` with the calls passing comparison
+/// samplers at those positions.
+type Renamed = BTreeSet<(String, Vec<String>)>;
+
+fn param_types(p: &Prototype) -> Vec<String> {
+    p.params.iter().map(|x| crate::print::type_spec(&x.ty)).collect()
+}
+
+fn colliding_overloads(unit: &TranslationUnit) -> Renamed {
+    let mut signatures: BTreeSet<(String, Vec<String>)> = BTreeSet::new();
+    for item in &unit.items {
+        if let ItemKind::Function(f) = &item.kind {
+            signatures.insert((f.proto.name.clone(), param_types(&f.proto)));
+        } else if let ItemKind::Prototype(p) = &item.kind {
+            signatures.insert((p.name.clone(), param_types(p)));
+        }
+    }
+    signatures
+        .iter()
+        .filter(|(name, types)| {
+            types.iter().any(|t| t == SHADOW_TYPE) && {
+                let retyped: Vec<String> = types.iter().map(|t| if t == SHADOW_TYPE { "sampler2D".to_string() } else { t.clone() }).collect();
+                signatures.contains(&(name.clone(), retyped))
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+fn rename_overload(p: &mut Prototype, renamed: &Renamed) {
+    if renamed.contains(&(p.name.clone(), param_types(p))) {
+        p.name = format!("sb_cmp_{}", p.name);
+    }
+}
+
 /// Retype `sampler2DShadow` parameters to `sampler2D`; returns their names. Parameters
 /// of other comparison-sampler types are reported in `others`.
 fn retype_params(p: &mut Prototype, others: &mut BTreeSet<String>) -> HashSet<String> {
@@ -176,12 +216,29 @@ fn retype_params(p: &mut Prototype, others: &mut BTreeSet<String>) -> HashSet<St
 }
 
 /// Rewrite one expression tree (post-order).
-fn rewrite(e: &mut Expr, is_shadow: &dyn Fn(&str) -> bool, used: &mut BTreeSet<Helper>, unsupported: &mut BTreeSet<String>) {
+fn rewrite(
+    e: &mut Expr,
+    is_shadow: &dyn Fn(&str) -> bool,
+    renamed: &Renamed,
+    used: &mut BTreeSet<Helper>,
+    unsupported: &mut BTreeSet<String>,
+) {
     e.walk_children_mut(&mut |c| {
-        rewrite(c, is_shadow, used, unsupported);
+        rewrite(c, is_shadow, renamed, used, unsupported);
         Walk::Skip
     });
     let Expr::Call(Callee::Name(name), args) = e else { return };
+    // Calls of a renamed comparison overload: comparison samplers at every
+    // comparison-sampler position.
+    let target = renamed.iter().find(|(n, types)| {
+        n == name
+            && types.len() == args.len()
+            && types.iter().zip(args.iter()).all(|(t, a)| t != SHADOW_TYPE || crate::compat::root_ident(a).is_some_and(is_shadow))
+    });
+    if target.is_some() {
+        *name = format!("sb_cmp_{name}");
+        return;
+    }
     if !args.first().and_then(crate::compat::root_ident).is_some_and(is_shadow) {
         return;
     }

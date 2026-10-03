@@ -34,6 +34,7 @@ mod pack;
 mod parse;
 mod print;
 mod program;
+mod rect;
 pub mod profiles;
 mod rewrite;
 mod scope;
@@ -41,6 +42,7 @@ mod shadow;
 mod stack;
 mod text;
 mod transform;
+mod types;
 
 pub use analyze::{
     AnalyzedStage, BlockInfo, IRIS_ATTRIBUTES, InterfaceVar, LooseUniform, OpaqueUniform, StageInfo, analyze,

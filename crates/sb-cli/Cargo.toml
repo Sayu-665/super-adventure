@@ -1,9 +1,25 @@
 [package]
 name = "sb-cli"
+description = "ShaderBridge command-line tool (`shaderbridge`): inspect, compile, validate and render OptiFine/Iris shader packs for Vulkan"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "shaderbridge"
+path = "src/main.rs"
+
 [dependencies]
 sb-core.workspace = true
+sb-pack.workspace = true
+sb-pipeline.workspace = true
+sb-runtime.workspace = true
+sb-transform.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

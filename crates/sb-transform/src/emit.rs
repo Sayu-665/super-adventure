@@ -232,10 +232,16 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
     if w.stage == ShaderStage::Vertex {
         for i in &ctx.profile.inputs {
             if piece_names.contains(i.name.as_str()) {
-                let semantic = crate::profiles::SEMANTIC_KEYS
-                    .iter()
-                    .find(|(k, _)| crate::text::identifiers(ctx.profile.semantic(k)).any(|id| id == i.name))
-                    .map(|(k, _)| (*k).to_string());
+                // Per-vertex semantics first: an input that also feeds a matrix-like
+                // semantic (`ChunkPosition` -> `chunk_offset`) is reported as the
+                // attribute it is (`position`).
+                let keys = crate::profiles::SEMANTIC_KEYS.iter().map(|(k, _)| *k);
+                let semantic = keys
+                    .clone()
+                    .filter(|k| !crate::compat::is_matrix_semantic(k))
+                    .chain(keys.filter(|k| crate::compat::is_matrix_semantic(k)))
+                    .find(|k| crate::text::identifiers(ctx.profile.semantic(k)).any(|id| id == i.name))
+                    .map(str::to_string);
                 vertex_inputs.push(VertexInput { location: i.location, name: i.name.clone(), ty: i.ty.clone(), semantic });
             }
         }

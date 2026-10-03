@@ -142,3 +142,20 @@ fn reversed_depth_reads_inside_user_functions_are_cloned() {
         ],
     );
 }
+
+#[test]
+fn instance_id_with_a_non_zero_base_instance() {
+    let vs = "#version 130\nvoid main() { gl_Position = vec4(float(gl_InstanceID), 0.0, 0.0, 1.0); }\n";
+    let fs = "#version 130\nvoid main() { gl_FragColor = vec4(1.0); }\n";
+    let out = T::gbuffers().with(|o| o.draw_parameters = true).vs(vs).fs(fs).run();
+    contains_all(out.vs(), &["#extension GL_ARB_shader_draw_parameters : enable", "float(((gl_InstanceIndex - gl_BaseInstance)))"]);
+}
+
+#[test]
+fn geometry_streams_are_remapped_too() {
+    let gs = "#version 400\nlayout(points) in;\nlayout(points, max_vertices = 1) out;\nvoid main() { gl_Position = gl_in[0].gl_Position; EmitStreamVertex(0); EndStreamPrimitive(0); }\n";
+    let vs = "#version 400\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+    let fs = "#version 400\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+    let out = T::fullscreen().vs(vs).gs(gs).fs(fs).run();
+    contains_all(out.glsl(ShaderStage::Geometry), &["sb_emitStreamVertex0();", "void sb_emitStreamVertex0() {", "EmitStreamVertex(0);", FORWARD]);
+}

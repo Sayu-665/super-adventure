@@ -184,6 +184,10 @@ pub struct DrawProfile {
     pub name: String,
     /// Free text.
     pub description: String,
+    /// The host draw path the profile describes (informational, e.g.
+    /// `distanthorizons:blaze3d`); empty when not given.
+    #[serde(default)]
+    pub host: String,
     /// Used for fullscreen passes: no vertex inputs, a triangle generated from
     /// `gl_VertexIndex`.
     pub fullscreen: bool,
@@ -230,7 +234,6 @@ struct RawProfile {
     #[serde(default)]
     description: String,
     #[serde(default)]
-    #[allow(dead_code)]
     host: Option<String>,
     #[serde(default)]
     fullscreen: bool,
@@ -268,6 +271,7 @@ pub fn parse_profile(toml_text: &str) -> Result<DrawProfile, String> {
     let p = DrawProfile {
         name: raw.name,
         description: raw.description,
+        host: raw.host.unwrap_or_default(),
         fullscreen: raw.fullscreen,
         inputs: raw.inputs,
         blocks: raw.blocks,
@@ -399,6 +403,7 @@ static EMBEDDED: LazyLock<Embedded> = LazyLock::new(|| {
         parse_profile(text).unwrap_or_else(|e| DrawProfile {
             name: format!("invalid:{file}"),
             description: format!("embedded profile {file} failed to parse: {e}"),
+            host: String::new(),
             fullscreen: false,
             inputs: Vec::new(),
             blocks: Vec::new(),
@@ -639,7 +644,8 @@ mod tests {
         );
         assert!(parse_profile("name = \"x\"\n[semantics]\nposition_typo = \"vec4(1.0)\"\n").is_err());
         assert!(parse_profile("name = \"x\"\n[[samplers]]\nname = \"s\"\ntype = \"image2D\"\n").is_err());
-        let p = parse_profile("name = \"x\"\n[[samplers]]\nname = \"s\"\nprovides = [\"gtexture\"]\n").unwrap();
+        let p = parse_profile("name = \"x\"\nhost = \"mymod:terrain\"\n[[samplers]]\nname = \"s\"\nprovides = [\"gtexture\"]\n").unwrap();
+        assert_eq!(p.host, "mymod:terrain");
         assert_eq!(p.samplers[0].ty, "sampler2D");
         assert_eq!(p.sampler_providing("gtexture").unwrap().name, "s");
         assert!(parse_profile("not toml [").is_err());

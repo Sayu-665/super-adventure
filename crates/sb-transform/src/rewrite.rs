@@ -26,6 +26,7 @@ pub(crate) fn rewrite_stage(w: &mut StageWork, ctx: &Ctx) {
     compat::fixed_function_varyings(w, ctx);
     frag_outputs(w, ctx);
     compat::profile_pieces(w, ctx);
+    crate::rect::apply(w);
     crate::fixes::apply(w, ctx);
     crate::depth::apply(w, ctx);
     crate::shadow::apply(w, ctx);
@@ -40,12 +41,21 @@ pub(crate) fn finish_stage(w: &mut StageWork, _ctx: &Ctx) {
         return;
     }
     let hooks = w.emit_hooks.join("\n    ");
+    // `EmitStreamVertex` needs a constant stream: one helper per stream expression (a
+    // literal or a global constant in practice).
+    let mut streams: Vec<String> = Vec::new();
     w.unit.walk_exprs_mut(&mut |e| {
         if let Expr::Call(Callee::Name(n), args) = e {
             if n == "EmitVertex" && args.is_empty() {
                 *n = "sb_emitVertex".into();
             } else if n == "EmitStreamVertex" && args.len() == 1 {
-                *n = "sb_emitStreamVertex".into();
+                let stream = crate::print::expr(&args[0]);
+                let k = streams.iter().position(|s| *s == stream).unwrap_or_else(|| {
+                    streams.push(stream);
+                    streams.len() - 1
+                });
+                *n = format!("sb_emitStreamVertex{k}");
+                args.clear();
             }
         }
         Walk::Children
@@ -53,12 +63,11 @@ pub(crate) fn finish_stage(w: &mut StageWork, _ctx: &Ctx) {
     // Prototypes before the pack code, definitions after it (hooks reference pack outputs).
     w.piece(Section::Late, &["sb_emitVertex"], "void sb_emitVertex();");
     w.piece(Section::Tail, &["sb_emitVertex"], format!("void sb_emitVertex() {{\n    {hooks}\n    EmitVertex();\n}}"));
-    w.piece(Section::Late, &["sb_emitStreamVertex"], "void sb_emitStreamVertex(int sb_stream);");
-    w.piece(
-        Section::Tail,
-        &["sb_emitStreamVertex"],
-        format!("void sb_emitStreamVertex(int sb_stream) {{\n    {hooks}\n    EmitStreamVertex(sb_stream);\n}}"),
-    );
+    for (k, stream) in streams.iter().enumerate() {
+        let name = format!("sb_emitStreamVertex{k}");
+        w.piece(Section::Late, &[&name], format!("void {name}();"));
+        w.piece(Section::Tail, &[&name], format!("void {name}() {{\n    {hooks}\n    EmitStreamVertex({stream});\n}}"));
+    }
 }
 
 // ------------------------------------------------------------------------- helpers
@@ -195,6 +204,17 @@ fn normalize(w: &mut StageWork) {
         }
         items.push(item);
     }
+    // Identical global declarations (the same file included twice without a guard)
+    // are redefinitions for glslang: keep the first.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    items.retain(|item| {
+        if !matches!(item.kind, ItemKind::Decl(_) | ItemKind::Function(_)) {
+            return true;
+        }
+        let mut p = crate::print::Printer::new();
+        p.item(item);
+        seen.insert(p.finish().0)
+    });
     w.unit.items = items;
 }
 
@@ -207,10 +227,26 @@ fn hygiene(w: &mut StageWork, ctx: &Ctx) {
     let uniforms: BTreeSet<String> =
         info.loose_uniforms.iter().map(|u| u.name.clone()).chain(info.opaque_uniforms.iter().map(|o| o.name.clone())).collect();
     let texture_is_sampler = info.opaque_uniforms.iter().any(|o| o.name == "texture");
+    let interface: BTreeSet<String> = info.inputs.iter().chain(&info.outputs).map(|v| v.name.clone()).collect();
+    // Vertex inputs declared exactly like a profile input read the host attribute.
+    let host_inputs: BTreeSet<String> = if w.stage == ShaderStage::Vertex {
+        info.inputs
+            .iter()
+            .filter(|v| v.array.is_empty() && ctx.profile.inputs.iter().any(|i| i.name == v.name && i.ty == v.ty))
+            .map(|v| v.name.clone())
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut declared: BTreeMap<String, bool /*function or struct*/> = BTreeMap::new();
+    let mut block_members: BTreeSet<String> = BTreeSet::new();
+    let mut called: BTreeSet<String> = BTreeSet::new();
     walk_idents(&mut w.unit, &mut |n, occ| match occ {
         Occ::GlobalDecl | Occ::LocalDecl | Occ::ParamDecl | Occ::BlockMemberDecl => {
             declared.entry(n.clone()).or_insert(false);
+            if occ == Occ::BlockMemberDecl {
+                block_members.insert(n.clone());
+            }
         }
         Occ::FunctionDecl => {
             declared.insert(n.clone(), true);
@@ -218,17 +254,32 @@ fn hygiene(w: &mut StageWork, ctx: &Ctx) {
         Occ::TypeName if !is_builtin_type(n) => {
             declared.insert(n.clone(), true);
         }
+        Occ::Call => {
+            called.insert(n.clone());
+        }
         _ => {}
     });
     let mut plan: HashMap<String, String> = HashMap::new();
-    for name in declared.keys() {
+    for (name, &is_function) in &declared {
         if name.starts_with("sb_") && !name.starts_with("sb_kw_") && !uniforms.contains(name) {
             plan.insert(name.clone(), format!("sbu_{}", &name[3..]));
-        } else if ctx.profile_names.contains(name) && !uniforms.contains(name) {
+        } else if ctx.profile_names.contains(name) && !uniforms.contains(name) && !host_inputs.contains(name) {
             plan.insert(name.clone(), format!("sbu_{name}"));
-        } else if names::is_reserved_at_460(name) && (!names::is_vulkan_type_keyword(name) || !declared[name]) {
+        } else if names::is_reserved_at_460(name) && (!names::is_vulkan_type_keyword(name) || !is_function) {
             // Vulkan type keywords declared as functions or structs are renamed by
             // `legacy_and_collisions` instead.
+            plan.insert(name.clone(), format!("sb_kw_{name}"));
+        } else if !is_function
+            && name != "texture"
+            && names::is_builtin_function(name)
+            && (called.contains(name) || interface.contains(name))
+            && !uniforms.contains(name)
+            && !block_members.contains(name)
+        {
+            // A variable named after a built-in function hides it in its scope; the pack
+            // also calls the function, so rename the variable (calls are left alone).
+            // Stage interface variables are renamed whether or not this stage calls the
+            // function, so that both sides of an interface agree.
             plan.insert(name.clone(), format!("sb_kw_{name}"));
         }
     }
@@ -516,6 +567,14 @@ fn resources(w: &mut StageWork, ctx: &Ctx) {
             None => entry.name.clone(),
         };
         renames.insert(name.clone(), glsl_name.clone());
+        // Rectangle samplers are 2D samplers in Vulkan (`rect.rs` converts the lookups).
+        let tn = match crate::rect::lowered_type(&tn) {
+            Some(lowered) => {
+                w.rect_samplers.insert(glsl_name.clone());
+                lowered.to_string()
+            }
+            None => tn,
+        };
         w.opaque_types.insert(glsl_name.clone(), tn.clone());
         if !w.resources.iter().any(|r| r.glsl_name == glsl_name) {
             w.resources.push(ResourceUse { glsl_name: glsl_name.clone(), binding_name: entry.name.clone(), always: false });
@@ -539,6 +598,11 @@ fn resources(w: &mut StageWork, ctx: &Ctx) {
                 None => {
                     if image_reads.contains(&name) {
                         if ctx.opts.storage_image_read_without_format {
+                            w.info(
+                                "xf.image-format",
+                                format!("image `{name}` is read without a format qualifier: the device needs shaderStorageImageReadWithoutFormat"),
+                                line,
+                            );
                             w.extensions.insert("GL_EXT_shader_image_load_formatted".into());
                         } else {
                             w.warn(
@@ -719,10 +783,16 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
     let n_user = outs.len();
     let mut used_logical: BTreeSet<u32> = literal.clone();
     let mut user_logical: BTreeSet<u32> = BTreeSet::new();
-    let mut pending: Vec<(Declaration, Line, Option<u32>)> = Vec::new();
+    // (declaration, line, logical location, locations used: array length)
+    let mut pending: Vec<(Declaration, Line, Option<u32>, u32)> = Vec::new();
     for (d, line) in outs {
         let explicit = layout_value(&d.ty.quals, "location").flatten().and_then(|e| crate::consteval::eval(e, &env)).and_then(|v| v.as_u32());
         let name = &d.vars[0].name;
+        let count = {
+            let mut dims = crate::analyze::dims(&d.ty.ty.array, &env);
+            dims.extend(crate::analyze::dims(&d.vars[0].array, &env));
+            dims.first().copied().flatten().unwrap_or(1).clamp(1, 32)
+        };
         let logical = explicit.or_else(|| {
             if n_user == 1 && literal.is_empty() && !dynamic {
                 Some(0)
@@ -731,39 +801,36 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
             }
         });
         if let Some(l) = logical {
-            used_logical.insert(l);
+            used_logical.extend(l..l.saturating_add(count));
         }
-        pending.push((d, line, logical));
+        pending.push((d, line, logical, count));
     }
-    let mut next_free = 0u32;
-    for (mut d, line, logical) in pending {
+    for (mut d, line, logical, count) in pending {
         let logical = match logical {
             Some(l) => l,
             None => {
-                while used_logical.contains(&next_free) {
-                    next_free += 1;
+                // The lowest free range of `count` consecutive locations (output arrays
+                // occupy one location per element).
+                let mut first = 0u32;
+                while (first..first + count).any(|l| used_logical.contains(&l)) {
+                    first += 1;
                 }
-                used_logical.insert(next_free);
+                used_logical.extend(first..first + count);
                 w.warn(
                     "xf.output-location",
-                    format!("fragment output `{}` has no location; it is assigned location {next_free} in declaration order", d.vars[0].name),
+                    format!("fragment output `{}` has no location; it is assigned location {first} in declaration order", d.vars[0].name),
                     line,
                 );
-                next_free
+                first
             }
         };
-        user_logical.insert(logical);
+        user_logical.extend(logical..logical.saturating_add(count));
         let name = d.vars[0].name.clone();
         let base = d.ty.ty.name().and_then(GlslType::parse).map_or("float", |t| match t.scalar {
             sb_core::ScalarKind::Int => "int",
             sb_core::ScalarKind::Uint => "uint",
             _ => "float",
         });
-        let count = {
-            let mut dims = crate::analyze::dims(&d.ty.ty.array, &env);
-            dims.extend(crate::analyze::dims(&d.vars[0].array, &env));
-            dims.first().copied().flatten().unwrap_or(1)
-        };
         d.ty.quals.retain(|q| !matches!(q, Qualifier::Layout(_)));
         if logical == 0 {
             alpha_target = Some(if count > 1 { format!("{name}[0]") } else { name.clone() });
@@ -771,20 +838,40 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
                 alpha_target = None;
             }
         }
-        match phys(logical) {
-            Some(p) => {
-                d.ty.quals.insert(0, Qualifier::Layout(vec![LayoutId { name: "location".into(), value: Some(Expr::Int(p as i32)) }]));
-                for k in 0..count {
-                    w.frag_outputs.push((p + k, base.to_string(), name.clone()));
-                }
-                w.unit.items.insert(0, Item { kind: ItemKind::Decl(d), line });
+        let physical: Vec<Option<u32>> = (0..count).map(|k| phys(logical + k)).collect();
+        let consecutive = physical[0].is_some_and(|p0| physical.iter().zip(0..).all(|(p, k)| *p == Some(p0 + k)));
+        if consecutive {
+            let p = physical[0].unwrap_or(0);
+            d.ty.quals.insert(0, Qualifier::Layout(vec![LayoutId { name: "location".into(), value: Some(Expr::Int(p as i32)) }]));
+            for k in 0..count {
+                w.frag_outputs.push((p + k, base.to_string(), name.clone()));
             }
-            None => {
-                d.ty.quals.retain(|q| !matches!(q, Qualifier::Storage(Storage::Out)));
-                w.info("xf.output-removed", format!("fragment output `{name}` has no attachment; its writes are discarded"), line);
-                w.unit.items.insert(0, Item { kind: ItemKind::Decl(d), line });
-            }
+            w.unit.items.insert(0, Item { kind: ItemKind::Decl(d), line });
+            continue;
         }
+        // No attachment for (some of) the locations: the pack writes a plain global;
+        // array elements that do have an attachment are copied to their own outputs.
+        d.ty.quals.retain(|q| !matches!(q, Qualifier::Storage(Storage::Out) | Qualifier::Interp(_)));
+        let elem = crate::print::type_spec(&TypeSpec { base: d.ty.ty.base.clone(), array: Vec::new() });
+        let mut kept = Vec::new();
+        for (k, p) in physical.iter().enumerate() {
+            let Some(p) = *p else { continue };
+            let out_name = format!("sb_Out_{name}_{k}");
+            w.add_iface(&format!("layout(location = {p}) out {elem} {out_name};"));
+            w.frag_outputs.push((p, base.to_string(), out_name.clone()));
+            w.epilogue.push(format!("{out_name} = {name}[{k}];"));
+            kept.push(p);
+        }
+        if kept.is_empty() {
+            w.info("xf.output-removed", format!("fragment output `{name}` has no attachment; its writes are discarded"), line);
+        } else {
+            w.info(
+                "xf.output-split",
+                format!("fragment output array `{name}` is split into per-element outputs at locations {kept:?}"),
+                line,
+            );
+        }
+        w.unit.items.insert(0, Item { kind: ItemKind::Decl(d), line });
     }
     // gl_FragData.
     if dynamic {

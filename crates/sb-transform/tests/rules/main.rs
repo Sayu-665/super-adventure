@@ -8,6 +8,7 @@
 
 mod harness;
 
+mod analysis;
 mod builtins;
 mod depth;
 mod fixes;

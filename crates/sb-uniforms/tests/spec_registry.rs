@@ -79,10 +79,9 @@ fn every_registry_entry_is_accounted_for() {
         if spec.contains(b.name) {
             continue;
         }
-        assert_eq!(
-            b.source,
-            sources::SHADERBRIDGE,
-            "`{}` is neither in the spec nor a ShaderBridge addition",
+        assert!(
+            b.source == sources::SHADERBRIDGE || b.source == sources::VOXY,
+            "`{}` is neither in the spec nor a ShaderBridge or Voxy addition",
             b.name
         );
     }

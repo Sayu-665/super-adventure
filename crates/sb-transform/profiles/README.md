@@ -14,6 +14,15 @@ name = "unique_id"
 description = "free text"
 # Optional: the profile is used for fullscreen passes (no vertex buffer).
 fullscreen = false
+# Optional: positions are camera-relative world geometry (terrain, DH, Sodium). In the
+# shadow pass (TransformOptions::is_shadow_pass) the model_view / projection semantics
+# become shadowModelView / shadowProjection, as Iris shadow programs see them. Entity
+# profiles leave it false: the host composes the shadow view into their model-view.
+world_space = false
+# Optional: host push constants, declared in every stage that references a member as
+# `layout(push_constant) uniform sb_hPush { <members> };` (std430 offsets; members are
+# referenced unqualified by semantics, globals and helper code).
+push_constants = "vec3 u_RegionOffset; int u_CurrentTime; uint u_RegionID;"
 
 [[inputs]]          # vertex attributes; `name` MUST equal the host VertexFormat element name
 name = "Position"
@@ -64,11 +73,23 @@ fragment = "..."
 Expressions may use:
 * the profile's inputs,
 * block members through their instance names,
+* push-constant members,
 * host samplers,
 * functions from `[code]`, and
 * any builtin uniform name (e.g. `gbufferModelView`, `dhProjection`,
   `projectionMatrix`).
 
 Builtin uniforms referenced this way are added to the pack's `sb_Frame` or
-`sb_Draw` layout automatically. Semantics a profile does not define fall
+`sb_Draw` layout automatically (`sb_transform::PackBuilder::add_profile`, which also
+adds `shadowModelView` / `shadowProjection` for `world_space` profiles).
+
+Helper code may use `const int SB_<NAME>` constants supplied per program through
+`TransformOptions::profile_constants` (emitted before the helper code; a missing
+constant is `-1`), e.g. `SB_DH_BLOCK_ID_<n>` in `dh_terrain.toml`.
+
+Built-in profiles: `fullscreen`, `vanilla_terrain`, `vanilla_terrain_basic`,
+`vanilla_entity`, `vanilla_particle`, `vanilla_lines`, `vanilla_position`,
+`vanilla_position_color`, `vanilla_position_tex`, `vanilla_position_tex_color`,
+`dh_terrain`, `dh_generic` and `sodium_terrain` (Sodium 0.9 compact chunk format with
+ShaderBridge's extension attributes and Sodium's 20-byte push constants). Semantics a profile does not define fall
 back to the defaults in `defaults.toml`.

@@ -1,20 +1,35 @@
-//! Corpus integration test: every enabled program of every corpus pack is
-//! preprocessed (Iris standard macros + `DISTANT_HORIZONS`), analyzed, laid out,
-//! transformed with its default draw profile and compiled with glslang. Every
-//! module is validated with `spirv-val` (when installed) and the reflected stage
-//! interfaces are checked against each other (locations, types, flatness).
+//! Corpus integration test: every enabled program of every program folder (the root and
+//! every dimension folder) of every corpus pack is preprocessed (Iris standard macros +
+//! `DISTANT_HORIZONS`), analyzed, laid out, transformed with its default draw profile and
+//! compiled with glslang, for two option sets (pack defaults, and "max": every boolean
+//! option on, every value option at its last listed value) and four translation
+//! variants. Every module is validated with `spirv-val` (when installed) and the
+//! reflected stage interfaces are checked against each other (locations, types,
+//! flatness).
 //!
 //! Corpora: `$SB_CORPUS_DIRS` (colon-separated roots) or the scratchpad defaults; the
-//! test is skipped when none exists. Set `SB_FAIL_DUMP=<dir>` to write the GLSL of
-//! failing stages, `SB_CORPUS_QUICK=1` to run only the default variant without
-//! `spirv-val`.
+//! test is skipped when none exists.
+//!
+//! Environment knobs (for iterating on failures):
+//! * `SB_CORPUS_QUICK=1`: defaults, Forward variant only, no `spirv-val`;
+//! * `SB_CORPUS_FULL=1`: every variant for both option sets (by default the max set runs
+//!   the Forward and Reversed variants only);
+//! * `SB_CORPUS_SETS=defaults,max` and `SB_CORPUS_VARIANTS=forward,reversed,renderpearl,dhsynth`
+//!   select a subset;
+//! * `SB_CORPUS_PACKS=<substring>[,<substring>]` restricts the packs;
+//! * `SB_FAIL_DUMP=<dir>` writes the GLSL of failing stages.
+//!
+//! Failures that are bugs of the packs themselves (code that no GLSL compiler accepts
+//! with those option values) are listed in [`KNOWN_PACK_BUGS`]; they are reported but do
+//! not count against the pass rate.
 
 mod common;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
+use common::{OptionSet, PackEnv};
 use rayon::prelude::*;
 use sb_compile::{CompileOptions, Reflection, VulkanTarget, compile_glsl, reflect, validate};
 use sb_core::model::{AlphaTest, DepthMode, OutputTarget};
@@ -25,12 +40,43 @@ use sb_uniforms::{ProgramClass, ResourceContext};
 /// Marker for synthesized vertex shaders in job file names.
 const SYNTH: &str = "<synthesized>";
 
+/// Failures caused by the packs themselves, not by the translation: (pack directory
+/// name, option set, substring of the failure message, explanation). Each was checked
+/// against the pack sources: the code is invalid GLSL for every compiler with those
+/// option values (contradictory option combinations of the "max" set).
+const KNOWN_PACK_BUGS: &[(&str, OptionSet, &str, &str)] = &[
+    ("arc-shader", OptionSet::Max, "'textureAnisotropic' : no matching", "AF_ENABLED: only gbuffers_terrain includes lib/sampling/anisotropic.glsl"),
+    ("arc-shader", OptionSet::Max, "l-value required \"sb_Draw\"", "AF_ENABLED: lib/lighting/basic.glsl writes `spriteBounds`, which gbuffers_textured/weather never declare (it resolves to the read-only OptiFine uniform)"),
+    ("arc-shader", OptionSet::Max, "'GetParallaxSlopeNormal'", "the slope normal is defined for PARALLAX_SHAPE_SHARP only but called for every shape"),
+    ("arc-shader", OptionSet::Max, "'averageLuminance' : undeclared", "final.fsh reads averageLuminance for the exposure meters but declares it only for automatic exposure"),
+    ("arc-shader", OptionSet::Max, "cannot apply to an array: z", "WATER_CAUSTICS reads `lightData.shadowPos.z`, an array with cascaded shadows"),
+    ("shrimple", OptionSet::Max, "unexpected identifier `lightInfo`", "composite13 uses struct StaticLightData without including lib/buffers/light_static.glsl"),
+    ("shrimple", OptionSet::Max, "interface block `VertexData`", "shadow.gsh declares shadowTilePos only with WORLD_SHADOW_ENABLED, shadow.fsh reads it for every cascaded shadow (Nether/End folders)"),
+    ("shrimple", OptionSet::Max, "'hash13' : no matching", "world-1/world1 gbuffers_entities*.vsh call hash13 without including lib/sampling/noise.glsl"),
+    ("shrimple", OptionSet::Max, "'GetVoxelBlockPosition' : no matching", "world-1/world1 gbuffers_water.vsh call it without including lib/lighting/voxel/mask.glsl"),
+    ("shrimple", OptionSet::Max, "l-value required \"globalLightingData\"", "DYN_LIGHT_DEBUG_COUNTS increments a member of a buffer the program declares readonly"),
+    ("i-like-vanilla", OptionSet::Max, "'bloomIntScale' : undeclared", "bloomIntScale is not defined anywhere in the pack"),
+    ("bsl-shaders", OptionSet::Max, "'focusPoint' : undeclared", "DOF_FOCUS_POINT reads focusPoint, declared only for DOF_FOCUS_MODE 1"),
+    ("bsl-shaders-classic", OptionSet::Max, "'focusPoint' : undeclared", "DOF_FOCUS_POINT reads focusPoint, declared only for DOF_FOCUS_MODE 1"),
+    ("ComplementaryReimagined", OptionSet::Max, "'nightMiddleSkyColor' : undeclared", "cloudColors.glsl uses overworld-only sky colors in the Nether/End folders"),
+    ("complementary-reimagined", OptionSet::Max, "'nightMiddleSkyColor' : undeclared", "cloudColors.glsl uses overworld-only sky colors in the Nether/End folders"),
+    ("complementary-unbound", OptionSet::Max, "'nightMiddleSkyColor' : undeclared", "cloudColors.glsl uses overworld-only sky colors in the Nether/End folders"),
+    ("ComplementaryReimagined", OptionSet::Max, "'translucentMult' : undeclared", "WATER_ALPHA_MULT > 100: water.glsl writes translucentMult, which dh_water never declares"),
+    ("potato-shaders", OptionSet::Max, "'sRGB_P3D65' : undeclared", "sRGB_P3D65 is not defined anywhere in the pack"),
+    ("redhat-shaders", OptionSet::Max, "'ENTITY_GLOWSTONE' : undeclared", "ENTITY_GLOWSTONE is not defined anywhere in the pack"),
+    ("redhat-shaders", OptionSet::Max, "'lenscolor' : redefinition", "two lens-flare options both declare the local `lenscolor` in one scope"),
+    ("renderpearl", OptionSet::Max, "'view_size' : no matching", "COMPASS calls view_size(), which the pack never defines"),
+    ("spectrum", OptionSet::Max, "'skylightPosY' : undeclared", "skylightPosY is not defined anywhere in the pack"),
+    ("spectrum", OptionSet::Max, "'RaytraceIntersection' : no matching", "a 5-argument call; only a 7-argument RaytraceIntersection exists"),
+];
+
 /// A translation configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Variant {
     /// Vulkan target, forward [0,1] depth.
     Forward,
-    /// Vulkan target, reversed depth with depth-read inversion.
+    /// Vulkan target, reversed depth with depth-read inversion and comparison-sampler
+    /// emulation (the configuration of a renderpearl host without compare samplers).
     Reversed,
     /// Renderpearl target (no set/binding), compiled with glslang auto-mapping.
     Renderpearl,
@@ -38,11 +84,38 @@ enum Variant {
     DhSynth,
 }
 
-/// Transform diagnostics of the default variant, counted by `severity code`.
+impl Variant {
+    const ALL: [Variant; 4] = [Variant::Forward, Variant::Reversed, Variant::Renderpearl, Variant::DhSynth];
+
+    fn key(self) -> &'static str {
+        match self {
+            Variant::Forward => "forward",
+            Variant::Reversed => "reversed",
+            Variant::Renderpearl => "renderpearl",
+            Variant::DhSynth => "dhsynth",
+        }
+    }
+}
+
+fn set_key(s: OptionSet) -> &'static str {
+    match s {
+        OptionSet::Defaults => "defaults",
+        OptionSet::Max => "max",
+    }
+}
+
+/// Transform diagnostics of the Forward variant, counted by `severity code`.
 static DIAGNOSTICS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
 
-/// Minimum pass rate per variant and corpus.
-const REQUIRED_PASS_RATE: f64 = 99.0;
+/// Minimum pass rate per variant and corpus (known pack bugs excluded): every stage
+/// with the pack defaults; with the max option set, contradictory option combinations
+/// keep surfacing new pack bugs when packs change, so a small margin is allowed.
+fn required_pass_rate(set: OptionSet) -> f64 {
+    match set {
+        OptionSet::Defaults => 100.0,
+        OptionSet::Max => 99.0,
+    }
+}
 
 /// Outcome of one stage.
 #[derive(Debug, Clone)]
@@ -50,6 +123,15 @@ enum Outcome {
     Ok,
     /// Failed with a categorized message.
     Fail(String),
+}
+
+/// One stage result.
+struct StageResult {
+    /// `<pack>/<file>`.
+    label: String,
+    /// The program folder (`""` = root).
+    folder: String,
+    outcome: Outcome,
 }
 
 fn class_of(name: &ProgramName) -> ProgramClass {
@@ -78,8 +160,8 @@ struct Analyzed {
     stage: Result<AnalyzedStage, String>,
 }
 
-fn analyze_folder(pack: &Arc<sb_pack::ShaderPack>, env: &common::PackEnv, folder: &str) -> Vec<Analyzed> {
-    let set = pack.program_set(folder);
+fn analyze_folder(env: &PackEnv, folder: &str) -> Vec<Analyzed> {
+    let set = env.pack.program_set(folder);
     let mut jobs: Vec<(String, ProgramName, ShaderStage, String)> = Vec::new();
     for (key, p) in &set.programs {
         if !env.enabled(folder, key) {
@@ -105,8 +187,7 @@ fn analyze_folder(pack: &Arc<sb_pack::ShaderPack>, env: &common::PackEnv, folder
     }
     jobs.par_iter()
         .map(|(key, name, st, f)| {
-            let src = common::PackSources(pack.clone());
-            let mut pp = sb_preprocess::Preprocessor::new(&src);
+            let mut pp = sb_preprocess::Preprocessor::new(&env.sources);
             let pre = match f.strip_prefix(SYNTH) {
                 Some(path) => pp.preprocess_source(path, sb_transform::DEFAULT_VERTEX_SHADER, &env.options),
                 None => pp.preprocess(f, &env.options),
@@ -173,66 +254,76 @@ fn check_interfaces(refl: &[Reflection], frag_outputs: &[(u32, String)]) -> Resu
     Ok(())
 }
 
-/// Translate and compile every program of one pack; returns per-stage outcomes.
-fn run_pack(pack_dir: &Path, variant: Variant, validate_spirv: bool) -> Vec<(String, Outcome)> {
-    let Ok(pack) = sb_pack::ShaderPack::open(pack_dir) else { return Vec::new() };
-    let pack = Arc::new(pack);
-    let env = common::PackEnv::new(&pack);
-    let mut results: Vec<(String, Outcome)> = Vec::new();
+/// Translate and compile every program of one pack for every variant; returns the
+/// per-stage outcomes by variant.
+fn run_pack(env: &PackEnv, variants: &[Variant], validate_spirv: bool) -> BTreeMap<Variant, Vec<StageResult>> {
+    let mut results: BTreeMap<Variant, Vec<StageResult>> = BTreeMap::new();
     for folder in &env.folders {
-        let mut analyzed = analyze_folder(&pack, &env, folder);
+        let analyzed = analyze_folder(env, folder);
         if analyzed.is_empty() {
             continue;
         }
-        if variant == Variant::DhSynth {
-            analyzed.retain(|a| {
-                matches!(a.name, ProgramName::Geometry { program: GeometryProgram::Terrain | GeometryProgram::Water })
-                    && a.stage.as_ref().is_ok_and(|s| s.stage != ShaderStage::Compute)
-            });
-        }
-        // Pack layout and bindings.
-        let declared: Vec<String> = analyzed
-            .iter()
-            .filter_map(|a| a.stage.as_ref().ok())
-            .flat_map(|s| s.info.opaque_uniforms.iter().map(|o| o.name.clone()))
-            .collect();
-        let rc = ResourceContext::new(ProgramClass::Gbuffers).detect_watershadow(declared.iter().map(String::as_str));
-        let mut builder = PackBuilder::new(rc.clone());
-        let mut profiles_used: BTreeMap<&'static str, ProgramClass> = BTreeMap::new();
-        for a in &analyzed {
-            let Ok(s) = &a.stage else { continue };
-            let class = program_class(&a.name, s.stage == ShaderStage::Compute, variant);
-            builder.add_stage(s, class, Some(&a.key));
-            if s.stage != ShaderStage::Compute {
-                profiles_used.insert(profile_name(&a.name, variant), class);
+        for &variant in variants {
+            let subset: Vec<&Analyzed> = analyzed
+                .iter()
+                .filter(|a| {
+                    variant != Variant::DhSynth
+                        || (matches!(a.name, ProgramName::Geometry { program: GeometryProgram::Terrain | GeometryProgram::Water })
+                            && a.stage.as_ref().is_ok_and(|s| s.stage != ShaderStage::Compute))
+                })
+                .collect();
+            let out = results.entry(variant).or_default();
+            for (label, outcome) in translate_folder(env, &subset, variant, validate_spirv) {
+                out.push(StageResult { label, folder: folder.clone(), outcome });
             }
         }
-        for (p, class) in &profiles_used {
-            builder.add_profile(sb_transform::profile(p).unwrap(), *class);
-        }
-        let data = builder.finish();
-        let mut programs: BTreeMap<String, Vec<Analyzed>> = BTreeMap::new();
-        for a in analyzed {
-            programs.entry(a.key.clone()).or_default().push(a);
-        }
-        let folder_results: Vec<Vec<(String, Outcome)>> = programs
-            .par_iter()
-            .map(|(key, stages)| translate_program(&pack, key, stages, &data, &rc, variant, validate_spirv))
-            .collect();
-        results.extend(folder_results.into_iter().flatten());
     }
     results
 }
 
+/// Build the pack layout and bindings of one folder and translate its programs.
+fn translate_folder(env: &PackEnv, analyzed: &[&Analyzed], variant: Variant, validate_spirv: bool) -> Vec<(String, Outcome)> {
+    let declared: Vec<String> = analyzed
+        .iter()
+        .filter_map(|a| a.stage.as_ref().ok())
+        .flat_map(|s| s.info.opaque_uniforms.iter().map(|o| o.name.clone()))
+        .collect();
+    let rc = ResourceContext::new(ProgramClass::Gbuffers).detect_watershadow(declared.iter().map(String::as_str));
+    let mut builder = PackBuilder::new(rc.clone());
+    let mut profiles_used: BTreeMap<&'static str, ProgramClass> = BTreeMap::new();
+    for a in analyzed {
+        let Ok(s) = &a.stage else { continue };
+        let class = program_class(&a.name, s.stage == ShaderStage::Compute, variant);
+        builder.add_stage(s, class, Some(&a.key));
+        if s.stage != ShaderStage::Compute {
+            profiles_used.insert(profile_name(&a.name, variant), class);
+        }
+    }
+    for (p, class) in &profiles_used {
+        builder.add_profile(sb_transform::profile(p).unwrap(), *class);
+    }
+    let data = builder.finish();
+    let mut programs: BTreeMap<&str, Vec<&Analyzed>> = BTreeMap::new();
+    for a in analyzed {
+        programs.entry(a.key.as_str()).or_default().push(a);
+    }
+    let per_program: Vec<Vec<(String, Outcome)>> = programs
+        .par_iter()
+        .map(|(key, stages)| translate_program(env, key, stages, &data, &rc, variant, validate_spirv))
+        .collect();
+    per_program.into_iter().flatten().collect()
+}
+
 fn translate_program(
-    pack: &sb_pack::ShaderPack,
+    env: &PackEnv,
     key: &str,
-    stages: &[Analyzed],
+    stages: &[&Analyzed],
     data: &sb_transform::PackData,
     rc: &ResourceContext,
     variant: Variant,
     validate_spirv: bool,
 ) -> Vec<(String, Outcome)> {
+    let pack = &env.pack;
     let label = |f: &str| format!("{}/{}", pack.name(), f);
     let mut out = Vec::new();
     let mut ok_stages = Vec::new();
@@ -242,9 +333,9 @@ fn translate_program(
             Err(e) => out.push((label(&a.file), Outcome::Fail(format!("analyze: {e}")))),
         }
     }
-    if !out.is_empty() {
+    if let Some((_, Outcome::Fail(first))) = out.first().cloned() {
         for s in ok_stages {
-            out.push((label(&s.file), Outcome::Fail("analyze: other stage failed".into())));
+            out.push((label(&s.file), Outcome::Fail(format!("analyze: other stage failed ({first})"))));
         }
         return out;
     }
@@ -266,6 +357,7 @@ fn translate_program(
         target,
         depth_mode,
         invert_depth_reads: invert,
+        emulate_shadow_samplers: variant == Variant::Reversed,
         program_class: program_class(&name, is_compute, variant),
         alpha_test: alpha,
         is_shadow_pass: matches!(name, ProgramName::Geometry { program } if program.group() == sb_core::program::GeometryGroup::Shadow),
@@ -293,11 +385,11 @@ fn translate_program(
     let copts = if target == OutputTarget::Renderpearl { CompileOptions::auto_mapped() } else { CompileOptions::default() };
     let mut reflections = Vec::new();
     let mut failed = false;
+    let dump_name = |what: &str| format!("{}__{}__{variant:?}__{}.glsl", pack.name(), env.changed_options, what.replace(['/', '<', '>'], "_"));
     for (s, src) in t.stages.iter().zip(&ok_stages) {
         let dump = |e: &dyn std::fmt::Display| {
             if let Ok(dir) = std::env::var("SB_FAIL_DUMP") {
-                let p = Path::new(&dir).join(format!("{}__{variant:?}__{}.glsl", pack.name(), src.file.replace(['/', '<', '>'], "_")));
-                let _ = std::fs::write(p, format!("// {e}\n{}", s.glsl));
+                let _ = std::fs::write(Path::new(&dir).join(dump_name(&src.file)), format!("// {e}\n{}", s.glsl));
             }
         };
         match compile_glsl(&s.glsl, s.stage, &src.file, &copts, Some(&s.line_map)) {
@@ -332,8 +424,7 @@ fn translate_program(
     {
         if let Ok(dir) = std::env::var("SB_FAIL_DUMP") {
             for s in &t.stages {
-                let p = Path::new(&dir).join(format!("{}__{variant:?}__{key}_{}.glsl", pack.name(), s.stage));
-                let _ = std::fs::write(p, format!("// {m}\n{}", s.glsl));
+                let _ = std::fs::write(Path::new(&dir).join(dump_name(&format!("{key}_{}", s.stage))), format!("// {m}\n{}", s.glsl));
             }
         }
         for o in &mut out {
@@ -341,6 +432,28 @@ fn translate_program(
         }
     }
     out
+}
+
+/// The comma-separated values of environment variable `var`, if set.
+fn env_list(var: &str) -> Option<Vec<String>> {
+    std::env::var(var).ok().map(|v| v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect())
+}
+
+/// Whether a failure is a documented pack bug.
+fn known_pack_bug(pack_dir: &str, set: OptionSet, msg: &str) -> bool {
+    KNOWN_PACK_BUGS.iter().any(|(p, s, m, _)| *p == pack_dir && *s == set && msg.contains(m))
+}
+
+/// Pass counts of one (option set, variant, corpus) cell.
+#[derive(Default, Clone, Copy)]
+struct Counts {
+    total: usize,
+    ok: usize,
+    /// Known pack bugs (failures excluded from the rate).
+    pack_bugs: usize,
+    /// Stages of the root and `world0` folders.
+    base_total: usize,
+    base_ok: usize,
 }
 
 #[test]
@@ -351,56 +464,127 @@ fn corpus_translate_and_compile() {
         return;
     }
     let quick = std::env::var_os("SB_CORPUS_QUICK").is_some();
-    let variants: &[Variant] =
-        if quick { &[Variant::Forward] } else { &[Variant::Forward, Variant::Reversed, Variant::Renderpearl, Variant::DhSynth] };
+    let full = std::env::var_os("SB_CORPUS_FULL").is_some();
+    let sets: Vec<OptionSet> = match env_list("SB_CORPUS_SETS") {
+        Some(l) => OptionSet::ALL.into_iter().filter(|s| l.iter().any(|x| x == set_key(*s))).collect(),
+        None if quick => vec![OptionSet::Defaults],
+        None => OptionSet::ALL.to_vec(),
+    };
+    let chosen_variants: Option<Vec<Variant>> =
+        env_list("SB_CORPUS_VARIANTS").map(|l| Variant::ALL.into_iter().filter(|v| l.iter().any(|x| x == v.key())).collect());
+    // Default matrix: every variant with the pack defaults; the max option set with the
+    // two Vulkan variants (Renderpearl and synthesized DH programs add little coverage
+    // there). `SB_CORPUS_FULL=1` runs every cell.
+    let variants_for = |set: OptionSet| -> Vec<Variant> {
+        match &chosen_variants {
+            Some(v) => v.clone(),
+            None if quick => vec![Variant::Forward],
+            None if full || set == OptionSet::Defaults => Variant::ALL.to_vec(),
+            None => vec![Variant::Forward, Variant::Reversed],
+        }
+    };
+    let pack_filter = env_list("SB_CORPUS_PACKS");
     let validate_spirv = !quick && sb_compile::find_tool("spirv-val").is_some();
     let start = std::time::Instant::now();
-    let mut summary: Vec<String> = Vec::new();
-    let mut below: Vec<String> = Vec::new();
-    for &variant in variants {
-        let mut by_root: Vec<(String, usize, usize)> = Vec::new();
-        let mut classes: BTreeMap<String, (usize, String)> = BTreeMap::new();
-        for root in &roots {
-            let label = if common::SMALL_CORPUS.iter().any(|p| root.ends_with(p)) { "small".to_string() } else { "extended".to_string() };
-            let idx = match by_root.iter().position(|(l, ..)| *l == label) {
-                Some(i) => i,
-                None => {
-                    by_root.push((label.clone(), 0, 0));
-                    by_root.len() - 1
-                }
-            };
-            for pack_dir in common::packs_in(root) {
-                let results = run_pack(&pack_dir, variant, validate_spirv);
-                let ok = results.iter().filter(|r| matches!(r.1, Outcome::Ok)).count();
-                if variant == Variant::Forward {
-                    eprintln!("{:40} {ok:5}/{:5}", pack_dir.file_name().unwrap_or_default().to_string_lossy(), results.len());
-                }
-                by_root[idx].1 += results.len();
-                by_root[idx].2 += ok;
-                for (f, o) in results {
-                    if let Outcome::Fail(m) = o {
-                        let e = classes.entry(classify(&m)).or_insert((0, f.clone()));
-                        e.0 += 1;
+    let mut counts: BTreeMap<(OptionSet, Variant, &'static str), Counts> = BTreeMap::new();
+    let mut classes: BTreeMap<(OptionSet, Variant), BTreeMap<String, (usize, String)>> = BTreeMap::new();
+    let mut pack_bug_hits: Vec<String> = Vec::new();
+    let mut folder_stats: BTreeMap<OptionSet, (usize, usize)> = BTreeMap::new();
+    for root in &roots {
+        let corpus: &'static str = if common::SMALL_CORPUS.iter().any(|p| root.ends_with(p)) { "small" } else { "extended" };
+        for pack_dir in common::packs_in(root) {
+            let dir_name = pack_dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if let Some(f) = &pack_filter
+                && !f.iter().any(|x| dir_name.to_ascii_lowercase().contains(x))
+            {
+                continue;
+            }
+            for &set in &sets {
+                let Some(env) = PackEnv::open(&pack_dir, set) else {
+                    eprintln!("{dir_name}: cannot open");
+                    continue;
+                };
+                let fs = folder_stats.entry(set).or_default();
+                fs.0 += 1;
+                fs.1 += env.folders.len();
+                let variants = variants_for(set);
+                let results = run_pack(&env, &variants, validate_spirv);
+                for (variant, stages) in results {
+                    let c = counts.entry((set, variant, corpus)).or_default();
+                    let ok = stages.iter().filter(|r| matches!(r.outcome, Outcome::Ok)).count();
+                    if variant == variants[0] {
+                        let folders: Vec<&str> = env.folders.iter().map(|f| if f.is_empty() { "<root>" } else { f.as_str() }).collect();
+                        eprintln!(
+                            "{:9} {:36} {ok:5}/{:5}  ({} options changed; folders {})",
+                            set_key(set),
+                            dir_name,
+                            stages.len(),
+                            env.changed_options,
+                            folders.join(" ")
+                        );
+                    }
+                    for r in stages {
+                        c.total += 1;
+                        let base = r.folder.is_empty() || r.folder == "world0";
+                        if base {
+                            c.base_total += 1;
+                        }
+                        match r.outcome {
+                            Outcome::Ok => {
+                                c.ok += 1;
+                                if base {
+                                    c.base_ok += 1;
+                                }
+                            }
+                            Outcome::Fail(m) if known_pack_bug(&dir_name, set, &m) => {
+                                c.pack_bugs += 1;
+                                pack_bug_hits.push(format!("{} {variant:?} {}: {m}", set_key(set), r.label));
+                            }
+                            Outcome::Fail(m) => {
+                                let e = classes.entry((set, variant)).or_default().entry(classify(&m)).or_insert((0, r.label.clone()));
+                                e.0 += 1;
+                            }
+                        }
                     }
                 }
             }
         }
-        for (label, stages, ok) in &by_root {
-            let pct = if *stages == 0 { 100.0 } else { 100.0 * *ok as f64 / *stages as f64 };
-            summary.push(format!("{variant:?} {label}: {ok}/{stages} stages compile ({pct:.2}%)"));
-            if pct < REQUIRED_PASS_RATE {
-                below.push(format!("{variant:?} {label}: {pct:.2}%"));
-            }
-        }
-        let mut cv: Vec<_> = classes.into_iter().collect();
-        cv.sort_by(|a, b| b.1.0.cmp(&a.1.0));
-        for (k, (n, example)) in cv.iter().take(25) {
-            summary.push(format!("    {n:5}  {k}   [e.g. {example}]"));
-        }
     }
     eprintln!("---- elapsed {:.1?} (spirv-val: {validate_spirv})", start.elapsed());
-    for s in &summary {
-        eprintln!("{s}");
+    for (set, (packs, folders)) in &folder_stats {
+        eprintln!("{}: {packs} packs, {folders} program folders", set_key(*set));
+    }
+    let mut below: Vec<String> = Vec::new();
+    for ((set, variant, corpus), c) in &counts {
+        let counted = c.total - c.pack_bugs;
+        let pct = if counted == 0 { 100.0 } else { 100.0 * c.ok as f64 / counted as f64 };
+        let other_total = c.total - c.base_total;
+        let other_ok = c.ok - c.base_ok;
+        eprintln!(
+            "{} {variant:?} {corpus}: {}/{counted} stages compile ({pct:.2}%); root+world0 {}/{}, other dimension folders {other_ok}/{other_total}; known pack bugs {}",
+            set_key(*set),
+            c.ok,
+            c.base_ok,
+            c.base_total,
+            c.pack_bugs
+        );
+        if pct < required_pass_rate(*set) {
+            below.push(format!("{} {variant:?} {corpus}: {pct:.2}% (required {}%)", set_key(*set), required_pass_rate(*set)));
+        }
+    }
+    for ((set, variant), cl) in &classes {
+        let mut cv: Vec<_> = cl.iter().collect();
+        cv.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+        eprintln!("failure classes, {} {variant:?}:", set_key(*set));
+        for (k, (n, example)) in cv.iter().take(25) {
+            eprintln!("    {n:5}  {k}   [e.g. {example}]");
+        }
+    }
+    if !pack_bug_hits.is_empty() {
+        eprintln!("known pack bugs hit ({}):", pack_bug_hits.len());
+        for h in &pack_bug_hits {
+            eprintln!("    {h}");
+        }
     }
     if let Ok(counts) = DIAGNOSTICS.lock() {
         eprintln!("transform diagnostics (Forward variant, per program):");
@@ -408,21 +592,21 @@ fn corpus_translate_and_compile() {
             eprintln!("    {n:6}  {k}");
         }
     }
-    assert!(below.is_empty(), "pass rate below {REQUIRED_PASS_RATE}%: {below:?}");
+    assert!(below.is_empty(), "pass rate too low: {below:?}");
 }
 
 /// Debug helper: `SB_DUMP=<pack dir>:<file> cargo test --test corpus dump -- --ignored`
-/// writes the preprocessed code to `$SB_DUMP_OUT` (default `/tmp/sb_dump.glsl`).
+/// writes the preprocessed code to `$SB_DUMP_OUT` (default `/tmp/sb_dump.glsl`);
+/// `SB_DUMP_MAX=1` applies the max option set.
 #[test]
 #[ignore]
 fn dump() {
     let Ok(spec) = std::env::var("SB_DUMP") else { return };
     let (dir, file) = spec.rsplit_once(':').expect("SB_DUMP=<pack dir>:<file>");
-    let pack = Arc::new(sb_pack::ShaderPack::open(Path::new(dir)).expect("open pack"));
-    let options = common::pack_options(&pack);
-    let src = common::PackSources(pack);
-    let mut pp = sb_preprocess::Preprocessor::new(&src);
-    let pre = pp.preprocess(file, &options);
+    let set = if std::env::var_os("SB_DUMP_MAX").is_some() { OptionSet::Max } else { OptionSet::Defaults };
+    let env = PackEnv::open(Path::new(dir), set).expect("open pack");
+    let mut pp = sb_preprocess::Preprocessor::new(&env.sources);
+    let pre = pp.preprocess(file, &env.options);
     let out = std::env::var("SB_DUMP_OUT").unwrap_or_else(|_| "/tmp/sb_dump.glsl".into());
     std::fs::write(&out, &pre.code).unwrap();
     let ext = Path::new(file).extension().and_then(|e| e.to_str()).unwrap_or("fsh");

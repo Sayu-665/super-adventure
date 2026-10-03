@@ -37,6 +37,12 @@ pub(crate) fn semantic_global(key: &str) -> &'static str {
 /// Semantics available in every stage (they do not depend on vertex attributes).
 const MATRIX_SEMANTICS: &[&str] = &["model_view", "projection", "texture_matrix", "lightmap_matrix", "normal_matrix", "chunk_offset"];
 
+/// Whether semantic `key` is a per-draw (matrix-like) semantic rather than a vertex
+/// attribute.
+pub(crate) fn is_matrix_semantic(key: &str) -> bool {
+    MATRIX_SEMANTICS.contains(&key)
+}
+
 /// Matrix bases for derived `*Inverse`/`*Transpose`/`*InverseTranspose` globals.
 const MATRIX_BASES: &[(&str, &str, &str)] = &[
     // (gl name stem, generated base, type)
@@ -107,8 +113,10 @@ fn texture_matrix(base: &str, index: Option<i64>) -> Option<String> {
 }
 
 /// Rewrite compatibility builtins in the pack code of `w`.
-pub(crate) fn rewrite_builtins(w: &mut StageWork, _ctx: &Ctx) {
+pub(crate) fn rewrite_builtins(w: &mut StageWork, ctx: &Ctx) {
     let stage = w.stage;
+    let draw_parameters = ctx.opts.draw_parameters && stage == ShaderStage::Vertex;
+    let mut base_instance = false;
     // Remove `gl_ClipVertex = ...;` statements.
     for f in w.unit.functions_mut() {
         for s in &mut f.body {
@@ -144,6 +152,11 @@ pub(crate) fn rewrite_builtins(w: &mut StageWork, _ctx: &Ctx) {
                 }
                 Walk::Children
             }
+            Expr::Ident(n) if n == "gl_InstanceID" && draw_parameters => {
+                *e = Expr::raw("(gl_InstanceIndex - gl_BaseInstance)");
+                base_instance = true;
+                Walk::Skip
+            }
             Expr::Ident(n) if n.starts_with("gl_") => {
                 if let Some(r) = replacement(n, stage) {
                     *n = r.to_string();
@@ -163,6 +176,9 @@ pub(crate) fn rewrite_builtins(w: &mut StageWork, _ctx: &Ctx) {
     });
     for n in unknown {
         w.error("xf.unsupported-builtin", format!("the fixed-function builtin `{n}` is not supported"), 0);
+    }
+    if base_instance {
+        w.extensions.insert("GL_ARB_shader_draw_parameters".into());
     }
 }
 

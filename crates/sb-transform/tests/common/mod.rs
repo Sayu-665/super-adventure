@@ -1,13 +1,10 @@
-//! Helpers shared by the sb-transform integration tests: corpus discovery, standard
-//! macros, preprocessing and pack-context construction.
-
-#![allow(dead_code)]
+//! Helpers of the corpus integration test: corpus discovery, standard macros and the
+//! per-pack environment (folders, option values, enabled programs).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use sb_core::SourceProvider;
-use sb_preprocess::{PreprocessOptions, Preprocessed, Preprocessor};
+use sb_preprocess::PreprocessOptions;
 
 const SCRATCH: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad";
 
@@ -55,15 +52,6 @@ pub fn packs_in(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk(root, 3, &mut out);
     out
-}
-
-/// Reads pack files through sb-pack (lossy UTF-8).
-pub struct PackSources(pub Arc<sb_pack::ShaderPack>);
-
-impl SourceProvider for PackSources {
-    fn read(&self, path: &str) -> Option<Arc<str>> {
-        self.0.read_text(path).map(Arc::from)
-    }
 }
 
 /// Iris standard macros for a Vulkan host with Distant Horizons.
@@ -180,31 +168,71 @@ pub fn pack_options(pack: &sb_pack::ShaderPack) -> PreprocessOptions {
     o
 }
 
-/// Preprocess `path` with the standard macros.
-pub fn preprocess(pp: &mut Preprocessor<'_>, path: &str) -> Preprocessed {
-    pp.preprocess(path, &standard_options())
+/// Option values a corpus run applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OptionSet {
+    /// Every option at the pack's default.
+    Defaults,
+    /// Every boolean option on, every value option at its last listed value (options
+    /// without a value list keep their default).
+    Max,
 }
 
-/// What the pipeline would decide about a pack: preprocessing options, program
-/// folders and `program.<path>.enabled` (default option values).
+impl OptionSet {
+    /// Both sets, defaults first.
+    pub const ALL: [OptionSet; 2] = [OptionSet::Defaults, OptionSet::Max];
+
+    /// The user values of this set for the discovered options.
+    pub fn values(self, opts: &sb_pack::DiscoveredOptions) -> sb_pack::OptionValues {
+        let mut values = sb_pack::OptionValues::new();
+        if self == OptionSet::Max {
+            for o in &opts.options {
+                if sb_pack::options::is_boolean_option(o) {
+                    values.set(o.name.clone(), "true");
+                } else if let Some(last) = o.allowed.last() {
+                    values.set(o.name.clone(), last.clone());
+                }
+            }
+        }
+        values
+    }
+}
+
+/// What the pipeline would decide about a pack for one [`OptionSet`]: preprocessing
+/// options, the program folders, the edited sources and `program.<path>.enabled`.
 pub struct PackEnv {
+    /// The pack (with its `dimension.properties` map applied).
+    pub pack: Arc<sb_pack::ShaderPack>,
     /// Standard macros + feature flags.
     pub options: PreprocessOptions,
-    /// Program folders to translate: root, `world0`, and the `*` folder of
-    /// `dimension.properties`.
+    /// Program folders to translate: the root (`""`) followed by every world folder with
+    /// runnable programs (`world0`, `world-1`, `world1` and the folders
+    /// `dimension.properties` names).
     pub folders: Vec<String>,
+    /// Pack sources with the option values applied (as Iris edits option lines).
+    pub sources: sb_pack::EditedSources,
+    /// Number of options whose value differs from the default.
+    pub changed_options: usize,
     enabled: indexmap::IndexMap<String, String>,
     values: std::collections::HashMap<String, String>,
 }
 
 impl PackEnv {
-    /// Evaluate the pack's settings.
-    pub fn new(pack: &sb_pack::ShaderPack) -> Self {
-        let options = pack_options(pack);
-        let (opts, _) = sb_pack::options::discover(pack, &pack.option_start_files());
-        let values = sb_pack::OptionValues::new();
+    /// Open the pack in `dir` and evaluate its settings for `set`.
+    pub fn open(dir: &Path, set: OptionSet) -> Option<Self> {
+        let mut pack = sb_pack::ShaderPack::open(dir).ok()?;
+        let options = pack_options(&pack);
+        // dimension.properties is preprocessed with the environment macros.
+        if let Some(dim) = pack.read_latin1("dimension.properties") {
+            let (pre, _) = sb_preprocess::preprocess_properties(&dim, "dimension.properties", &options.defines);
+            pack.set_dimension_map(sb_pack::idmap::parse_dimension_properties(&pre));
+        }
+        let pack = Arc::new(pack);
+        let (opts, _) = sb_pack::options::discover(&pack, &pack.option_start_files());
+        let user = set.values(&opts);
+        let changed_options = user.changed_count(&opts);
         let mut macros = options.defines.clone();
-        macros.extend(opts.property_macros(&values));
+        macros.extend(opts.property_macros(&user));
         let mut enabled = indexmap::IndexMap::new();
         if let Some(raw_text) = pack.read_latin1("shaders.properties") {
             let (pre, _) = sb_preprocess::preprocess_properties(&raw_text, "shaders.properties", &macros);
@@ -213,20 +241,12 @@ impl PackEnv {
             let (props, _) = sb_pack::shaders_properties::parse(&prep, &raw);
             enabled = props.program_enabled.clone();
         }
-        let mut folders = vec![String::new(), "world0".to_string()];
-        if let Some(dim) = pack.read_latin1("dimension.properties") {
-            for e in sb_pack::properties::parse(&dim) {
-                if let Some(folder) = e.key.strip_prefix("dimension.")
-                    && e.value.split_whitespace().any(|v| v == "*" || v == "*:*")
-                    && !folders.iter().any(|f| f == folder)
-                {
-                    folders.push(folder.to_string());
-                }
-            }
-        }
+        let mut folders = vec![String::new()];
+        folders.extend(pack.world_folders());
         let values: std::collections::HashMap<String, String> =
-            opts.names().filter_map(|n| opts.effective_value(n, &values).map(|v| (n.to_string(), v))).collect();
-        Self { options, folders, enabled, values }
+            opts.names().filter_map(|n| opts.effective_value(n, &user).map(|v| (n.to_string(), v))).collect();
+        let sources = sb_pack::EditedSources::new(pack.clone(), opts, user);
+        Some(Self { pack, options, folders, sources, changed_options, enabled, values })
     }
 
     /// Whether `program` (base name, e.g. `composite3` or `deferred1_a`) of `folder` is

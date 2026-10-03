@@ -66,8 +66,11 @@ pub mod sources {
     pub const DH: &str = "dh";
     /// ShaderBridge-internal replacement values (fixed-function state).
     pub const SHADERBRIDGE: &str = "shaderbridge";
+    /// Values of the Voxy LOD mod (an "other mods" integration: packs read them when
+    /// Voxy renders LODs; hosts without Voxy upload zeros).
+    pub const VOXY: &str = "voxy";
     /// Every valid source string.
-    pub const ALL: [&str; 5] = [OPTIFINE, IRIS, CORE, DH, SHADERBRIDGE];
+    pub const ALL: [&str; 6] = [OPTIFINE, IRIS, CORE, DH, SHADERBRIDGE, VOXY];
 }
 
 /// A builtin uniform the host supplies by name.
@@ -81,7 +84,7 @@ pub struct BuiltinUniform {
     pub frequency: Frequency,
     /// Short human-readable description (semantics and range).
     pub description: &'static str,
-    /// One of [`sources::ALL`]: `optifine`, `iris`, `core`, `dh` or `shaderbridge`.
+    /// One of [`sources::ALL`]: `optifine`, `iris`, `core`, `dh`, `shaderbridge` or `voxy`.
     pub source: &'static str,
 }
 
@@ -116,7 +119,7 @@ const fn draw(
 }
 
 use GlslType as T;
-use sources::{CORE, DH, IRIS, OPTIFINE, SHADERBRIDGE};
+use sources::{CORE, DH, IRIS, OPTIFINE, SHADERBRIDGE, VOXY};
 
 static BUILTINS: &[BuiltinUniform] = &[
     // ---------------------------------------------------------------- camera / player
@@ -927,6 +930,21 @@ static BUILTINS: &[BuiltinUniform] = &[
         DH,
         "Distant Horizons render distance in blocks",
     ),
+    // ------------------------------------------------------------------ Voxy LOD mod
+    // Names as the corpus packs declare them (e.g. glimmer's custom uniform
+    // `combinedFar = vxRenderDistance`, Complementary's `uniform mat4 vxProjInv`).
+    frame(
+        "vxRenderDistance",
+        T::INT,
+        VOXY,
+        "Voxy LOD render distance (Voxy sets it; 0 without Voxy)",
+    ),
+    frame("vxProj", T::MAT4, VOXY, "Voxy LOD projection matrix"),
+    frame("vxProjInv", T::MAT4, VOXY, "Inverse of vxProj"),
+    frame("vxProjPrev", T::MAT4, VOXY, "vxProj of the previous frame"),
+    frame("vxModelView", T::MAT4, VOXY, "Voxy LOD model-view matrix"),
+    frame("vxModelViewInv", T::MAT4, VOXY, "Inverse of vxModelView"),
+    frame("vxModelViewPrev", T::MAT4, VOXY, "vxModelView of the previous frame"),
     // ---------------------------------------------------------------- core-profile names
     draw(
         "modelViewMatrix",
@@ -1085,6 +1103,22 @@ mod tests {
         let mut c = s.chars();
         matches!(c.next(), Some(f) if f.is_ascii_alphabetic() || f == '_')
             && c.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    }
+
+    /// Cross-crate item 6: the Voxy LOD uniforms (as packs declare them) are per-frame
+    /// builtins and usable in custom-uniform expressions.
+    #[test]
+    fn voxy_uniforms() {
+        let rd = get("vxRenderDistance").unwrap();
+        assert_eq!((rd.ty, rd.frequency, rd.source), (GlslType::INT, Frequency::Frame, sources::VOXY));
+        for name in ["vxProj", "vxProjInv", "vxProjPrev", "vxModelView", "vxModelViewInv", "vxModelViewPrev"] {
+            let b = get(name).unwrap();
+            assert_eq!((b.ty, b.frequency, b.source), (GlslType::MAT4, Frequency::Frame, sources::VOXY), "{name}");
+        }
+        assert_eq!(custom_uniform_input_type("vxRenderDistance"), Some(GlslType::INT));
+        assert_eq!(source_of("vxProjInv"), UniformSource::Builtin("vxProjInv".into()));
+        // Samplers are resources, not loose uniforms.
+        assert!(get("vxDepthTexOpaque").is_none());
     }
 
     #[test]

@@ -275,7 +275,15 @@ fn producer_name(input: &str, producer: ShaderStage, ctx: &Ctx) -> String {
 fn same_type(a: &IVar, b: &IVar) -> bool {
     crate::print::type_spec(&a.elem) == crate::print::type_spec(&b.elem)
         && crate::print::array_dims(&a.dims) == crate::print::array_dims(&b.dims)
-        && a.block.is_none() == b.block.is_none()
+        && a.block.as_ref().map(|f| block_members(f)) == b.block.as_ref().map(|f| block_members(f))
+}
+
+/// Member names and types of an interface block (qualifiers ignored).
+fn block_members(fields: &[Field]) -> Vec<String> {
+    fields
+        .iter()
+        .flat_map(|f| f.names.iter().map(move |(n, d)| format!("{} {n}{}", crate::print::type_spec(&f.ty), crate::print::array_dims(d))))
+        .collect()
 }
 
 fn zero_value(ty: &TypeSpec) -> Option<String> {
@@ -361,7 +369,9 @@ fn resolve(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
     let inputs = collect(c, true);
     let outputs = collect(p, false);
     let c_refs = crate::compat::referenced(&c.unit);
+    let p_refs = crate::compat::referenced(&p.unit);
     let env = crate::consteval::global_consts(&c.unit);
+    let p_env = crate::consteval::global_consts(&p.unit);
     let mut consumed: BTreeSet<String> = BTreeSet::new();
     let mut remove_inputs: Vec<IVar> = Vec::new();
     for input in &inputs {
@@ -369,9 +379,14 @@ fn resolve(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
         if let Some(out) = outputs.iter().find(|o| o.name == pname) {
             consumed.insert(pname.clone());
             if same_type(out, input) {
+                // Rule b: an output the producer never assigns (its name occurs only in
+                // the declaration) reads zero instead of an undefined value.
+                if !out.generated && out.block.is_none() && !p_refs.contains(&pname) && p.stage != ShaderStage::TessControl {
+                    zero_unwritten(p, out, &pname, &p_env);
+                }
                 continue;
             }
-            repair_mismatch(p, out, input, &pname);
+            repair_mismatch(p, out, input, &pname, &p_env, &env);
             continue;
         }
         let referenced = input.generated || c_refs.contains(&input.name) || input.block.is_some();
@@ -459,8 +474,51 @@ fn add_producer_output(p: &mut StageWork, input: &IVar, pname: &str, ctx: &Ctx, 
     }
 }
 
+/// Rule b: zero-initialize an output the producer never writes.
+fn zero_unwritten(p: &mut StageWork, out: &IVar, pname: &str, env: &crate::consteval::ConstEnv) {
+    let Some(stmt) = zero_init(pname, &out.elem, &out.dims, env) else { return };
+    if p.stage == ShaderStage::Geometry {
+        p.emit_hooks.insert(0, stmt);
+    } else {
+        p.prologue.push(stmt);
+    }
+    p.warn("xf.unwritten-varying", format!("`{pname}` is never written by the {} stage; it reads zero", p.stage), 0);
+}
+
+/// Constant length of a one-dimensional array interface variable.
+fn array_len(dims: &[ArrayDim], env: &crate::consteval::ConstEnv) -> Option<u32> {
+    match dims {
+        [ArrayDim::Sized(e)] => crate::consteval::array_len(e, env),
+        _ => None,
+    }
+}
+
 /// Rule c: the producer keeps a temporary of its own type and converts at the end.
-fn repair_mismatch(p: &mut StageWork, out: &IVar, input: &IVar, pname: &str) {
+/// Arrays of different lengths take the consumer's length (missing elements read
+/// zero).
+fn repair_mismatch(
+    p: &mut StageWork,
+    out: &IVar,
+    input: &IVar,
+    pname: &str,
+    p_env: &crate::consteval::ConstEnv,
+    c_env: &crate::consteval::ConstEnv,
+) {
+    if let (Some(a), Some(b)) = (&out.block, &input.block) {
+        // GLSL requires matching members; a pack that declares them differently (under
+        // different conditions in each stage) fails to link on every driver.
+        p.error(
+            "xf.varying-mismatch",
+            format!(
+                "interface block `{pname}` has members [{}] in the {} stage but [{}] in the next stage",
+                block_members(a).join("; "),
+                p.stage,
+                block_members(b).join("; ")
+            ),
+            0,
+        );
+        return;
+    }
     let (Some(pt), Some(ct)) = (out.elem.name().and_then(GlslType::parse), input.elem.name().and_then(GlslType::parse)) else {
         p.error(
             "xf.varying-mismatch",
@@ -469,36 +527,69 @@ fn repair_mismatch(p: &mut StageWork, out: &IVar, input: &IVar, pname: &str) {
         );
         return;
     };
-    if out.per_vertex || !out.dims.is_empty() || !input.dims.is_empty() || pt.is_matrix() != ct.is_matrix() {
+    // Scalar/vector vs matrix classes cannot be converted; arrays need constant lengths.
+    let lengths = match (out.dims.is_empty(), input.dims.is_empty()) {
+        (true, true) => Some(None),
+        (false, false) => array_len(&out.dims, p_env).zip(array_len(&input.dims, c_env)).map(Some),
+        _ => None,
+    };
+    let (Some(lengths), false) = (lengths, out.per_vertex || pt.is_matrix() != ct.is_matrix()) else {
+        let shape = |t: GlslType, d: &[ArrayDim]| format!("{}{}", t.glsl_name(), crate::print::array_dims(d));
         p.error(
             "xf.varying-mismatch",
-            format!("varying `{pname}` is declared as {} here but as {} in the next stage", pt.glsl_name(), ct.glsl_name()),
+            format!(
+                "varying `{pname}` is declared as {} in the {} stage but as {} in the next stage",
+                shape(pt, &out.dims),
+                p.stage,
+                shape(ct, &input.dims)
+            ),
             0,
         );
         return;
-    }
+    };
     let tmp = format!("sb_tmp_{pname}");
     crate::scope::walk_idents(&mut p.unit, &mut |n, occ| {
         if occ == crate::scope::Occ::GlobalRef && n == pname {
             *n = tmp.clone();
         }
     });
-    // The output now has the consumer's type.
+    // The output now has the consumer's type (and length).
     let item = item_mut(p, out);
     if let ItemKind::Decl(d) = &mut item.kind {
         d.ty.ty = TypeSpec { base: TypeBase::Named(ct.glsl_name()), array: Vec::new() };
+        if let (Some((_, nc)), Some(v)) = (lengths, d.vars.first_mut()) {
+            v.array = vec![ArrayDim::Sized(Expr::Int(nc as i32))];
+        }
     }
-    p.piece(Section::Late, &[&tmp], format!("{} {tmp};", pt.glsl_name()));
-    let conv = crate::compat::convert(&tmp, pt, ct);
-    let stmt = format!("{pname} = {conv};");
+    let mut stmts = Vec::new();
+    match lengths {
+        None => {
+            // Zero-initialized: the pack may never write it (rule b).
+            p.piece(Section::Late, &[&tmp], format!("{} {tmp} = {}(0);", pt.glsl_name(), pt.glsl_name()));
+            stmts.push(format!("{pname} = {};", crate::compat::convert(&tmp, pt, ct)));
+        }
+        Some((np, nc)) => {
+            p.piece(Section::Late, &[&tmp], format!("{} {tmp}[{np}];", pt.glsl_name()));
+            for k in 0..nc {
+                let value = if k < np { crate::compat::convert(&format!("{tmp}[{k}]"), pt, ct) } else { format!("{}(0)", ct.glsl_name()) };
+                stmts.push(format!("{pname}[{k}] = {value};"));
+            }
+        }
+    }
     if p.stage == ShaderStage::Geometry {
-        p.emit_hooks.push(stmt);
+        p.emit_hooks.extend(stmts);
     } else {
-        p.epilogue.push(stmt);
+        p.epilogue.extend(stmts);
     }
+    let shape = |t: GlslType, n: Option<u32>| format!("{}{}", t.glsl_name(), n.map(|n| format!("[{n}]")).unwrap_or_default());
     p.warn(
         "xf.varying-type",
-        format!("varying `{pname}` is {} in the {} stage but {} in the next stage; converted", pt.glsl_name(), p.stage, ct.glsl_name()),
+        format!(
+            "varying `{pname}` is {} in the {} stage but {} in the next stage; converted",
+            shape(pt, lengths.map(|l| l.0)),
+            p.stage,
+            shape(ct, lengths.map(|l| l.1))
+        ),
         0,
     );
 }

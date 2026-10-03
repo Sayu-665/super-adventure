@@ -3,11 +3,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use sb_core::GlslType;
+
 use crate::ast::*;
 use crate::program::{Ctx, StageWork};
 
 /// Apply every fix to the pack code of `w`.
-pub(crate) fn apply(w: &mut StageWork, _ctx: &Ctx) {
+pub(crate) fn apply(w: &mut StageWork, ctx: &Ctx) {
     remove_dead_functions(&mut w.unit);
     const_from_const_params(&mut w.unit);
     let (consts, structs) = demote_global_consts(&mut w.unit);
@@ -15,6 +17,260 @@ pub(crate) fn apply(w: &mut StageWork, _ctx: &Ctx) {
     let n = dynamic_offsets(&mut w.unit, &w.opaque_types, &consts, &structs);
     if n > 0 {
         w.info("xf.dynamic-offset", format!("{n} texture lookup(s) with a non-constant texel offset were rewritten without the offset form"), 0);
+    }
+    let n = opaque_ternaries(&mut w.unit, &w.opaque_types);
+    if n > 0 {
+        w.info("xf.opaque-ternary", format!("{n} call(s) taking `cond ? samplerA : samplerB` were split into `cond ? f(samplerA) : f(samplerB)`"), 0);
+    }
+    let n = narrowing_conversions(w, ctx);
+    if n > 0 {
+        w.info("xf.implicit-conversion", format!("{n} implicit narrowing conversion(s) (float to int/uint, uint to int, double to float) were made explicit"), 0);
+    }
+}
+
+// ------------------------------------------------------------ opaque ternaries
+
+/// `f(c ? s1 : s2, ...)` with opaque `s1`/`s2` -> `(c ? f(s1, ...) : f(s2, ...))`.
+/// NVIDIA accepts opaque operands of `?:`; GLSL (and SPIR-V) do not.
+fn opaque_ternaries(unit: &mut TranslationUnit, opaque_globals: &HashMap<String, String>) -> usize {
+    let mut count = 0;
+    for f in unit.functions_mut() {
+        let params: HashSet<String> = f
+            .proto
+            .params
+            .iter()
+            .filter(|p| p.ty.name().is_some_and(sb_uniforms::is_opaque_type))
+            .filter_map(|p| p.name.clone())
+            .collect();
+        crate::scope::walk_function_exprs(f, &mut |root, is_local| {
+            let is_opaque = |n: &str| if is_local(n) { params.contains(n) } else { opaque_globals.contains_key(n) };
+            hoist_opaque_ternaries(root, &is_opaque, &mut count);
+        });
+    }
+    count
+}
+
+fn is_opaque_ternary(e: &Expr, is_opaque: &dyn Fn(&str) -> bool) -> bool {
+    match e {
+        Expr::Ternary(_, a, b) => {
+            let opaque = |x: &Expr| is_opaque_ternary(x, is_opaque) || crate::compat::root_ident(x).is_some_and(is_opaque);
+            opaque(a) && opaque(b)
+        }
+        _ => false,
+    }
+}
+
+fn hoist_opaque_ternaries(e: &mut Expr, is_opaque: &dyn Fn(&str) -> bool, count: &mut usize) {
+    e.walk_children_mut(&mut |c| {
+        hoist_opaque_ternaries(c, is_opaque, count);
+        Walk::Skip
+    });
+    let Expr::Call(_, args) = e else { return };
+    let Some(i) = args.iter().position(|a| is_opaque_ternary(a, is_opaque)) else { return };
+    let Expr::Ternary(cond, a, b) = std::mem::replace(&mut args[i], Expr::Int(0)) else { return };
+    let mut first = e.clone();
+    let mut second = e.clone();
+    if let (Expr::Call(_, x), Expr::Call(_, y)) = (&mut first, &mut second) {
+        x[i] = *a;
+        y[i] = *b;
+    }
+    // Further opaque ternary arguments (or nested ones) are split recursively.
+    hoist_opaque_ternaries(&mut first, is_opaque, count);
+    hoist_opaque_ternaries(&mut second, is_opaque, count);
+    *e = Expr::Ternary(cond, Box::new(first), Box::new(second));
+    *count += 1;
+}
+
+// ------------------------------------------------------- narrowing conversions
+
+/// Types of built-in variables the conversion fix reads.
+const BUILTIN_VARIABLE_TYPES: &[(&str, GlslType)] = &[
+    ("gl_FragCoord", GlslType::VEC4),
+    ("gl_Position", GlslType::VEC4),
+    ("gl_FragDepth", GlslType::FLOAT),
+    ("gl_PointCoord", GlslType::VEC2),
+    ("gl_FrontFacing", GlslType::BOOL),
+    ("gl_VertexIndex", GlslType::INT),
+    ("gl_InstanceIndex", GlslType::INT),
+    ("gl_PrimitiveID", GlslType::INT),
+    ("gl_Layer", GlslType::INT),
+    ("gl_InvocationID", GlslType::INT),
+    ("gl_SampleID", GlslType::INT),
+    ("gl_TessCoord", GlslType::VEC3),
+    ("gl_LocalInvocationIndex", GlslType::UINT),
+    ("gl_LocalInvocationID", GlslType::UVEC3),
+    ("gl_GlobalInvocationID", GlslType::UVEC3),
+    ("gl_WorkGroupID", GlslType::UVEC3),
+    ("gl_NumWorkGroups", GlslType::UVEC3),
+    ("gl_WorkGroupSize", GlslType::UVEC3),
+];
+
+/// Whether assigning a `from` value to a `to` lvalue is an implicit conversion that
+/// GLSL forbids but NVIDIA performs (float/double -> int/uint, uint -> int,
+/// double -> float), for scalars and vectors of the same size.
+fn is_narrowing(to: GlslType, from: GlslType) -> bool {
+    use sb_core::ScalarKind as K;
+    to.rows == from.rows
+        && to.cols == 1
+        && from.cols == 1
+        && matches!((to.scalar, from.scalar), (K::Int | K::Uint, K::Float | K::Double) | (K::Int, K::Uint) | (K::Float, K::Double))
+}
+
+/// Wrap `e` in a constructor of `to` when it is a narrowing conversion.
+fn convert_narrowing(e: &mut Expr, to: Option<GlslType>, scope: &crate::types::TypeScope, count: &mut usize) {
+    let (Some(to), Some(from)) = (to, scope.infer(e)) else { return };
+    if to.array.is_none() && is_narrowing(to, from) {
+        let inner = std::mem::replace(e, Expr::Int(0));
+        *e = Expr::call(to.glsl_name(), vec![inner]);
+        *count += 1;
+    }
+}
+
+/// Make implicit narrowing conversions explicit in initializers, plain assignments and
+/// return statements.
+fn narrowing_conversions(w: &mut StageWork, ctx: &Ctx) -> usize {
+    let mut extra: Vec<(String, GlslType)> = BUILTIN_VARIABLE_TYPES.iter().map(|(n, t)| ((*n).to_string(), *t)).collect();
+    for m in ctx.pack.layout.frame.members.iter().chain(&ctx.pack.layout.draw.members) {
+        extra.push((m.name.clone(), m.ty));
+    }
+    // Generated globals the pack code reads (semantics, attribute globals, ...).
+    for p in &w.pieces {
+        if let Ok(u) = crate::parse::parse_glsl(&p.text, 460) {
+            let env = crate::consteval::ConstEnv::new();
+            for item in &u.items {
+                if let ItemKind::Decl(d) = &item.kind {
+                    for v in &d.vars {
+                        if let Some(t) = crate::types::declared_type(&d.ty.ty, &v.array, &env) {
+                            extra.push((v.name.clone(), t));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let types = crate::types::UnitTypes::collect(&w.unit, extra);
+    let env = crate::consteval::global_consts(&w.unit);
+    let opaque = w.opaque_types.clone();
+    let mut count = 0;
+    for item in &mut w.unit.items {
+        match &mut item.kind {
+            ItemKind::Function(f) => {
+                let ret = if f.proto.ret.ty.array.is_empty() { f.proto.ret.ty.name().and_then(GlslType::parse) } else { None };
+                let mut scope = types.scope(&f.proto.params, &opaque);
+                for s in &mut f.body {
+                    narrow_stmt(s, &mut scope, ret, &env, &mut count);
+                }
+            }
+            ItemKind::Decl(d) => {
+                let scope = types.scope(&[], &opaque);
+                for v in &mut d.vars {
+                    if let Some(Init::Expr(e)) = &mut v.init {
+                        convert_narrowing(e, crate::types::declared_type(&d.ty.ty, &v.array, &env), &scope, &mut count);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn narrow_expr(e: &mut Expr, scope: &crate::types::TypeScope, count: &mut usize) {
+    e.walk_children_mut(&mut |c| {
+        narrow_expr(c, scope, count);
+        Walk::Skip
+    });
+    if let Expr::Assign(lhs, AssignOp::Equal, rhs) = e {
+        let to = scope.infer(lhs);
+        convert_narrowing(rhs, to, scope, count);
+    }
+}
+
+fn narrow_stmt(s: &mut Stmt, scope: &mut crate::types::TypeScope, ret: Option<GlslType>, env: &crate::consteval::ConstEnv, count: &mut usize) {
+    match &mut s.kind {
+        StmtKind::Decl(d) => {
+            for v in &mut d.vars {
+                let ty = crate::types::declared_type(&d.ty.ty, &v.array, env);
+                if let Some(Init::Expr(e)) = &mut v.init {
+                    narrow_expr(e, scope, count);
+                    convert_narrowing(e, ty, scope, count);
+                }
+                scope.declare(&v.name, ty);
+            }
+        }
+        StmtKind::Expr(e) | StmtKind::Case(e) => narrow_expr(e, scope, count),
+        StmtKind::Return(Some(e)) => {
+            narrow_expr(e, scope, count);
+            convert_narrowing(e, ret, scope, count);
+        }
+        StmtKind::Block(b) => {
+            scope.push();
+            for x in b {
+                narrow_stmt(x, scope, ret, env, count);
+            }
+            scope.pop();
+        }
+        StmtKind::If { cond, then, els } => {
+            narrow_expr(cond, scope, count);
+            scope.push();
+            narrow_stmt(then, scope, ret, env, count);
+            scope.pop();
+            if let Some(e) = els {
+                scope.push();
+                narrow_stmt(e, scope, ret, env, count);
+                scope.pop();
+            }
+        }
+        StmtKind::Switch { expr, body } => {
+            narrow_expr(expr, scope, count);
+            scope.push();
+            for x in body {
+                narrow_stmt(x, scope, ret, env, count);
+            }
+            scope.pop();
+        }
+        StmtKind::While { cond, body } => {
+            scope.push();
+            match cond {
+                Condition::Expr(e) => narrow_expr(e, scope, count),
+                Condition::Decl { ty, name, init } => {
+                    if let Init::Expr(e) = init {
+                        narrow_expr(e, scope, count);
+                    }
+                    scope.declare(name, crate::types::declared_type(&ty.ty, &[], env));
+                }
+            }
+            narrow_stmt(body, scope, ret, env, count);
+            scope.pop();
+        }
+        StmtKind::DoWhile { body, cond } => {
+            scope.push();
+            narrow_stmt(body, scope, ret, env, count);
+            scope.pop();
+            narrow_expr(cond, scope, count);
+        }
+        StmtKind::For { init, cond, step, body } => {
+            scope.push();
+            if let Some(i) = init {
+                narrow_stmt(i, scope, ret, env, count);
+            }
+            match cond {
+                Some(Condition::Expr(e)) => narrow_expr(e, scope, count),
+                Some(Condition::Decl { ty, name, init }) => {
+                    if let Init::Expr(e) = init {
+                        narrow_expr(e, scope, count);
+                    }
+                    scope.declare(name, crate::types::declared_type(&ty.ty, &[], env));
+                }
+                None => {}
+            }
+            if let Some(st) = step {
+                narrow_expr(st, scope, count);
+            }
+            narrow_stmt(body, scope, ret, env, count);
+            scope.pop();
+        }
+        StmtKind::Return(None) | StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard => {}
     }
 }
 

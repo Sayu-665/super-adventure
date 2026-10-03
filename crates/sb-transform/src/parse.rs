@@ -521,7 +521,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn probe_comments() {
+    fn lexer_edge_cases_parse() {
         for src in [
             "/***/\nvoid main() {}\n",
             "/****/\nvoid main() {}\n",
@@ -536,7 +536,7 @@ mod tests {
             "struct S { uint a; };\nuniform B { S m[2]; };\nvoid f() { S s; }\n",
             "struct S { uint a; };\nuniform B { S m[2]; } b;\nvoid f() { S s; }\n",
         ] {
-            eprintln!("{src:?} -> {:?}", parse_glsl(src, 330).err());
+            assert!(parse_glsl(src, 330).is_ok(), "{src:?}: {:?}", parse_glsl(src, 330).err());
         }
     }
 }

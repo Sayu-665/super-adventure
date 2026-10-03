@@ -47,6 +47,12 @@ pub struct TransformOptions {
     /// Emulate `sampler2DShadow` comparisons in the shader (hosts without comparison
     /// samplers).
     pub emulate_shadow_samplers: bool,
+    /// The host may draw with a non-zero base instance (e.g. multi-draw-indirect terrain
+    /// selecting sections with `firstInstance`) and supports `shaderDrawParameters`:
+    /// `gl_InstanceID` becomes `(gl_InstanceIndex - gl_BaseInstance)`
+    /// (`GL_ARB_shader_draw_parameters`). When false (the default) the host guarantees
+    /// base instance 0 and `gl_InstanceID` is plain `gl_InstanceIndex`.
+    pub draw_parameters: bool,
     /// Program name for diagnostics (e.g. `world0/gbuffers_terrain`).
     pub program_name: Option<String>,
 }
@@ -67,6 +73,7 @@ impl Default for TransformOptions {
             image_formats: IndexMap::new(),
             storage_image_read_without_format: true,
             emulate_shadow_samplers: false,
+            draw_parameters: false,
             program_name: None,
         }
     }

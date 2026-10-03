@@ -1,6 +1,6 @@
 //! Program-level orchestration: per-stage rewriting, linking, emission.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use sb_core::model::ResourceKind;
 use sb_core::{Diagnostic, Diagnostics, ShaderStage, SourceLocation};
@@ -103,8 +103,11 @@ pub(crate) struct StageWork<'a> {
     pub resources: Vec<ResourceUse>,
     /// Fragment outputs (physical location, base type, GLSL name).
     pub frag_outputs: Vec<(u32, String, String)>,
-    /// GLSL type of every declared opaque resource (by GLSL name).
+    /// GLSL type of every declared opaque resource (by GLSL name), after lowering
+    /// (rectangle samplers are 2D samplers here).
     pub opaque_types: HashMap<String, String>,
+    /// Declared rectangle samplers (by GLSL name), lowered to 2D samplers.
+    pub rect_samplers: HashSet<String>,
     /// The program needs raw Vulkan (1D/3D samplers, images, SSBOs).
     pub requires_raw_vulkan: bool,
     pub diags: Diagnostics,
@@ -125,6 +128,7 @@ impl<'a> StageWork<'a> {
             resources: Vec::new(),
             frag_outputs: Vec::new(),
             opaque_types: HashMap::new(),
+            rect_samplers: HashSet::new(),
             requires_raw_vulkan: false,
             diags: Diagnostics::new(),
         }
@@ -192,14 +196,18 @@ fn texcoord_count(stages: &[&AnalyzedStage]) -> u32 {
             continue;
         }
         s.unit.walk_exprs(&mut |e| {
-            if let Expr::Index(base, idx) = e
-                && matches!(base.as_ident(), Some("gl_TexCoord") | Some("gl_TexCoordIn"))
-            {
-                match idx.as_ref() {
-                    Expr::Int(i) if *i >= 0 && *i < 32 => n = n.max(*i as u32 + 1),
-                    Expr::UInt(i) if *i < 32 => n = n.max(*i + 1),
-                    _ => n = n.max(8),
-                }
+            let Expr::Index(base, idx) = e else { return Walk::Children };
+            // `gl_TexCoord[i]`, and `gl_TexCoordIn[vertex][i]` in geometry shaders.
+            let texcoord_index = match (base.as_ident(), base.as_ref()) {
+                (Some("gl_TexCoord"), _) => Some(idx.as_ref()),
+                (_, Expr::Index(inner, _)) if inner.as_ident() == Some("gl_TexCoordIn") => Some(idx.as_ref()),
+                _ => None,
+            };
+            match texcoord_index {
+                Some(Expr::Int(i)) if *i >= 0 && *i < 32 => n = n.max(*i as u32 + 1),
+                Some(Expr::UInt(i)) if *i < 32 => n = n.max(*i + 1),
+                Some(_) => n = n.max(8),
+                None => {}
             }
             Walk::Children
         });
