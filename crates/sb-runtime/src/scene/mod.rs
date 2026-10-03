@@ -269,7 +269,7 @@ impl CpuScene {
         } else {
             (Vec::new(), CpuMesh::new(&formats::VANILLA_ENTITY))
         };
-        let sky = sky::build();
+        let sky = sky::build(rd as u32);
         let dh_distance = params.clamped_dh_distance() as i32;
         let dh = if with_dh && dh_distance > rd {
             dh::build(&world, cam_chunk, rd, dh_distance)

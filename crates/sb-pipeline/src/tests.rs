@@ -69,7 +69,9 @@ fn minimal_pack_end_to_end() {
     let block = &dim.programs[dim.geometry[&GeometryProgram::Block].program as usize];
     assert_eq!(block.name, "gbuffers_terrain");
     assert_eq!(block.draw_profile.as_deref(), Some("vanilla_entity"));
-    assert!(!dim.geometry.contains_key(&GeometryProgram::Basic));
+    // gbuffers_basic's chain is absent: Iris's fallback program draws that geometry.
+    let basic = &dim.programs[dim.geometry[&GeometryProgram::Basic].program as usize];
+    assert_eq!(basic.synthesized_from.as_deref(), Some(FALLBACK_SOURCE));
 
     // Shared gbuffer attachments and output slots.
     assert_eq!(dim.gbuffer_attachments, vec![0, 2]);
@@ -112,7 +114,8 @@ fn minimal_pack_end_to_end() {
     let dh = &dim.programs[dim.geometry[&GeometryProgram::DhTerrain].program as usize];
     assert_eq!(dh.name, "dh_terrain");
     assert_eq!(dh.synthesized_from.as_deref(), Some("gbuffers_terrain"));
-    assert_eq!(dh.draw_profile.as_deref(), Some("dh_terrain"));
+    // Synthesized from gbuffers_terrain: the vanilla-lightmap variant of dh_terrain.
+    assert_eq!(dh.draw_profile.as_deref(), Some(sb_transform::DH_SYNTH_PROFILE));
     // dh_water falls back to the same synthesized program (gbuffers_water → gbuffers_terrain).
     assert_eq!(dim.geometry[&GeometryProgram::DhWater].program, dim.geometry[&GeometryProgram::DhTerrain].program);
     assert!(out.stats.modules_validated > 0 || sb_compile::find_tool("spirv-val").is_none());
@@ -177,6 +180,8 @@ fn native_and_disabled_dh() {
     assert!(!dim.distant_horizons.unified_projection);
     let dh = &dim.programs[dim.geometry[&GeometryProgram::DhTerrain].program as usize];
     assert_eq!(dh.synthesized_from, None);
+    // Native DH programs keep the plain DH profile.
+    assert_eq!(dh.draw_profile.as_deref(), Some("dh_terrain"));
     assert_eq!(dim.geometry[&GeometryProgram::DhWater].resolved_from, GeometryProgram::DhTerrain);
 
     let mut s = vulkan_only();
@@ -348,7 +353,9 @@ fn compile_variant_and_cache() {
     s.profile_overrides.insert(GeometryProgram::Terrain, vec!["vanilla_particle".into()]);
     let out = compile_pack(&pack, &s);
     let dim = &out.pack.dimensions[0];
-    let extra: Vec<&Program> = dim.programs.iter().filter(|p| p.draw_profile.as_deref() == Some("vanilla_particle")).collect();
+    // (Fallback programs for the particle slots use that profile too.)
+    let extra: Vec<&Program> =
+        dim.programs.iter().filter(|p| p.draw_profile.as_deref() == Some("vanilla_particle") && p.synthesized_from.is_none()).collect();
     assert_eq!(extra.len(), 1);
     let idx = dim.programs.iter().position(|p| std::ptr::eq(p, extra[0])).unwrap() as u32;
     assert!(dim.geometry.values().all(|slot| slot.program != idx));
@@ -409,4 +416,37 @@ fn garbage_input_does_not_panic() {
     let empty = compile_pack(&ShaderPack::from_files("empty", Vec::<(&str, &str)>::new()), &CompileSettings::default());
     assert!(empty.pack.dimensions.is_empty());
     assert!(empty.pack.diagnostics.iter().any(|d| d.code == "pack.no-programs"));
+}
+
+/// A pack with only `final` (MinecraftShaderProgramming tutorial 1): every gbuffers slot
+/// is drawn by Iris's fallback program, which compiles for every draw profile it needs
+/// and writes colortex0.
+#[test]
+fn fallback_programs_compile_for_every_slot() {
+    let files = vec![
+        ("final.vsh".to_string(), QUAD_VSH.to_string()),
+        ("final.fsh".to_string(), "#version 120\nuniform sampler2D colortex0;\nvarying vec2 texcoord;\nvoid main() { gl_FragColor = texture2D(colortex0, texcoord); }\n".to_string()),
+    ];
+    let settings = CompileSettings { validate_spirv: true, ..vulkan_only() };
+    let out = compile_pack(&pack_of(&files), &settings);
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    assert!(out.stats.programs_failed.is_empty(), "{:?}", out.stats.programs_failed);
+    let dim = &out.pack.dimensions[0];
+    for g in GeometryProgram::ALL.iter().filter(|g| g.group() == sb_core::program::GeometryGroup::Gbuffers) {
+        let slot = dim.geometry.get(g).unwrap_or_else(|| panic!("{g:?} has no program"));
+        let p = &dim.programs[slot.program as usize];
+        assert_eq!(p.synthesized_from.as_deref(), Some(FALLBACK_SOURCE), "{g:?}");
+        assert_eq!(p.draw_buffers, vec![0], "{g:?}");
+        assert!(p.stages.iter().all(|s| s.spirv.is_some()), "{g:?}");
+    }
+    // Default alpha tests and blending of the slot apply (cutout terrain tests alpha,
+    // water blends).
+    let cutout = &dim.programs[dim.geometry[&GeometryProgram::TerrainCutout].program as usize];
+    assert!(cutout.alpha_test.is_some());
+    let water = &dim.programs[dim.geometry[&GeometryProgram::Water].program as usize];
+    assert!(water.blend.is_some());
+    // DH LODs are synthesized from the fallback terrain program; no shadow pass.
+    assert_eq!(dim.distant_horizons.strategy, DhStrategy::Synthesized);
+    assert!(!dim.geometry.contains_key(&GeometryProgram::Shadow));
+    assert!(out.pack.diagnostics.iter().any(|d| d.code == "pipeline.fallback-program"));
 }

@@ -197,6 +197,14 @@ fn storage_images_keep_formats_and_access() {
         .stage(ShaderStage::Compute, cs)
         .run();
     assert!(out.has_diag("xf.image-format"));
+    // An image passed to a pack function may be read there: it is not made `writeonly`
+    // (a `writeonly` argument cannot be passed to a parameter without it).
+    let cs = "#version 430\nlayout(local_size_x = 8, local_size_y = 8) in;\nuniform image2D colorimg0;\n\
+              vec4 load(image2D img, ivec2 p) { return imageLoad(img, p); }\n\
+              void main() { ivec2 p = ivec2(gl_GlobalInvocationID.xy); imageStore(colorimg0, p, load(colorimg0, p) * 2.0); }\n";
+    let out = T::fullscreen().with(|o| o.program_class = ProgramClass::Compute).stage(ShaderStage::Compute, cs).run();
+    contains_all(out.glsl(ShaderStage::Compute), &["#extension GL_EXT_shader_image_load_formatted : enable", ") uniform image2D colorimg0;"]);
+    contains_none(out.glsl(ShaderStage::Compute), &["writeonly"]);
 }
 
 #[test]
@@ -221,6 +229,21 @@ fn requires_raw_vulkan_only_for_features_renderpearl_lacks() {
     assert!(!T::fullscreen().vs(VS).fs(fs).run().prog.requires_raw_vulkan);
     let fs1 = "#version 130\nuniform sampler1D colortex0;\nvarying vec2 uv;\nvoid main() { gl_FragData[0] = texture1D(colortex0, uv.x); }\n";
     assert!(T::fullscreen().vs(VS).fs(fs1).run().prog.requires_raw_vulkan);
+    // Interfaces Mojang's pipeline builder rejects even after flattening (64-bit
+    // varyings, arrayed interface blocks), decided alike for both targets.
+    let vs = "#version 400\nflat out dvec2 d;\nvoid main() { gl_Position = ftransform(); d = dvec2(1.0); }\n";
+    let fs = "#version 400\nflat in dvec2 d;\nout vec4 c;\nvoid main() { c = vec4(vec2(d), 0.0, 1.0); }\n";
+    for target in [OutputTarget::Vulkan, OutputTarget::Renderpearl] {
+        let out = T::fullscreen().vs(vs).fs(fs).with(|o| o.target = target).run();
+        assert!(out.prog.requires_raw_vulkan && out.has_diag("xf.renderpearl-interface"), "{target:?}");
+    }
+    let vs = "#version 400\nout V { vec2 a; } v[2];\nvoid main() { gl_Position = ftransform(); v[0].a = vec2(1.0); v[1].a = vec2(2.0); }\n";
+    let fs = "#version 400\nin V { vec2 a; } v[2];\nout vec4 c;\nvoid main() { c = vec4(v[0].a, v[1].a); }\n";
+    assert!(T::fullscreen().vs(vs).fs(fs).run().prog.requires_raw_vulkan);
+    // Blocks and struct varyings are flattened instead.
+    let vs = "#version 400\nstruct S { vec2 a; };\nout S s;\nout V { vec2 b; } v;\nvoid main() { gl_Position = ftransform(); s.a = vec2(1.0); v.b = s.a; }\n";
+    let fs = "#version 400\nstruct S { vec2 a; };\nin S s;\nin V { vec2 b; } v;\nout vec4 c;\nvoid main() { c = vec4(s.a, v.b); }\n";
+    assert!(!T::fullscreen().vs(vs).fs(fs).run().prog.requires_raw_vulkan);
 }
 
 #[test]

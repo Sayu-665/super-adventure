@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Everything about a pack pipeline that comes from the draw it replaces rather than from the pack:
@@ -63,7 +64,26 @@ public record PipelineShape(
             host);
     }
 
-    /** @return the shape of composite-style passes: three vertices, no buffers, no depth test */
+    /**
+     * The shape of geometry ShaderBridge draws from a draw profile's vertex buffers rather than in
+     * place of a vanilla pipeline: shadow-pass re-renders, Distant Horizons LODs, Sodium terrain.
+     *
+     * @param profile  the draw profile (also the shape id)
+     * @param formats  vertex layouts of the profiles
+     * @param topology primitive topology of the draws
+     * @param depth    depth test (see {@link DepthStates#standard})
+     * @param cull     default back-face culling, overridden by {@code program.cull}
+     * @return the shape, or empty if the profile has no known vertex layout
+     */
+    public static Optional<PipelineShape> ofProfile(String profile, ProfileVertexFormats formats, PrimitiveTopology topology, DepthStencilState depth,
+                                                    boolean cull) {
+        return formats.bindings(profile).map(bindings -> new PipelineShape(profile, bindings, topology, depth, cull, PolygonMode.FILL, 0, Map.of()));
+    }
+
+    /**
+     * @return the shape of composite-style passes: the {@code fullscreen} profile's six vertices
+     *     (two triangles) generated from the vertex index, no buffers, no depth test
+     */
     public static PipelineShape fullscreen() {
         return new PipelineShape("fullscreen", List.of(), PrimitiveTopology.TRIANGLES, null, false, PolygonMode.FILL, 0, Map.of());
     }

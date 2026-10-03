@@ -20,6 +20,9 @@ pub enum StageSource {
     /// Iris's default vertex shader for a program without `.vsh`; `virtual_path` is the
     /// `.vsh` path it stands in for.
     SynthesizedVertex { virtual_path: String },
+    /// A stage of Iris's fallback program ([`fallback_source`]) for geometry the pack has
+    /// no program for; `virtual_path` names it in diagnostics.
+    Fallback { virtual_path: String, source: String },
 }
 
 impl StageSource {
@@ -27,9 +30,106 @@ impl StageSource {
     pub fn path(&self) -> &str {
         match self {
             StageSource::File(p) => p,
-            StageSource::SynthesizedVertex { virtual_path } => virtual_path,
+            StageSource::SynthesizedVertex { virtual_path } | StageSource::Fallback { virtual_path, .. } => virtual_path,
         }
     }
+}
+
+/// [`Program::synthesized_from`](sb_core::model::Program::synthesized_from) of a fallback
+/// program (geometry the pack has no program for).
+pub const FALLBACK_SOURCE: &str = "<iris fallback>";
+
+/// Vertex stage of the fallback program: Iris's `ShaderSynthesizer.vsh` in OptiFine
+/// compatibility GLSL (position, colour, texture and lightmap coordinates, view distance).
+const FALLBACK_VSH: &str = "#version 120
+// ShaderBridge: Iris's fallback program (ShaderSynthesizer) for geometry without a program.
+varying vec4 sb_fbColor;
+varying vec2 sb_fbTexCoord;
+varying vec2 sb_fbLightCoord;
+varying float sb_fbDistance;
+void main() {
+    vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
+    gl_Position = gl_ProjectionMatrix * viewPos;
+    sb_fbColor = gl_Color;
+    sb_fbTexCoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+    sb_fbLightCoord = clamp((gl_TextureMatrix[1] * gl_MultiTexCoord1).xy, vec2(0.5 / 16.0), vec2(15.5 / 16.0));
+    sb_fbDistance = length(viewPos.xyz);
+}
+";
+
+/// Fragment stage of the fallback program: Iris's `ShaderSynthesizer.fsh` (texture ×
+/// colour × lightmap, linear vertex-distance fog unless `SB_FALLBACK_NO_FOG`), written to
+/// colortex0. The alpha test is the model's (the geometry program's default).
+const FALLBACK_FSH: &str = "#version 120
+// ShaderBridge: Iris's fallback program (ShaderSynthesizer) for geometry without a program.
+uniform sampler2D texture;
+uniform sampler2D lightmap;
+varying vec4 sb_fbColor;
+varying vec2 sb_fbTexCoord;
+varying vec2 sb_fbLightCoord;
+varying float sb_fbDistance;
+void main() {
+    vec4 color = texture2D(texture, sb_fbTexCoord) * sb_fbColor;
+    color *= texture2D(lightmap, sb_fbLightCoord);
+#ifndef SB_FALLBACK_NO_FOG
+    float fogFactor = clamp((gl_Fog.end - sb_fbDistance) / max(gl_Fog.end - gl_Fog.start, 1e-4), 0.0, 1.0);
+    color.rgb = mix(gl_Fog.color.rgb, color.rgb, fogFactor);
+#endif
+    gl_FragData[0] = color;
+}
+";
+
+/// Source of a fallback program stage for geometry program `g` (Iris's
+/// `ShaderSynthesizer`); `None` for stages other than vertex and fragment. Sky programs
+/// have no fog (Iris's `FogMode.OFF` for the sky keys).
+pub fn fallback_source(g: GeometryProgram, stage: ShaderStage) -> Option<String> {
+    match stage {
+        ShaderStage::Vertex => Some(FALLBACK_VSH.to_string()),
+        ShaderStage::Fragment if matches!(g, GeometryProgram::SkyBasic | GeometryProgram::SkyTextured) => {
+            Some(FALLBACK_FSH.replacen("\n", "\n#define SB_FALLBACK_NO_FOG\n", 1))
+        }
+        ShaderStage::Fragment => Some(FALLBACK_FSH.to_string()),
+        _ => None,
+    }
+}
+
+/// Add Iris's fallback program for every gbuffers geometry program whose whole fallback
+/// chain is absent: Iris then renders that geometry with a synthesized vanilla-like shader
+/// into colortex0 (`IrisRenderingPipeline.createFallbackShader`) instead of skipping it.
+/// Shadow and Distant Horizons programs get none (no shadow program means no shadow pass;
+/// DH programs are synthesized from the terrain programs).
+fn add_fallback_units(plan: &mut FolderPlan, folder: &str, diags: &mut Diagnostics) {
+    let missing: Vec<GeometryProgram> = GeometryProgram::ALL
+        .iter()
+        .copied()
+        .filter(|g| g.group() == GeometryGroup::Gbuffers && g.chain().all(|p| !plan.geometry.contains_key(&p)))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    for &g in &missing {
+        let name = g.file_name().to_string();
+        let path = program_path(folder, &name);
+        let stages = [ShaderStage::Vertex, ShaderStage::Fragment]
+            .into_iter()
+            .filter_map(|st| {
+                let source = fallback_source(g, st)?;
+                Some((st, StageSource::Fallback { virtual_path: format!("{path}.{}", st.pack_extension()), source }))
+            })
+            .collect();
+        // Pack properties name programs the pack has; none of them applies to a fallback.
+        plan.units.push(Unit { name, props_name: format!("<fallback>{}", g.file_name()), path, kind: ProgramKind::Geometry { program: g }, stages });
+        plan.geometry.insert(g, plan.units.len() - 1);
+    }
+    let names: Vec<&str> = missing.iter().map(|g| g.file_name()).collect();
+    diags.push(Diagnostic::info(
+        "pipeline.fallback-program",
+        format!(
+            "{}: no program (or fallback) for {}; Iris's fallback shader (vanilla-like, colortex0) draws that geometry",
+            if folder.is_empty() { "pack root" } else { folder },
+            names.join(", ")
+        ),
+    ));
 }
 
 /// One program (graphics or compute) of a folder.
@@ -60,6 +160,11 @@ impl Unit {
             ProgramKind::Geometry { program } => Some(program),
             _ => None,
         }
+    }
+
+    /// Whether this is a synthesized fallback program (no pack source).
+    pub fn is_fallback(&self) -> bool {
+        self.stages.iter().any(|(_, s)| matches!(s, StageSource::Fallback { .. }))
     }
 }
 
@@ -313,6 +418,7 @@ pub fn resolve_folder(pack: &ShaderPack, folder: &str, load: &PackLoad, env: &Co
     for slots in plan.groups.values_mut() {
         slots.sort_by_key(|s| s.index);
     }
+    add_fallback_units(&mut plan, folder, &mut diags);
     plan.diagnostics.extend(diags);
     plan
 }
@@ -329,8 +435,9 @@ mod tests {
         resolve_folder(&pack, folder, &l, env)
     }
 
+    /// Names of the pack's units (without synthesized fallback programs).
     fn names(p: &FolderPlan) -> Vec<String> {
-        p.units.iter().map(|u| u.name.clone()).collect()
+        p.units.iter().filter(|u| !u.is_fallback()).map(|u| u.name.clone()).collect()
     }
 
     #[test]
@@ -367,8 +474,8 @@ mod tests {
         );
         // composite2_b disabled: the chain stops (composite2_c is not loaded either).
         assert!(p.disabled.contains(&"composite2_b".to_string()));
-        // gbuffers_basic has no fragment shader.
-        assert!(!p.geometry.contains_key(&GeometryProgram::Basic));
+        // gbuffers_basic has no fragment shader: the slot gets Iris's fallback program.
+        assert!(p.units[p.geometry[&GeometryProgram::Basic]].is_fallback());
         assert!(p.diagnostics.iter().any(|d| d.code == "props.enabled-unknown-option"));
         let comp = &p.groups[&PassGroup::Composite];
         assert_eq!(comp.iter().map(|s| s.index).collect::<Vec<_>>(), vec![0, 1, 2]);
@@ -422,5 +529,44 @@ mod tests {
             ShaderStage::TessEval,
             ShaderStage::Fragment
         ]);
+    }
+
+    /// Geometry whose whole program chain is absent gets Iris's fallback program; chains
+    /// with a program, shadow and DH slots do not.
+    #[test]
+    fn fallback_programs_for_absent_chains() {
+        let env = CompileEnvironment::default();
+        let only_final = [("final.fsh", "void main(){}")];
+        let p = plan_of(&only_final, &[], &env, "");
+        let gbuffers: Vec<GeometryProgram> = GeometryProgram::ALL.iter().copied().filter(|g| g.group() == GeometryGroup::Gbuffers).collect();
+        for g in &gbuffers {
+            let u = &p.units[p.geometry[g]];
+            assert!(u.is_fallback(), "{g:?}");
+            assert_eq!(u.kind, ProgramKind::Geometry { program: *g });
+            assert_eq!(u.stages.iter().map(|(s, _)| *s).collect::<Vec<_>>(), vec![ShaderStage::Vertex, ShaderStage::Fragment]);
+            // Pack keys (`blend.gbuffers_terrain`, ...) never name a fallback.
+            assert_ne!(u.props_name, u.name);
+        }
+        assert!(!p.geometry.keys().any(|g| g.group() != GeometryGroup::Gbuffers));
+        assert!(p.diagnostics.iter().any(|d| d.code == "pipeline.fallback-program"));
+        // Sky programs have no fog.
+        let sky = &p.units[p.geometry[&GeometryProgram::SkyBasic]];
+        let fsh = |u: &Unit| match &u.stages[1].1 {
+            StageSource::Fallback { source, virtual_path } => (source.clone(), virtual_path.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert!(fsh(sky).0.contains("#define SB_FALLBACK_NO_FOG"));
+        assert_eq!(fsh(sky).1, "gbuffers_skybasic.fsh");
+        let terrain = &p.units[p.geometry[&GeometryProgram::TerrainSolid]];
+        assert!(!fsh(terrain).0.contains("#define SB_FALLBACK_NO_FOG"));
+
+        // A pack program anywhere in the chain wins: gbuffers_textured serves everything
+        // that falls back to it; only chains ending before it (basic, line, skybasic) get
+        // fallbacks.
+        let files = [("world0/gbuffers_textured.fsh", "void main(){}"), ("world0/gbuffers_textured.vsh", "void main(){}")];
+        let p = plan_of(&files, &[], &env, "world0");
+        let fallbacks: Vec<GeometryProgram> = p.geometry.iter().filter(|(_, u)| p.units[**u].is_fallback()).map(|(g, _)| *g).collect();
+        assert_eq!(fallbacks, vec![GeometryProgram::Basic, GeometryProgram::Line, GeometryProgram::SkyBasic]);
+        assert_eq!(p.units[p.geometry[&GeometryProgram::Basic]].path, "world0/gbuffers_basic");
     }
 }

@@ -32,6 +32,14 @@ public final class SpirvModules {
     }
 
     /**
+     * @param shaderId a shader id as Mojang's compiler receives it ({@code Identifier.toString()})
+     * @return whether it names a ShaderBridge module (registered or not)
+     */
+    public static boolean isModuleId(String shaderId) {
+        return shaderId.startsWith(PipelineKey.NAMESPACE + ":" + PATH_PREFIX);
+    }
+
+    /**
      * Registers a module. The buffer is not copied: it must stay unchanged until
      * {@link #release(Identifier)}.
      *

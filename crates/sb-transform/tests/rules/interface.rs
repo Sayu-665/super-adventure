@@ -211,6 +211,17 @@ fn geometry_stage_arrays_are_linked_per_vertex() {
     linked(&out, ShaderStage::Geometry, ShaderStage::Fragment);
     assert!(out.refl(ShaderStage::Geometry).inputs.iter().all(|i| i.per_vertex));
     assert!(out.prog.requires_raw_vulkan);
+    // Array dimensions on the type are inner ones: `vec4[2] w[]` is `vec4 w[][2]`, the
+    // per-vertex array of the vertex stage's `vec4 w[2]` (two locations per vertex).
+    let vs = "#version 430\nout vec4 w[2];\nvoid main() { gl_Position = vec4(0.0); w[0] = vec4(1.0); w[1] = vec4(2.0); }\n";
+    let gs = "#version 430\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\nin vec4[2] w[];\nout vec4 g;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; g = w[i][1]; EmitVertex(); } EndPrimitive(); }\n";
+    let fs = "#version 430\nin vec4 g;\nout vec4 c;\nvoid main() { c = g; }\n";
+    let out = T::fullscreen().vs(vs).gs(gs).fs(fs).run();
+    linked(&out, ShaderStage::Vertex, ShaderStage::Geometry);
+    assert!(!out.has_diag("xf.varying-type") && !out.has_diag("xf.varying-mismatch"));
+    let w = out.refl(ShaderStage::Geometry).inputs.iter().find(|i| i.name == "w").unwrap();
+    assert_eq!((w.location_count, w.array_len), (2, Some(2)));
 }
 
 #[test]
@@ -249,6 +260,124 @@ fn tessellation_stages_link() {
     assert!(out.prog.requires_raw_vulkan);
 }
 
+/// The interface checks of Mojang's 26.3 `PipelineBuilder` (Renderpearl GLSL path):
+/// every user input/output is a plain variable (no struct/block member, no 64-bit type)
+/// with a `Location` and no `Component`, and each fragment input location has a vertex
+/// output of the same base type, vector size and flatness.
+#[track_caller]
+pub fn mojang_interface_ok(out: &Out) {
+    for r in &out.refl {
+        for v in r.inputs.iter().chain(&r.outputs) {
+            assert!(!v.name.contains('.') && v.base_type != "struct", "{} interface variable `{}` is a struct/block member", r.stage, v.name);
+            assert!(!v.base_type.contains("64") && v.base_type != "double", "{} interface variable `{}` is 64-bit", r.stage, v.name);
+            assert_eq!(v.component, 0, "{} interface variable `{}` has a Component decoration", r.stage, v.name);
+        }
+    }
+    let vs = out.refl(ShaderStage::Vertex);
+    for i in &out.refl(ShaderStage::Fragment).inputs {
+        let o = vs.outputs.iter().find(|o| o.location == i.location).unwrap_or_else(|| panic!("no vertex output at location {}", i.location));
+        assert_eq!((&o.base_type, o.vec_size, o.flat), (&i.base_type, i.vec_size, i.flat), "location {} (`{}` / `{}`)", i.location, o.name, i.name);
+    }
+}
+
+#[test]
+fn renderpearl_flattens_interface_blocks() {
+    // Mojang's 26.3 pipeline builder rejects struct-typed interface variables: for the
+    // Renderpearl target, vertex/fragment interface blocks become one variable per
+    // member, matched by position (the member names differ between the stages here).
+    let vs = "#version 330\nout VertexData { vec2 uv; flat uint tint; noperspective vec3 n[2]; } v;\nout Extra { float e; };\n\
+              void main() { gl_Position = ftransform(); v.uv = gl_MultiTexCoord0.xy; v.tint = 3u; v.n[0] = vec3(1.0); v.n[1] = gl_Normal; e = 0.5; }\n";
+    let fs = "#version 330\nin VertexData { vec2 coord; flat uint tint; noperspective vec3 normals[2]; } vin;\nin Extra { float e; };\nout vec4 c;\n\
+              void main() { float uv = 1.0; c = vec4(vin.coord * uv, float(vin.tint) + e, vin.normals[1].x); }\n";
+    let out = T::gbuffers().vs(vs).fs(fs).with(|o| o.target = sb_core::model::OutputTarget::Renderpearl).run();
+    contains_all(
+        out.vs(),
+        &[") out vec2 sb_ib_VertexData_0;", "flat out uint sb_ib_VertexData_1;", "noperspective out vec3 sb_ib_VertexData_2[2];", "sb_ib_VertexData_2[1] = ", "sb_ib_Extra_0 = 0.5;"],
+    );
+    contains_all(out.fs(), &["vec4(sb_ib_VertexData_0 * uv, float(sb_ib_VertexData_1) + sb_ib_Extra_0, sb_ib_VertexData_2[1].x)"]);
+    contains_none(out.vs(), &["VertexData {", "Extra {"]);
+    contains_none(out.fs(), &["VertexData {", "Extra {"]);
+    mojang_interface_ok(&out);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+    // The Vulkan target keeps the blocks (Vulkan matches their members by location).
+    let out = T::gbuffers().vs(vs).fs(fs).run();
+    contains_all(out.vs(), &["VertexData {"]);
+    let vs_out = &out.refl(ShaderStage::Vertex).outputs;
+    for i in &out.refl(ShaderStage::Fragment).inputs {
+        let o = vs_out.iter().find(|o| o.location == i.location).unwrap_or_else(|| panic!("no output at location {}", i.location));
+        assert_eq!((o.location_count, o.flat, &o.base_type), (i.location_count, i.flat, &i.base_type), "`{}` / `{}`", o.name, i.name);
+    }
+}
+
+#[test]
+fn renderpearl_expands_struct_varyings() {
+    // Struct-typed varyings (photon's `flat out FogParameters fog_params;`) are rejected
+    // by Mojang's pipeline builder too: for Renderpearl they travel as one varying per
+    // leaf member, copied from the pack's (now plain) struct global after the vertex
+    // `main` and into it before the fragment `main`.
+    let common = "struct Inner { float a; vec2 b[2]; };\nstruct Params { vec3 color; Inner inner[2]; int mode; };\n";
+    let vs = format!(
+        "#version 330\n{common}flat out Params params;\nParams make() {{ Params p; p.color = vec3(1.0); p.inner[0] = Inner(1.0, vec2[2](vec2(1.0), vec2(2.0))); p.inner[1] = p.inner[0]; p.mode = 2; return p; }}\n\
+         void main() {{ gl_Position = ftransform(); params = make(); }}\n"
+    );
+    let fs = format!("#version 330\n{common}flat in Params params;\nout vec4 c;\nvoid main() {{ c = vec4(params.color * params.inner[1].b[1].y, float(params.mode)); }}\n");
+    let out = T::gbuffers().vs(&vs).fs(&fs).with(|o| o.target = sb_core::model::OutputTarget::Renderpearl).run();
+    contains_all(
+        out.vs(),
+        &[
+            "\nParams params;",
+            ") flat out vec3 sb_is_params_0;",
+            "flat out vec2 sb_is_params_2[2];",
+            "flat out int sb_is_params_5;",
+            "sb_user_main();\n    gl_Position.z = 0.5 * (gl_Position.z + gl_Position.w);\n    sb_is_params_0 = params.color;",
+            "sb_is_params_4 = params.inner[1].b;",
+            "sb_is_params_5 = params.mode;",
+        ],
+    );
+    contains_all(out.fs(), &["\nParams params;", "params.color = sb_is_params_0;\n", "params.inner[1].b = sb_is_params_4;", "params.mode = sb_is_params_5;\n    sb_user_main();"]);
+    mojang_interface_ok(&out);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+}
+
+#[test]
+fn tessellation_control_barrier_stays_in_main() {
+    // GLSL allows `barrier()` only in the tessellation control `main` itself: such a
+    // `main` is not wrapped; the generated prologue (a varying profile global read from
+    // the patch) and epilogue (a forwarded fixed-function varying) are called from it,
+    // the epilogue before every `return`.
+    let vs = "#version 120\nvoid main() { gl_Position = ftransform(); gl_TexCoord[0] = gl_MultiTexCoord0; }\n";
+    let tcs = "#version 400 compatibility\nlayout(vertices = 3) out;\nuniform vec4 entityColor;\nout vec3 q[];\n\
+               void main() { q[gl_InvocationID] = gl_in[gl_InvocationID].gl_Position.xyz; gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position; barrier();\n\
+                 float l = q[(gl_InvocationID + 1) % 3].x + entityColor.a;\n\
+                 if (gl_InvocationID != 0) return;\n\
+                 gl_TessLevelOuter[0] = l; gl_TessLevelOuter[1] = 1.0; gl_TessLevelOuter[2] = 1.0; gl_TessLevelInner[0] = 1.0; }\n";
+    let tes = "#version 400 compatibility\nlayout(triangles) in;\nin vec3 q[];\nout vec3 r;\nvoid main() { r = q[0] * gl_TessCoord.x + q[1] * gl_TessCoord.y + q[2] * gl_TessCoord.z; gl_Position = gl_in[0].gl_Position; }\n";
+    let fs = "#version 120\nvarying vec3 r;\nvoid main() { gl_FragData[0] = vec4(r, 1.0) * gl_TexCoord[0]; }\n";
+    let out = T::new("vanilla_entity")
+        .vs(vs)
+        .stage(ShaderStage::TessControl, tcs)
+        .stage(ShaderStage::TessEval, tes)
+        .fs(fs)
+        .run();
+    let tc = out.glsl(ShaderStage::TessControl);
+    contains_none(tc, &["sb_user_main"]);
+    contains_all(
+        tc,
+        &[
+            "void sb_prologue();",
+            "void sb_epilogue();",
+            "void main() {\n    sb_prologue();",
+            "{\n        sb_epilogue();\n        return;\n    }",
+            "gl_TessLevelInner[0] = 1.0;\n    sb_epilogue();\n}",
+            "entityColor = sb_varyin_entityColor[gl_InvocationID];",
+            "sb_v_TexCoord[gl_InvocationID] = sb_vin_TexCoord[gl_InvocationID];",
+        ],
+    );
+    linked(&out, ShaderStage::Vertex, ShaderStage::TessControl);
+    linked(&out, ShaderStage::TessControl, ShaderStage::TessEval);
+    linked(&out, ShaderStage::TessEval, ShaderStage::Fragment);
+}
+
 #[test]
 fn fixed_function_varyings_and_their_defaults() {
     let vs = "#version 120\nvoid main() { gl_Position = ftransform(); gl_TexCoord[0] = gl_MultiTexCoord0; gl_TexCoord[1] = gl_MultiTexCoord1; gl_FogFragCoord = 1.0; }\n";
@@ -263,6 +392,13 @@ fn fixed_function_varyings_and_their_defaults() {
     let fs = "#version 120\nvoid main() { gl_FragColor = gl_Color + gl_SecondaryColor; }\n";
     let out = T::fullscreen().vs(vs).fs(fs).run();
     contains_all(out.vs(), &["sb_v_Color = sb_gl_Color;", "sb_v_SecondaryColor = vec4(0.5);"]);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+    // Two-sided color is never enabled: a back color written after the front color does
+    // not replace what the fragment stage reads.
+    let vs = "#version 120\nvoid main() { gl_Position = ftransform(); gl_FrontColor = vec4(1.0); gl_BackColor = vec4(0.0); gl_BackSecondaryColor = vec4(0.0); }\n";
+    let out = T::fullscreen().vs(vs).fs(fs).run();
+    contains_all(out.vs(), &["sb_v_Color = vec4(1.0);", "sb_BackColor = vec4(0.0);", "sb_BackSecondaryColor = vec4(0.0);", "\nvec4 sb_BackColor;"]);
+    contains_none(out.vs(), &["sb_v_Color = vec4(0.0);"]);
     linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
     // GL_CLAMP_VERTEX_COLOR (TRUE in compatibility contexts) clamps the colors per vertex
     // after the last pre-raster stage, before interpolation.

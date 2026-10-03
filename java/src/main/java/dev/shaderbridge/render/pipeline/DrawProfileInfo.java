@@ -10,7 +10,7 @@ import java.util.Optional;
  * host needs: the vertex attributes it must feed and the host blocks and samplers it binds itself.
  *
  * @param name       profile id
- * @param fullscreen the profile draws a fullscreen triangle without vertex buffers
+ * @param fullscreen the profile draws fullscreen quads without vertex buffers
  * @param inputs     vertex attributes, named like the host vertex format elements
  * @param blocks     host uniform block type names
  * @param samplers   host samplers
@@ -25,11 +25,12 @@ public record DrawProfileInfo(String name, boolean fullscreen, List<Input> input
     /**
      * A vertex attribute.
      *
-     * @param name     attribute and vertex format element name
-     * @param type     GLSL type ({@code vec3}, {@code ivec2}, ...)
-     * @param location attribute location
+     * @param name      attribute and vertex format element name
+     * @param type      GLSL type ({@code vec3}, {@code ivec2}, ...)
+     * @param location  attribute location
+     * @param instanced the attribute is read per instance (vertex buffer slot 1)
      */
-    public record Input(String name, String type, int location) {
+    public record Input(String name, String type, int location, boolean instanced) {
     }
 
     /**
@@ -69,7 +70,7 @@ public record DrawProfileInfo(String name, boolean fullscreen, List<Input> input
             if (!(required(t, "location") instanceof Long location)) {
                 throw new IllegalArgumentException("`location` must be an integer");
             }
-            inputs.add(new Input(string(t, "name"), string(t, "type"), Math.toIntExact(location)));
+            inputs.add(new Input(string(t, "name"), string(t, "type"), Math.toIntExact(location), Boolean.TRUE.equals(t.get("instanced"))));
         }
         List<String> blocks = new ArrayList<>();
         for (Map<String, Object> t : tables(root, "blocks")) {

@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.ShaderSource;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import org.slf4j.Logger;
@@ -114,9 +115,9 @@ public final class PackPipelineCache implements AutoCloseable {
      * @param key a pipeline key
      * @return the pipeline description of a requested key, if any
      */
-    public java.util.Optional<PackPipeline> pipeline(PipelineKey key) {
+    public Optional<PackPipeline> pipeline(PipelineKey key) {
         Entry entry = entries.get(key);
-        return entry == null ? java.util.Optional.empty() : java.util.Optional.of(entry.pipeline);
+        return entry == null ? Optional.empty() : Optional.of(entry.pipeline);
     }
 
     /** Finishes every compile whose background part is done. Render thread. */

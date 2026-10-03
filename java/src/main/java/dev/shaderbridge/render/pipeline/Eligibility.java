@@ -67,6 +67,27 @@ public final class Eligibility {
         }
         problems.addAll(VertexInputCheck.check(shape.vertexBindings(), iface.vertexInputs()));
         problems.addAll(stageInterfaceProblems(iface));
+        problems.addAll(locationProblems(iface));
+        return problems;
+    }
+
+    /**
+     * Mojang's reflection looks up the {@code Location} decoration of every stage input and
+     * output and fails without one; vertex outputs and fragment inputs are checked with the
+     * stage interface, vertex inputs and fragment outputs here.
+     */
+    static List<String> locationProblems(ProgramInterface iface) {
+        List<String> problems = new ArrayList<>();
+        for (InterfaceVariable v : iface.vertexInputs()) {
+            if (v.location() < 0) {
+                problems.add("vertex input " + v.name() + " has no location");
+            }
+        }
+        for (InterfaceVariable v : iface.stage(ShaderStage.FRAGMENT).map(SpirvReflection::outputs).orElse(List.of())) {
+            if (v.location() < 0) {
+                problems.add("fragment output " + v.name() + " has no location");
+            }
+        }
         return problems;
     }
 

@@ -88,11 +88,16 @@ Helper code may use `const int SB_<NAME>` constants supplied per program through
 constant is `-1`), e.g. `SB_DH_BLOCK_ID_<n>` in `dh_terrain.toml`.
 
 Built-in profiles: `fullscreen`, `vanilla_terrain`, `vanilla_terrain_basic`,
-`vanilla_entity`, `vanilla_particle`, `vanilla_lines`, `vanilla_position`,
-`vanilla_position_color`, `vanilla_position_tex`, `vanilla_position_tex_color`,
+`vanilla_terrain_section` (per-section terrain path with the `ChunkSection` block),
+`vanilla_block` (`BLOCK` vertices with `DynamicTransforms`: moving blocks, beacon beams,
+block breaking), `vanilla_entity`, `vanilla_particle`, `vanilla_lines`, `vanilla_position`,
+`vanilla_position_color`, `vanilla_position_color_lightmap` (leads), `vanilla_position_tex`,
+`vanilla_position_tex_color`, `vanilla_text` (in-world text), `vanilla_clouds` (clouds
+decoded from the `CloudFaces` texel buffer, no vertex buffer),
 `dh_terrain`, `dh_generic` and `sodium_terrain` (Sodium 0.9 compact chunk format with
 ShaderBridge's extension attributes and Sodium's 20-byte push constants). Semantics a profile does not define fall
-back to the defaults in `defaults.toml`.
+back to the defaults in `defaults.toml`. The Java mod maps each vanilla 26.3 pipeline to one
+of them (`dev.shaderbridge.render.mapping.VanillaPipelineTable`).
 
 `dh_terrain_synth` (`sb_transform::DH_SYNTH_PROFILE`) is derived in code from
 `dh_terrain` for DH programs synthesized from `gbuffers_terrain`/`gbuffers_water`/`shadow`:

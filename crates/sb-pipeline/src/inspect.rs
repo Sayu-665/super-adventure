@@ -82,7 +82,7 @@ pub fn inspect(pack: &ShaderPack) -> PackSummary {
                     .stages
                     .iter()
                     .map(|(s, src)| match src {
-                        crate::resolve::StageSource::SynthesizedVertex { .. } => format!("{}*", s.pack_extension()),
+                        crate::resolve::StageSource::SynthesizedVertex { .. } | crate::resolve::StageSource::Fallback { .. } => format!("{}*", s.pack_extension()),
                         _ => s.pack_extension().to_string(),
                     })
                     .collect(),

@@ -47,8 +47,9 @@ fn collect(w: &StageWork, input: bool) -> Vec<IVar> {
             let (quals, name, elem, mut dims, block) = match &item.kind {
                 ItemKind::Decl(d) if d.vars.len() == 1 => {
                     let v = &d.vars[0];
-                    let mut dims = d.ty.ty.array.clone();
-                    dims.extend(v.array.iter().cloned());
+                    // Outermost first: `vec4[2] x[3]` is `vec4 x[3][2]`.
+                    let mut dims = v.array.clone();
+                    dims.extend(d.ty.ty.array.iter().cloned());
                     let elem = TypeSpec { base: d.ty.ty.base.clone(), array: Vec::new() };
                     (&d.ty.quals, v.name.clone(), elem, dims, None)
                 }
@@ -340,8 +341,314 @@ fn zero_init(target: &str, elem: &TypeSpec, dims: &[ArrayDim], env: &crate::cons
     Some(format!("for (int sb_i = 0; sb_i < {n}; sb_i++) {{ {target}[sb_i] = {z}; }}"))
 }
 
+/// Renderpearl target, vertex + fragment programs: Mojang's `PipelineBuilder` (26.3)
+/// rejects interface variables of struct type and requires a `Location` decoration on
+/// every interface variable, so in/out interface blocks become one variable per member:
+/// `sb_ib_<Block>_<k>` for the k-th member (by position, as Vulkan matches block
+/// members), with the block's and the member's interpolation and auxiliary qualifiers.
+/// Member references (`inst.member`, or the bare member name of an instance-less block)
+/// follow. Arrayed block instances are left alone (see [`renderpearl_inexpressible`]).
+fn flatten_interface_blocks(w: &mut StageWork) {
+    let stage = w.stage;
+    let mut renames: HashMap<String, Vec<(String, String)>> = HashMap::new(); // instance -> (member, new)
+    let mut bare: HashMap<String, String> = HashMap::new(); // member of an instance-less block -> new
+    let mut items = Vec::with_capacity(w.unit.items.len());
+    for item in std::mem::take(&mut w.unit.items) {
+        let line = item.line;
+        let ItemKind::Block(b) = &item.kind else {
+            items.push(item);
+            continue;
+        };
+        let iface = crate::analyze::is_input(stage, &b.quals) || crate::analyze::is_output(stage, &b.quals);
+        if !iface || b.name.starts_with("gl_") {
+            items.push(item);
+            continue;
+        }
+        if b.instance.as_ref().is_some_and(|(_, d)| !d.is_empty()) {
+            // Arrayed instances: see `renderpearl_inexpressible`.
+            items.push(item);
+            continue;
+        }
+        let block_quals: Vec<Qualifier> = b.quals.iter().filter(|q| !matches!(q, Qualifier::Layout(_))).cloned().collect();
+        let mut k = 0usize;
+        let mut members = Vec::new();
+        for f in &b.fields {
+            for (name, dims) in &f.names {
+                let new = format!("sb_ib_{}_{k}", b.name);
+                k += 1;
+                let mut quals: Vec<Qualifier> = f.quals.iter().filter(|q| !matches!(q, Qualifier::Layout(_))).cloned().collect();
+                for q in &block_quals {
+                    if !quals.contains(q) {
+                        quals.push(q.clone());
+                    }
+                }
+                let decl = Declaration {
+                    ty: FullType { quals, ty: f.ty.clone() },
+                    vars: vec![Declarator { name: new.clone(), array: dims.clone(), init: None }],
+                };
+                items.push(Item { kind: ItemKind::Decl(decl), line });
+                members.push((name.clone(), new));
+            }
+        }
+        match &b.instance {
+            Some((inst, _)) => {
+                renames.insert(inst.clone(), members);
+            }
+            None => bare.extend(members),
+        }
+    }
+    w.unit.items = items;
+    if renames.is_empty() && bare.is_empty() {
+        return;
+    }
+    let rewrite = |e: &mut Expr, is_local: &dyn Fn(&str) -> bool| {
+        e.walk_mut(&mut |x| {
+            match x {
+                Expr::Field(base, member) => {
+                    if let Some(inst) = base.as_ident()
+                        && !is_local(inst)
+                        && let Some(new) = renames.get(inst).and_then(|m| m.iter().find(|(n, _)| n == member)).map(|(_, n)| n.clone())
+                    {
+                        *x = Expr::Ident(new);
+                        return Walk::Skip;
+                    }
+                }
+                Expr::Ident(n) if !is_local(n) => {
+                    if let Some(new) = bare.get(n.as_str()) {
+                        *n = new.clone();
+                    }
+                }
+                _ => {}
+            }
+            Walk::Children
+        });
+    };
+    for item in &mut w.unit.items {
+        match &mut item.kind {
+            ItemKind::Function(f) => crate::scope::walk_function_exprs(f, &mut |root, is_local| rewrite(root, is_local)),
+            ItemKind::Decl(d) => d.walk_exprs_mut(&mut |e| {
+                rewrite(e, &|_| false);
+                Walk::Skip
+            }),
+            _ => {}
+        }
+    }
+}
+
+/// A non-struct component of a struct-typed varying: access path from the variable
+/// (`.a.b[2].c`), type and its own array dimensions.
+struct Leaf {
+    path: String,
+    ty: TypeSpec,
+    dims: Vec<ArrayDim>,
+}
+
+/// The leaves of a value of struct `name` (struct members of struct type are expanded,
+/// arrays of structs element by element). `None` when a struct array has no constant
+/// length or the nesting is too deep.
+fn struct_leaves(name: &str, structs: &HashMap<String, StructDef>, env: &crate::consteval::ConstEnv, depth: u32) -> Option<Vec<Leaf>> {
+    let def = structs.get(name).filter(|_| depth < 8)?;
+    let mut out = Vec::new();
+    for f in &def.fields {
+        for (member, dims) in &f.names {
+            let mut all_dims = f.ty.array.clone();
+            all_dims.extend(dims.iter().cloned());
+            let elem = TypeSpec { base: f.ty.base.clone(), array: Vec::new() };
+            let inner = match &elem.base {
+                TypeBase::Named(n) if structs.contains_key(n) => Some(n.clone()),
+                TypeBase::Struct(_) => return None,
+                _ => None,
+            };
+            match inner {
+                None => out.push(Leaf { path: format!(".{member}"), ty: elem, dims: all_dims }),
+                Some(s) => {
+                    let sub = struct_leaves(&s, structs, env, depth + 1)?;
+                    let indices: Vec<String> = match all_dims.as_slice() {
+                        [] => vec![String::new()],
+                        [ArrayDim::Sized(e)] => (0..crate::consteval::array_len(e, env)?).map(|i| format!("[{i}]")).collect(),
+                        _ => return None,
+                    };
+                    for idx in indices {
+                        for l in &sub {
+                            out.push(Leaf { path: format!(".{member}{idx}{}", l.path), ty: l.ty.clone(), dims: l.dims.clone() });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Renderpearl target, vertex + fragment programs: struct-typed varyings (rejected by
+/// Mojang's pipeline builder like interface blocks) travel as one varying per leaf
+/// member, `sb_is_<var>_<k>`; the pack keeps a plain global of the struct type, copied
+/// to the leaves after `main` (producer) or from them before `main` (consumer). Struct
+/// varyings that cannot be expanded (struct arrays without a constant length) are left
+/// alone (see [`renderpearl_inexpressible`]).
+fn flatten_struct_varyings(w: &mut StageWork) {
+    let stage = w.stage;
+    let structs = struct_defs(w);
+    if structs.is_empty() {
+        return;
+    }
+    let env = crate::consteval::global_consts(&w.unit);
+    let mut new_items: Vec<(usize, Item)> = Vec::new();
+    let mut copies: Vec<String> = Vec::new();
+    for (index, item) in w.unit.items.iter_mut().enumerate() {
+        let line = item.line;
+        let ItemKind::Decl(d) = &mut item.kind else { continue };
+        let input = crate::analyze::is_input(stage, &d.ty.quals);
+        if (!input && !crate::analyze::is_output(stage, &d.ty.quals)) || d.vars.len() != 1 {
+            continue;
+        }
+        let Some(sname) = d.ty.ty.name().filter(|n| structs.contains_key(*n)).map(str::to_string) else { continue };
+        let var = d.vars[0].name.clone();
+        let mut dims = d.ty.ty.array.clone();
+        dims.extend(d.vars[0].array.iter().cloned());
+        let indices: Option<Vec<String>> = match dims.as_slice() {
+            [] => Some(vec![String::new()]),
+            [ArrayDim::Sized(e)] => crate::consteval::array_len(e, &env).map(|n| (0..n).map(|i| format!("[{i}]")).collect()),
+            _ => None,
+        };
+        // Not expandable: see `renderpearl_inexpressible`.
+        let (Some(indices), Some(leaves)) = (indices, struct_leaves(&sname, &structs, &env, 0)) else { continue };
+        let quals: Vec<Qualifier> = d.ty.quals.iter().filter(|q| !matches!(q, Qualifier::Layout(_))).cloned().collect();
+        let mut k = 0usize;
+        for idx in &indices {
+            for leaf in &leaves {
+                let name = format!("sb_is_{var}_{k}");
+                k += 1;
+                let decl = Declaration {
+                    ty: FullType { quals: quals.clone(), ty: leaf.ty.clone() },
+                    vars: vec![Declarator { name: name.clone(), array: leaf.dims.clone(), init: None }],
+                };
+                new_items.push((index, Item { kind: ItemKind::Decl(decl), line }));
+                let field = format!("{var}{idx}{}", leaf.path);
+                copies.push(if input { format!("{field} = {name};") } else { format!("{name} = {field};") });
+            }
+        }
+        // The pack's variable becomes a plain global.
+        d.ty.quals.retain(|x| match x {
+            Qualifier::Storage(s) => !matches!(s, Storage::In | Storage::Out | Storage::Centroid | Storage::Sample | Storage::Patch),
+            Qualifier::Layout(_) | Qualifier::Interp(_) | Qualifier::Invariant => false,
+            _ => true,
+        });
+    }
+    // Leaves follow their variable, in order.
+    let mut by_index: std::collections::BTreeMap<usize, Vec<Item>> = std::collections::BTreeMap::new();
+    for (index, item) in new_items {
+        by_index.entry(index).or_default().push(item);
+    }
+    for (index, items) in by_index.into_iter().rev() {
+        for (k, item) in items.into_iter().enumerate() {
+            w.unit.items.insert(index + 1 + k, item);
+        }
+    }
+    if stage == ShaderStage::Fragment {
+        // Before `main`: prepend in declaration order.
+        let mut p = copies;
+        p.append(&mut w.prologue);
+        w.prologue = p;
+    } else {
+        w.epilogue.extend(copies);
+    }
+}
+
+/// Whether a GLSL type name is 64-bit (rejected in interfaces by Mojang's pipeline
+/// builder).
+fn is_64bit(ty: &str) -> bool {
+    ty == "double" || ty.starts_with("dvec") || ty.starts_with("dmat") || ty.contains("64")
+}
+
+/// A vertex output or fragment input of a vertex + fragment program that the Renderpearl
+/// target cannot express even after [`flatten_interface_blocks`] and
+/// [`flatten_struct_varyings`] (Mojang's 26.3 pipeline builder rejects 64-bit and
+/// struct-typed interface variables): a 64-bit varying or member, an arrayed interface
+/// block, or a struct varying that cannot be expanded. Returns a description.
+fn renderpearl_inexpressible(w: &StageWork) -> Option<String> {
+    let structs = struct_defs(w);
+    let env = crate::consteval::global_consts(&w.unit);
+    let wide = |ty: &TypeSpec| -> bool {
+        let Some(n) = ty.name() else { return false };
+        if is_64bit(n) {
+            return true;
+        }
+        // Struct members (any depth).
+        let mut stack = vec![n.to_string()];
+        let mut seen = 0;
+        while let Some(s) = stack.pop() {
+            seen += 1;
+            let Some(def) = structs.get(&s).filter(|_| seen < 64) else { continue };
+            for f in &def.fields {
+                if let Some(m) = f.ty.name() {
+                    if is_64bit(m) {
+                        return true;
+                    }
+                    stack.push(m.to_string());
+                }
+            }
+        }
+        false
+    };
+    for item in &w.unit.items {
+        match &item.kind {
+            ItemKind::Decl(d) if crate::analyze::is_input(w.stage, &d.ty.quals) || crate::analyze::is_output(w.stage, &d.ty.quals) => {
+                for v in &d.vars {
+                    if v.name.starts_with("gl_") {
+                        continue;
+                    }
+                    if wide(&d.ty.ty) {
+                        return Some(format!("varying `{}` has a 64-bit type", v.name));
+                    }
+                    if let Some(s) = d.ty.ty.name().filter(|n| structs.contains_key(*n)) {
+                        let mut dims = d.ty.ty.array.clone();
+                        dims.extend(v.array.iter().cloned());
+                        let sized = match dims.as_slice() {
+                            [] => true,
+                            [ArrayDim::Sized(e)] => crate::consteval::array_len(e, &env).is_some(),
+                            _ => false,
+                        };
+                        if !sized || struct_leaves(s, &structs, &env, 0).is_none() {
+                            return Some(format!("struct varying `{}` cannot be expanded", v.name));
+                        }
+                    }
+                }
+            }
+            ItemKind::Block(b) if !b.name.starts_with("gl_") && (crate::analyze::is_input(w.stage, &b.quals) || crate::analyze::is_output(w.stage, &b.quals)) => {
+                if b.instance.as_ref().is_some_and(|(_, d)| !d.is_empty()) {
+                    return Some(format!("interface block `{}` is arrayed", b.name));
+                }
+                if b.fields.iter().any(|f| wide(&f.ty)) {
+                    return Some(format!("interface block `{}` has a 64-bit member", b.name));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Link all stages of a graphics program.
 pub(crate) fn link(works: &mut [StageWork], ctx: &Ctx) {
+    // Vertex + fragment programs are Renderpearl candidates; those with interfaces it
+    // cannot express need the raw Vulkan path (decided the same way for every target).
+    if works.iter().all(|w| matches!(w.stage, ShaderStage::Vertex | ShaderStage::Fragment)) {
+        for w in works.iter_mut() {
+            if let Some(why) = renderpearl_inexpressible(w) {
+                w.requires_raw_vulkan = true;
+                w.info("xf.renderpearl-interface", format!("{why}: Mojang's pipeline builder rejects it; the program needs the raw Vulkan path"), 0);
+            }
+        }
+    }
+    if ctx.opts.target == sb_core::model::OutputTarget::Renderpearl
+        && works.iter().all(|w| matches!(w.stage, ShaderStage::Vertex | ShaderStage::Fragment))
+    {
+        for w in works.iter_mut() {
+            flatten_interface_blocks(w);
+            flatten_struct_varyings(w);
+        }
+    }
     if ctx.opts.target == sb_core::model::OutputTarget::Renderpearl {
         // glslang's location auto-mapping (used by the host's shader compiler) gives a
         // block variable a location even when its members have one, which Vulkan

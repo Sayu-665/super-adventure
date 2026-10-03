@@ -77,6 +77,24 @@ fn a_single_user_output_without_location_is_location_zero() {
 }
 
 #[test]
+fn a_lone_out_color_n_keeps_location_n() {
+    // OptiFine binds `outColorN` to location N (Iris `transformFragmentCore` likewise),
+    // also when it is the only output: it writes the N-th RENDERTARGETS entry.
+    let fs = "#version 150\nout vec4 outColor3;\nvoid main() { outColor3 = vec4(1.0); }\n";
+    let out = T::fullscreen().vs(VS).fs(fs).run();
+    contains_all(out.fs(), &["layout(location = 3) out vec4 outColor3;"]);
+    assert_eq!(reflected(&out), [(3, "outColor3".to_string())]);
+    // Only outColor0..7 are bound by name.
+    let fs = "#version 150\nout vec4 outColor9;\nvoid main() { outColor9 = vec4(1.0); }\n";
+    let out = T::fullscreen().vs(VS).fs(fs).run();
+    contains_all(out.fs(), &["layout(location = 0) out vec4 outColor9;"]);
+    // Through the shared attachment list: logical 3 -> physical slot 1.
+    let fs = "#version 150\nout vec4 outColor3;\nvoid main() { outColor3 = vec4(1.0); }\n";
+    let out = T::fullscreen().vs(VS).fs(fs).with(|o| o.output_locations = Some(vec![0, 5, 6, 1])).run();
+    assert_eq!(reflected(&out), [(1, "outColor3".to_string())]);
+}
+
+#[test]
 fn out_color_names_give_locations_and_others_follow_declaration_order() {
     let fs = "#version 150\nout vec4 extra;\nout vec4 outColor2;\nout vec4 more[2];\nout vec4 outColor0;\nlayout(location = 6) out vec4 fixedLoc;\n\
               void main() { extra = vec4(1.0); outColor2 = vec4(2.0); more[0] = vec4(3.0); more[1] = vec4(3.5); outColor0 = vec4(4.0); fixedLoc = vec4(5.0); }\n";

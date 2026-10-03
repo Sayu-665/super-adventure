@@ -56,6 +56,7 @@ pub use bindings::{resource_kind_of, sample_type_name};
 pub use cache::cache_key;
 pub use inspect::{FolderSummary, PackSummary, ProgramSummary, inspect};
 pub use macros::standard_macros;
+pub use resolve::FALLBACK_SOURCE;
 pub use sources::PackRef;
 
 use compile::Caches;

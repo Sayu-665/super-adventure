@@ -168,12 +168,13 @@ fn render_bliss() {
     render_named("Bliss-Shader");
 }
 
-#[test]
-#[ignore = "needs sb-pipeline and the corpus; slow"]
-fn depth_mode_parity_real_pack() {
+/// Forward and reversed Z of the same pack render the same image: the translator's depth
+/// remapping (`gl_FragCoord.z`, depth texture reads, `gl_FragDepth`) and the runtime's
+/// depth state are exact inverses (up to depth precision and the mean of a few pixels).
+fn depth_mode_parity(name: &str) {
     let _g = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(dir) = find_pack("ComplementaryReimagined") else {
-        eprintln!("skipping: pack not found");
+    let Some(dir) = find_pack(name) else {
+        eprintln!("skipping: pack `{name}` not found");
         return;
     };
     let Some(mut rt) = runtime() else { return };
@@ -181,13 +182,32 @@ fn depth_mode_parity_real_pack() {
     let (rev, rb, _) = compile(&rt, &dir, DepthMode::ReversedZeroToOne);
     let a = render_compiled(&mut rt, &fwd, &fb, &files, (320, 180), 3);
     let b = render_compiled(&mut rt, &rev, &rb, &files, (320, 180), 3);
-    a.image.save(render_dir().join("parity_real_forward.png")).ok();
-    b.image.save(render_dir().join("parity_real_reversed.png")).ok();
+    let tag = normalize(name);
+    a.image.save(render_dir().join(format!("parity_{tag}_forward.png"))).ok();
+    b.image.save(render_dir().join(format!("parity_{tag}_reversed.png"))).ok();
     assert_no_validation_messages(&a);
     assert_no_validation_messages(&b);
     let d = mean_abs_diff(&a.image, &b.image);
-    eprintln!("mean abs diff {d}");
-    assert!(d < 2.0 / 255.0, "forward and reversed renders differ: {d}");
+    eprintln!("{name}: forward vs reversed mean abs diff {d:.6} ({:.3}/255)", d * 255.0);
+    assert!(d < 2.0 / 255.0, "{name}: forward and reversed renders differ: {d}");
+}
+
+#[test]
+#[ignore = "needs sb-pipeline and the corpus; slow"]
+fn depth_mode_parity_complementary() {
+    depth_mode_parity("ComplementaryReimagined");
+}
+
+#[test]
+#[ignore = "needs sb-pipeline and the corpus; slow"]
+fn depth_mode_parity_photon() {
+    depth_mode_parity("photon");
+}
+
+#[test]
+#[ignore = "needs sb-pipeline and the corpus; slow"]
+fn depth_mode_parity_bliss() {
+    depth_mode_parity("Bliss-Shader");
 }
 
 /// Every pack of every corpus root, small and one frame: a survey that only fails on

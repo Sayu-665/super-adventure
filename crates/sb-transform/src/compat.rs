@@ -83,8 +83,12 @@ fn replacement(name: &str, stage: ShaderStage) -> Option<&'static str> {
         "gl_Fog" => "sb_gl_Fog",
         "gl_VertexID" => "gl_VertexIndex",
         "gl_InstanceID" => "gl_InstanceIndex",
-        "gl_FrontColor" | "gl_BackColor" if !fs => "sb_v_Color",
-        "gl_FrontSecondaryColor" | "gl_BackSecondaryColor" if !fs => "sb_v_SecondaryColor",
+        "gl_FrontColor" if !fs => "sb_v_Color",
+        "gl_FrontSecondaryColor" if !fs => "sb_v_SecondaryColor",
+        // Two-sided vertex color is never enabled (OptiFine, Iris): the fragment `gl_Color`
+        // is the front color, whatever the back color written.
+        "gl_BackColor" if !fs => "sb_BackColor",
+        "gl_BackSecondaryColor" if !fs => "sb_BackSecondaryColor",
         "gl_TexCoord" => "sb_v_TexCoord",
         "gl_FogFragCoord" => "sb_v_FogFragCoord",
         "gl_Color" if fs => "sb_v_Color",
@@ -543,6 +547,8 @@ pub(crate) fn profile_pieces(w: &mut StageWork, ctx: &Ctx) {
         };
         w.piece(Section::Semantics, &[global], format!("{ty} {global} = {expr};"));
     }
+    w.piece(Section::Late, &["sb_BackColor"], "vec4 sb_BackColor;");
+    w.piece(Section::Late, &["sb_BackSecondaryColor"], "vec4 sb_BackSecondaryColor;");
     if stage == ShaderStage::Vertex {
         w.piece(Section::Semantics, &["sb_gl_SecondaryColor"], "vec4 sb_gl_SecondaryColor = vec4(0.0, 0.0, 0.0, 1.0);");
         w.piece(Section::Semantics, &["sb_gl_MultiTexCoordZero"], "vec4 sb_gl_MultiTexCoordZero = vec4(0.0, 0.0, 0.0, 1.0);");

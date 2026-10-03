@@ -115,6 +115,10 @@ pub(crate) struct StageWork<'a> {
     pub rect_samplers: HashSet<String>,
     /// The program needs raw Vulkan (1D/3D samplers, images, SSBOs).
     pub requires_raw_vulkan: bool,
+    /// The pack's `main` stays the entry point (a tessellation control `main` calling
+    /// `barrier()`, which must stay in `main`): the prologue and epilogue run from
+    /// `sb_prologue()` / `sb_epilogue()` calls inserted into it instead of a wrapper.
+    pub inline_main: bool,
     pub diags: Diagnostics,
 }
 
@@ -136,6 +140,7 @@ impl<'a> StageWork<'a> {
             opaque_types: HashMap::new(),
             rect_samplers: HashSet::new(),
             requires_raw_vulkan: false,
+            inline_main: false,
             diags: Diagnostics::new(),
         }
     }

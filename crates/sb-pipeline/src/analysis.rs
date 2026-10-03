@@ -151,6 +151,7 @@ pub fn analyze_folder(
                     StageSource::SynthesizedVertex { virtual_path } => {
                         pp.preprocess_source(virtual_path, sb_transform::DEFAULT_VERTEX_SHADER, macros)
                     }
+                    StageSource::Fallback { virtual_path, source } => pp.preprocess_source(virtual_path, source, macros),
                 };
                 let pre = Arc::new(pre);
                 let path = src.path();

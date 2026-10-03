@@ -204,6 +204,17 @@ pub const SODIUM_TERRAIN: VertexLayout = VertexLayout {
     ],
 };
 
+/// Draw profiles that share another profile's vertex layout: (profile, layout profile).
+/// `dh_terrain_synth` (sb-transform's profile for DH programs synthesized from
+/// `gbuffers_terrain`/`gbuffers_water`/`shadow`) differs from `dh_terrain` only in its
+/// lightmap semantic and draws the same LOD vertices.
+pub const PROFILE_ALIASES: [(&str, &str); 1] = [("dh_terrain_synth", "dh_terrain")];
+
+/// The profile whose vertex layout a program translated for `profile` consumes.
+pub fn layout_profile(profile: &str) -> &str {
+    PROFILE_ALIASES.iter().find(|(p, _)| *p == profile).map_or(profile, |(_, l)| l)
+}
+
 /// Every layout of the scene.
 pub const ALL_LAYOUTS: [&VertexLayout; 6] = [&VANILLA_TERRAIN, &VANILLA_ENTITY, &VANILLA_POSITION, &VANILLA_POSITION_TEX, &DH_TERRAIN, &SODIUM_TERRAIN];
 
@@ -282,6 +293,16 @@ impl VertexWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthesized_dh_profile_draws_the_dh_layout() {
+        assert_eq!(layout_profile("dh_terrain_synth"), DH_TERRAIN.profile);
+        assert_eq!(layout_profile("dh_terrain"), "dh_terrain");
+        assert_eq!(layout_profile("vanilla_terrain"), "vanilla_terrain");
+        for (_, target) in PROFILE_ALIASES {
+            assert!(ALL_LAYOUTS.iter().any(|l| l.profile == target), "{target}");
+        }
+    }
 
     #[test]
     fn layouts_are_packed_without_overlap() {

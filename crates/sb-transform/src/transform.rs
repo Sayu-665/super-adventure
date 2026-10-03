@@ -11,7 +11,10 @@ use crate::profiles::DrawProfile;
 /// Options of one program translation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransformOptions {
-    /// Vulkan (explicit set/binding) or Renderpearl (no set/binding).
+    /// Vulkan (explicit set/binding) or Renderpearl (no set/binding; vertex/fragment
+    /// interface blocks and struct-typed varyings become plain per-member varyings
+    /// `sb_ib_<Block>_<k>` / `sb_is_<var>_<k>`, as Mojang's pipeline builder rejects
+    /// struct-typed interface variables).
     pub target: OutputTarget,
     /// Depth convention (ARCHITECTURE §4).
     pub depth_mode: DepthMode,
@@ -122,7 +125,9 @@ pub struct TransformedProgram {
     pub frame_members_used: Vec<String>,
     /// `sb_Draw` members used.
     pub draw_members_used: Vec<String>,
-    /// The program needs features Mojang's public pipeline API cannot express.
+    /// The program needs features Mojang's public pipeline API cannot express (1D/3D
+    /// samplers, storage images and buffers, compute, geometry or tessellation stages,
+    /// 64-bit varyings, arrayed interface blocks; decided alike for both targets).
     pub requires_raw_vulkan: bool,
     /// Warnings and notes.
     pub diagnostics: Diagnostics,

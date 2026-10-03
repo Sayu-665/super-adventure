@@ -17,7 +17,9 @@
 //! * `SB_CORPUS_SETS=defaults,max` and `SB_CORPUS_VARIANTS=forward,reversed,renderpearl,dhsynth`
 //!   select a subset;
 //! * `SB_CORPUS_PACKS=<substring>[,<substring>]` restricts the packs;
-//! * `SB_FAIL_DUMP=<dir>` writes the GLSL of failing stages.
+//! * `SB_FAIL_DUMP=<dir>` writes the GLSL of failing stages;
+//! * `SB_CORPUS_DIAG=<code>[,<code>]` prints every Forward-variant transform diagnostic
+//!   with one of these codes (e.g. `xf.unknown-attribute`).
 //!
 //! Failures that are bugs of the packs themselves (code that no GLSL compiler accepts
 //! with those option values) are listed in [`KNOWN_PACK_BUGS`]; they are reported but do
@@ -243,13 +245,41 @@ fn check_interfaces(refl: &[Reflection], frag_outputs: &[(u32, String)]) -> Resu
         }
     }
     if let Some(fs) = refl.iter().find(|r| r.stage == ShaderStage::Fragment) {
-        let mut locs: Vec<u32> = fs.outputs.iter().flat_map(|o| o.location..o.location + o.location_count.max(1)).collect();
+        // Renderpearl fills location gaps with write-masked `sb_Unused<N>` outputs.
+        let mut locs: Vec<u32> =
+            fs.outputs.iter().filter(|o| !o.name.starts_with("sb_Unused")).flat_map(|o| o.location..o.location + o.location_count.max(1)).collect();
         locs.sort_unstable();
         locs.dedup();
         let want: Vec<u32> = frag_outputs.iter().map(|(l, _)| *l).collect();
         // Outputs the shader never writes are not in the SPIR-V interface.
         if let Some(l) = locs.iter().find(|l| !want.contains(l)) {
             return Err(format!("fragment output location {l} is not reported (reported {want:?})"));
+        }
+    }
+    Ok(())
+}
+
+/// The interface checks of Mojang's 26.3 `PipelineBuilder` (Renderpearl GLSL path): every
+/// user input/output is a plain variable (no struct or block member, no 64-bit type)
+/// without a `Component` decoration, and every fragment input location has a vertex
+/// output of the same base type, vector size and flatness.
+fn check_mojang(refl: &[Reflection]) -> Result<(), String> {
+    for r in refl {
+        for v in r.inputs.iter().chain(&r.outputs) {
+            if v.name.contains('.') || v.base_type == "struct" || v.base_type.contains("64") || v.base_type == "double" || v.component != 0 {
+                return Err(format!("renderpearl: {} interface variable `{}` ({}) is rejected by Mojang's pipeline builder", r.stage, v.name, v.base_type));
+            }
+        }
+    }
+    let (Some(vs), Some(fs)) = (refl.iter().find(|r| r.stage == ShaderStage::Vertex), refl.iter().find(|r| r.stage == ShaderStage::Fragment)) else {
+        return Ok(());
+    };
+    for i in &fs.inputs {
+        let Some(o) = vs.outputs.iter().find(|o| o.location == i.location) else {
+            return Err(format!("renderpearl: fragment input `{}` (location {}) has no vertex output", i.name, i.location));
+        };
+        if (&o.base_type, o.vec_size, o.flat) != (&i.base_type, i.vec_size, i.flat) {
+            return Err(format!("renderpearl: location {} differs between `{}` and `{}`", i.location, o.name, i.name));
         }
     }
     Ok(())
@@ -379,8 +409,13 @@ fn translate_program(
     if variant == Variant::Forward
         && let Ok(mut counts) = DIAGNOSTICS.lock()
     {
+        let show = env_list("SB_CORPUS_DIAG").unwrap_or_default();
         for d in t.diagnostics.iter() {
             *counts.entry(format!("{:?} {}", d.severity, d.code)).or_default() += 1;
+            if show.iter().any(|c| d.code.eq_ignore_ascii_case(c)) {
+                let at = d.location.as_ref().map(|l| format!(" at {}:{}", l.file, l.line)).unwrap_or_default();
+                eprintln!("diag {} [{}]{at} {}", d.program.as_deref().unwrap_or("?"), d.code, d.message);
+            }
         }
     }
     let copts = if target == OutputTarget::Renderpearl { CompileOptions::auto_mapped() } else { CompileOptions::default() };
@@ -419,9 +454,11 @@ fn translate_program(
             }
         }
     }
+    // Renderpearl: the program must also pass Mojang's pipeline builder (programs it
+    // cannot express are marked for the raw Vulkan path).
+    let mojang = || if target == OutputTarget::Renderpearl && !t.requires_raw_vulkan { check_mojang(&reflections) } else { Ok(()) };
     if !failed
-        && target == OutputTarget::Vulkan
-        && let Err(m) = check_interfaces(&reflections, &t.fragment_outputs)
+        && let Err(m) = check_interfaces(&reflections, &t.fragment_outputs).and_then(|()| mojang())
     {
         if let Ok(dir) = std::env::var("SB_FAIL_DUMP") {
             for s in &t.stages {

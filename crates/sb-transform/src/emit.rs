@@ -155,11 +155,20 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
     if ctx.last_pre_raster == Some(w.stage) && !redeclares_per_vertex {
         printer.line("invariant gl_Position;", 0);
     }
+    // The pack's own `main` stays the entry point (see `StageWork::inline_main`).
+    let inline = if w.inline_main { inline_main(w) } else { Vec::new() };
+    for (name, _) in &inline {
+        printer.line(&format!("void {name}();"), 0);
+    }
     for item in &w.unit.items {
         printer.item(item);
     }
     for p in pieces.iter().filter(|p| p.section == Section::Tail) {
         printer.text(&p.text, 0);
+    }
+    for (name, body) in &inline {
+        let stmts: String = body.iter().map(|s| format!("    {s}\n")).collect();
+        printer.text(&format!("void {name}() {{\n{stmts}}}\n"), 0);
     }
     // Renderpearl: outputs are renumbered by first use; touch them in location order.
     let mut main = String::from("void main() {\n");
@@ -193,15 +202,17 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
         printer.text(&touch, 0);
         main.push_str("    sb_touchOutputs();\n");
     }
-    for s in &w.prologue {
-        main.push_str(&format!("    {s}\n"));
+    if !w.inline_main {
+        for s in &w.prologue {
+            main.push_str(&format!("    {s}\n"));
+        }
+        main.push_str("    sb_user_main();\n");
+        for s in &w.epilogue {
+            main.push_str(&format!("    {s}\n"));
+        }
+        main.push_str("}\n");
+        printer.text(&main, 0);
     }
-    main.push_str("    sb_user_main();\n");
-    for s in &w.epilogue {
-        main.push_str(&format!("    {s}\n"));
-    }
-    main.push_str("}\n");
-    printer.text(&main, 0);
 
     let (glsl, lines) = printer.finish();
     let line_map: Vec<Option<SourceLocation>> = lines.iter().map(|&l| w.loc(l)).collect();
@@ -253,6 +264,73 @@ pub(crate) fn emit_stage(w: &mut StageWork, ctx: &Ctx) -> Emitted {
         frame_members: frame,
         draw_members: draw,
         vertex_inputs,
+    }
+}
+
+/// Inline the wrapper's work into the pack's own `main` (see
+/// [`StageWork::inline_main`]): `sb_prologue()` runs first, `sb_epilogue()` before every
+/// `return` and at the end. Returns the helper functions to define, `(name, body)`.
+fn inline_main(w: &mut StageWork) -> Vec<(String, Vec<String>)> {
+    let mut helpers = Vec::new();
+    if !w.prologue.is_empty() {
+        helpers.push(("sb_prologue".to_string(), w.prologue.clone()));
+    }
+    if !w.epilogue.is_empty() {
+        helpers.push(("sb_epilogue".to_string(), w.epilogue.clone()));
+    }
+    let call = |name: &str| Stmt::new(StmtKind::Expr(Expr::call(name, Vec::new())), 0);
+    for item in &mut w.unit.items {
+        let ItemKind::Function(f) = &mut item.kind else { continue };
+        if f.proto.name != "main" {
+            continue;
+        }
+        if !w.epilogue.is_empty() {
+            before_returns(&mut f.body, &|| call("sb_epilogue"));
+            if !matches!(f.body.last().map(|s| &s.kind), Some(StmtKind::Return(_))) {
+                f.body.push(call("sb_epilogue"));
+            }
+        }
+        if !w.prologue.is_empty() {
+            f.body.insert(0, call("sb_prologue"));
+        }
+    }
+    helpers
+}
+
+/// Precede every `return` in `body` (nested statements included) with `stmt()`.
+fn before_returns(body: &mut Vec<Stmt>, stmt: &dyn Fn() -> Stmt) {
+    let mut i = 0;
+    while i < body.len() {
+        if matches!(body[i].kind, StmtKind::Return(_)) {
+            body.insert(i, stmt());
+            i += 2;
+            continue;
+        }
+        nested_returns(&mut body[i], stmt);
+        i += 1;
+    }
+}
+
+fn nested_returns(s: &mut Stmt, stmt: &dyn Fn() -> Stmt) {
+    let wrap = |s: &mut Box<Stmt>| {
+        if matches!(s.kind, StmtKind::Return(_)) {
+            let ret = std::mem::replace(s.as_mut(), Stmt::new(StmtKind::Empty, 0));
+            let line = ret.line;
+            **s = Stmt::new(StmtKind::Block(vec![stmt(), ret]), line);
+        } else {
+            nested_returns(s, stmt);
+        }
+    };
+    match &mut s.kind {
+        StmtKind::Block(b) | StmtKind::Switch { body: b, .. } => before_returns(b, stmt),
+        StmtKind::If { then, els, .. } => {
+            wrap(then);
+            if let Some(e) = els {
+                wrap(e);
+            }
+        }
+        StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } | StmtKind::For { body, .. } => wrap(body),
+        _ => {}
     }
 }
 

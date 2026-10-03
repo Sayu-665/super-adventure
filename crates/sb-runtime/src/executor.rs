@@ -488,32 +488,6 @@ impl<'r> Executor<'r> {
             let img = arena.create_image(gpu, desc)?;
             tex.images.insert(ci.name.clone(), img);
         }
-        for b in &dim.targets.buffers {
-            let size = match b.relative {
-                Some([sx, sy]) => {
-                    let (rw, rh) = TargetSize::Relative { x: sx, y: sy }.resolve(w, h);
-                    b.size.saturating_mul(u64::from(rw)).saturating_mul(u64::from(rh))
-                }
-                None => b.size,
-            };
-            let max = u64::from(gpu.limits().max_storage_buffer_range).min(1 << 30);
-            if size > max {
-                warn(stats, format!("SSBO {} of {size} bytes exceeds the device limit; it is clamped to {max}", b.index));
-            }
-            let size = size.clamp(16, max);
-            let data = match &b.file {
-                Some(f) => match req.textures.read(f) {
-                    Some(d) => d.into_iter().take(size as usize).collect(),
-                    None => {
-                        warn(stats, format!("SSBO {}: initial data `{f}` not found", b.index));
-                        Vec::new()
-                    }
-                },
-                None => Vec::new(),
-            };
-            let buf = arena.create_buffer_with_data(gpu, &format!("ssbo {}", b.index), &data, size, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC)?;
-            tex.ssbos.insert(b.index, buf);
-        }
 
         // Scene.
         let dh_enabled = dim.distant_horizons.strategy != DhStrategy::Disabled && req.scene.clamped_dh_distance() > 0;
@@ -532,6 +506,54 @@ impl<'r> Executor<'r> {
                     programs.push(ProgramState::Skipped);
                 }
             }
+        }
+
+        // SSBOs (`bufferObject.<n>`), after the programs: GL binds a buffer smaller than
+        // the block a shader declares and only the accesses past its end are undefined
+        // (arc-shader declares a 640-byte `sceneData` over `bufferObject.0=636`). Vulkan
+        // needs the bound range to cover the block, so a buffer grows to the largest block
+        // any program declares for it (zero-filled tail) instead of being replaced by a
+        // zero buffer, which would lose everything the pack stores in it.
+        let mut declared: HashMap<u32, u64> = HashMap::new();
+        for p in &programs {
+            let ProgramState::Ready(pp) = p else { continue };
+            for s in &pp.slots {
+                if let (sb_compile::DescriptorKind::StorageBuffer { size, .. }, pipelines::Role::Resource(ResourceRef::Ssbo(i))) = (&s.kind, &s.role) {
+                    let e = declared.entry(*i).or_default();
+                    *e = (*e).max(u64::from(*size));
+                }
+            }
+        }
+        for b in &dim.targets.buffers {
+            let size = match b.relative {
+                Some([sx, sy]) => {
+                    let (rw, rh) = TargetSize::Relative { x: sx, y: sy }.resolve(w, h);
+                    b.size.saturating_mul(u64::from(rw)).saturating_mul(u64::from(rh))
+                }
+                None => b.size,
+            };
+            let block = declared.get(&b.index).copied().unwrap_or(0);
+            if block > size {
+                warn(stats, format!("SSBO {} is {size} bytes but a program declares a {block}-byte block; it is enlarged (zero-filled)", b.index));
+            }
+            let size = size.max(block);
+            let max = u64::from(gpu.limits().max_storage_buffer_range).min(1 << 30);
+            if size > max {
+                warn(stats, format!("SSBO {} of {size} bytes exceeds the device limit; it is clamped to {max}", b.index));
+            }
+            let size = size.clamp(16, max);
+            let data = match &b.file {
+                Some(f) => match req.textures.read(f) {
+                    Some(d) => d.into_iter().take(size as usize).collect(),
+                    None => {
+                        warn(stats, format!("SSBO {}: initial data `{f}` not found", b.index));
+                        Vec::new()
+                    }
+                },
+                None => Vec::new(),
+            };
+            let buf = arena.create_buffer_with_data(gpu, &format!("ssbo {}", b.index), &data, size, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC)?;
+            tex.ssbos.insert(b.index, buf);
         }
 
         // Uniform ring.

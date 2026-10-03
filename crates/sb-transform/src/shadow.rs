@@ -269,3 +269,83 @@ fn rewrite(
     *name = helper.name().to_string();
     used.insert(helper);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 4×4 depth texture (row-major, texel (i, j) at `[j][i]`), clamp-to-edge.
+    const DEPTH: [[f32; 4]; 4] = [[0.10, 0.40, 0.55, 0.90], [0.30, 0.50, 0.52, 0.20], [0.70, 0.48, 0.51, 0.60], [0.95, 0.05, 0.49, 0.35]];
+
+    fn texel(i: i32, j: i32) -> f32 {
+        DEPTH[j.clamp(0, 3) as usize][i.clamp(0, 3) as usize]
+    }
+
+    /// `textureGather` per the GL/Vulkan specification: with `i0 = floor(u - 0.5)`,
+    /// `j0 = floor(v - 0.5)` (texel space), the components are `(i0, j1)`, `(i1, j1)`,
+    /// `(i1, j0)`, `(i0, j0)`.
+    fn gather(u: f32, v: f32, fetch: &dyn Fn(i32, i32) -> f32) -> [f32; 4] {
+        let (i0, j0) = ((u - 0.5).floor() as i32, (v - 0.5).floor() as i32);
+        [fetch(i0, j0 + 1), fetch(i0 + 1, j0 + 1), fetch(i0 + 1, j0), fetch(i0, j0)]
+    }
+
+    fn mix(a: f32, b: f32, t: f32) -> f32 {
+        a * (1.0 - t) + b * t
+    }
+
+    /// What comparison hardware returns with linear filtering: the bilinear weights of the
+    /// four footprint texels applied to their comparison results.
+    fn hardware(p: [f32; 3], size: f32, op: fn(f32, f32) -> bool, fetch: &dyn Fn(i32, i32) -> f32) -> f32 {
+        let (u, v) = (p[0] * size - 0.5, p[1] * size - 0.5);
+        let (i0, j0) = (u.floor() as i32, v.floor() as i32);
+        let (a, b) = (u - u.floor(), v - v.floor());
+        let r = p[2].clamp(0.0, 1.0);
+        let lit = |i, j| if op(r, fetch(i, j)) { 1.0 } else { 0.0 };
+        (1.0 - a) * (1.0 - b) * lit(i0, j0) + a * (1.0 - b) * lit(i0 + 1, j0) + (1.0 - a) * b * lit(i0, j0 + 1) + a * b * lit(i0 + 1, j0 + 1)
+    }
+
+    /// `sb_shadowCompare` transcribed (the text test below pins the GLSL to it).
+    fn emulated(p: [f32; 3], size: f32, op: fn(f32, f32) -> bool, fetch: &dyn Fn(i32, i32) -> f32) -> f32 {
+        let g = gather(p[0] * size, p[1] * size, fetch);
+        let r = p[2].clamp(0.0, 1.0);
+        let lit: Vec<f32> = g.iter().map(|d| if op(r, *d) { 1.0 } else { 0.0 }).collect();
+        let fx = (p[0] * size - 0.5) - (p[0] * size - 0.5).floor();
+        let fy = (p[1] * size - 0.5) - (p[1] * size - 0.5).floor();
+        mix(mix(lit[3], lit[2], fx), mix(lit[0], lit[1], fx), fy)
+    }
+
+    #[test]
+    fn helper_text_is_the_transcribed_formula() {
+        let t = Helper::Compare.text("lessThanEqual");
+        assert!(t.contains("vec4(lessThanEqual(vec4(clamp(sb_p.z, 0.0, 1.0)), textureGather(sb_s, sb_p.xy)))"), "{t}");
+        assert!(t.contains("fract(sb_p.xy * vec2(textureSize(sb_s, 0)) - 0.5)"), "{t}");
+        assert!(t.contains("mix(mix(sb_lit.w, sb_lit.z, sb_f.x), mix(sb_lit.x, sb_lit.y, sb_f.x), sb_f.y)"), "{t}");
+    }
+
+    #[test]
+    fn emulated_pcf_matches_comparison_hardware() {
+        let lequal: fn(f32, f32) -> bool = |r, d| r <= d;
+        let gequal: fn(f32, f32) -> bool = |r, d| r >= d;
+        let size = 4.0;
+        let mut checked = 0;
+        for &(x, y) in &[(0.13, 0.27), (0.5, 0.5), (0.62, 0.81), (0.9, 0.05), (0.375, 0.625), (0.01, 0.99), (0.44, 0.31)] {
+            for &r in &[-0.2, 0.0, 0.3, 0.495, 0.5, 0.51, 0.75, 1.0, 1.3] {
+                let p = [x, y, r];
+                let hw = hardware(p, size, lequal, &texel);
+                let em = emulated(p, size, lequal, &texel);
+                assert!((hw - em).abs() < 1e-5, "forward {p:?}: hardware {hw}, emulated {em}");
+                // Reversed depth: the texture stores 1 - d, depth.rs flips the reference to
+                // 1 - r and the helper compares GEQUAL: the same lit fraction.
+                let reversed = |i, j| 1.0 - texel(i, j);
+                let rv = emulated([x, y, 1.0 - r], size, gequal, &reversed);
+                assert!((hw - rv).abs() < 1e-5, "reversed {p:?}: hardware {hw}, emulated {rv}");
+                checked += 1;
+            }
+        }
+        // Hand-checked value: at texel center (1.5, 1.5) / 4 the footprint is the single
+        // texel (1, 1) = 0.50, lit for references up to 0.5.
+        assert_eq!(emulated([0.375, 0.375, 0.5], size, lequal, &texel), 1.0);
+        assert_eq!(emulated([0.375, 0.375, 0.51], size, lequal, &texel), 0.0);
+        assert_eq!(checked, 63);
+    }
+}

@@ -26,6 +26,18 @@ pub(crate) fn apply(w: &mut StageWork, ctx: &Ctx) {
     if n > 0 {
         w.info("xf.implicit-conversion", format!("{n} implicit narrowing conversion(s) (float to int/uint, uint to int, double to float) were made explicit"), 0);
     }
+    let n = crate::shared_bounds::apply(&mut w.unit);
+    if n > 0 {
+        w.info("xf.shared-bounds", format!("{n} index(es) into `shared` arrays were clamped to the array bounds (out-of-bounds workgroup memory access is undefined and unprotected in Vulkan)"), 0);
+    }
+    let (params, locals) = crate::init_vars::apply(&mut w.unit);
+    if params + locals > 0 {
+        w.info(
+            "xf.zero-init",
+            format!("{params} `out` parameter(s) and {locals} local variable(s) without an initializer start at zero (GLSL leaves them undefined; GL drivers yield zero)"),
+            0,
+        );
+    }
 }
 
 // ------------------------------------------------------------ opaque ternaries

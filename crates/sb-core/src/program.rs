@@ -124,6 +124,12 @@ impl GeometryProgram {
                 // The sun and moon (Minecraft's `CELESTIAL` pipeline, Iris' SKY_TEXTURED) are
                 // blended additively: their textures have opaque black backgrounds.
                 G::SkyTextured => Some(BlendMode::OVERLAY),
+                // The sky disc and Iris' horizon cone use Minecraft's `SKY` pipeline, which
+                // does not blend (Iris has no override for skybasic, so the vanilla state
+                // applies): packs that write `vec4(0.0)` outside the stars (glimmer) clear the
+                // sky to zero with it. (Stars and the sunrise fan, also skybasic, blend in
+                // vanilla; a per-program blend cannot express that.)
+                G::SkyBasic => None,
                 _ => Some(BlendMode::TRANSLUCENT),
             },
         }
@@ -384,12 +390,12 @@ mod tests {
     }
 
     /// Vanilla blend states that apply without a `blend.<program>` override: the sun and
-    /// moon are additive (their black backgrounds must not cover the sky), solid terrain
-    /// and shadows are unblended, other geometry is translucent.
+    /// moon are additive (their black backgrounds must not cover the sky), the sky disc,
+    /// solid terrain and shadows are unblended, other geometry is translucent.
     #[test]
     fn default_blends_follow_vanilla_pipelines() {
         assert_eq!(GeometryProgram::SkyTextured.default_blend(), Some(BlendMode::OVERLAY));
-        assert_eq!(GeometryProgram::SkyBasic.default_blend(), Some(BlendMode::TRANSLUCENT));
+        assert_eq!(GeometryProgram::SkyBasic.default_blend(), None);
         assert_eq!(GeometryProgram::Water.default_blend(), Some(BlendMode::TRANSLUCENT));
         assert_eq!(GeometryProgram::TerrainSolid.default_blend(), None);
         assert_eq!(GeometryProgram::Shadow.default_blend(), None);

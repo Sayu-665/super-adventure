@@ -359,8 +359,9 @@ fn collect_info(
                 } else if is_input(stage, quals) || is_output(stage, quals) {
                     let input = is_input(stage, quals);
                     for v in d.vars.iter().filter(|v| !v.name.starts_with("gl_")) {
-                        let mut array = dims(&d.ty.ty.array, &env);
-                        array.extend(dims(&v.array, &env));
+                        // Outermost first: `vec4[2] x[]` is `vec4 x[][2]`.
+                        let mut array = dims(&v.array, &env);
+                        array.extend(dims(&d.ty.ty.array, &env));
                         let var = InterfaceVar {
                             name: v.name.clone(),
                             ty: crate::print::type_spec(&TypeSpec { base: d.ty.ty.base.clone(), array: Vec::new() }),

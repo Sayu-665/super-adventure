@@ -16,8 +16,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Reads the resource interface of a SPIR-V module, with the naming rules SPIRV-Cross (and through
- * it Mojang's pipeline builder) applies. Pure Java; the module is not modified.
+ * Reads the resource interface of a SPIR-V module, with the naming and filtering rules SPIRV-Cross
+ * (and through it Mojang's pipeline builder) applies. Pure Java; the module is not modified.
  */
 public final class SpirvReflector {
     /** First word of every SPIR-V module. */
@@ -58,7 +58,10 @@ public final class SpirvReflector {
     private static final int STORAGE_PUSH_CONSTANT = 9;
     private static final int STORAGE_STORAGE_BUFFER = 12;
 
-    /** SPIR-V 1.4: entry point interfaces list every referenced global. */
+    /**
+     * SPIR-V 1.4: entry point interfaces list every referenced global; before, only inputs and
+     * outputs (SPIRV-Cross filters by the interface the same way).
+     */
     private static final int VERSION_1_4 = 0x10400;
 
     private final Words words;
@@ -95,7 +98,7 @@ public final class SpirvReflector {
         }
         int version = words.get(1);
         scan();
-        boolean filterByInterface = version >= VERSION_1_4;
+        boolean everyGlobalListed = version >= VERSION_1_4;
         List<Descriptor> descriptors = new ArrayList<>();
         List<InterfaceVariable> inputs = new ArrayList<>();
         List<InterfaceVariable> outputs = new ArrayList<>();
@@ -103,7 +106,8 @@ public final class SpirvReflector {
         for (int[] v : variables) {
             int id = v[1];
             int storage = v[2];
-            if (filterByInterface && !entryInterface.contains(id)) {
+            boolean io = storage == STORAGE_INPUT || storage == STORAGE_OUTPUT;
+            if ((everyGlobalListed || io) && !entryInterface.contains(id)) {
                 continue;
             }
             int pointee = pointee(v[0]);
@@ -352,7 +356,7 @@ public final class SpirvReflector {
     }
 
     /** A SPIR-V module that cannot be read. */
-    public static final class InvalidSpirvException extends RuntimeException {
+    public static final class InvalidSpirvException extends IllegalArgumentException {
         private static final long serialVersionUID = 1L;
 
         InvalidSpirvException(String message) {

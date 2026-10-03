@@ -760,15 +760,20 @@ fn resources(w: &mut StageWork, ctx: &Ctx) {
     });
 }
 
-/// Names of images passed as the first argument of `imageLoad`/`imageAtomic*`.
+/// Names of images that may be read: passed as the first argument of
+/// `imageLoad`/`imageAtomic*`, or to a pack function (whose parameter may be read; a
+/// `writeonly` argument cannot be passed to a parameter without `writeonly`).
 fn image_reads(unit: &TranslationUnit) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     unit.walk_exprs(&mut |e| {
-        if let Expr::Call(Callee::Name(n), args) = e
-            && (n == "imageLoad" || n.starts_with("imageAtomic"))
-            && let Some(root) = args.first().and_then(compat::root_ident)
-        {
-            out.insert(root.to_string());
+        if let Expr::Call(Callee::Name(n), args) = e {
+            if n == "imageLoad" || n.starts_with("imageAtomic") {
+                if let Some(root) = args.first().and_then(compat::root_ident) {
+                    out.insert(root.to_string());
+                }
+            } else if !names::is_builtin_function(n) && !is_builtin_type(n) {
+                out.extend(args.iter().filter_map(compat::root_ident).map(str::to_string));
+            }
         }
         Walk::Children
     });
@@ -903,13 +908,12 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
             dims.extend(crate::analyze::dims(&d.vars[0].array, &env));
             dims.first().copied().flatten().unwrap_or(1).clamp(1, 32)
         };
-        let logical = explicit.or_else(|| {
-            if n_user == 1 && literal.is_empty() && !dynamic {
-                Some(0)
-            } else {
-                name.strip_prefix("outColor").and_then(|s| s.parse::<u32>().ok())
-            }
-        });
+        // OptiFine binds `outColor0..7` to their own locations (glBindFragDataLocation),
+        // as Iris's `transformFragmentCore` does, whatever the number of outputs; GL
+        // gives a lone other output location 0.
+        let logical = explicit
+            .or_else(|| name.strip_prefix("outColor").and_then(|s| s.parse::<u32>().ok()).filter(|n| *n < 8))
+            .or_else(|| (n_user == 1 && literal.is_empty() && !dynamic).then_some(0));
         if let Some(l) = logical {
             used_logical.extend(l..l.saturating_add(count));
         }
@@ -1117,8 +1121,32 @@ fn varying_global_inputs(w: &mut StageWork, ctx: &Ctx) {
     }
 }
 
-/// Rename the pack's `main` to `sb_user_main`.
+/// Rename the pack's `main` to `sb_user_main` (called by the generated wrapper `main`).
+/// A tessellation control `main` that calls `barrier()` keeps its name: GLSL allows the
+/// barrier only in `main` itself, so the wrapper's work is inlined into it at emission
+/// (see [`StageWork::inline_main`]).
 fn rename_main(w: &mut StageWork) {
+    if w.stage == ShaderStage::TessControl {
+        let mut barrier = false;
+        for item in &w.unit.items {
+            if let ItemKind::Function(f) = &item.kind
+                && f.proto.name == "main"
+            {
+                for s in &f.body {
+                    s.walk_exprs(&mut |e| {
+                        if matches!(e, Expr::Call(Callee::Name(n), args) if n == "barrier" && args.is_empty()) {
+                            barrier = true;
+                        }
+                        Walk::Children
+                    });
+                }
+            }
+        }
+        if barrier {
+            w.inline_main = true;
+            return;
+        }
+    }
     let mut found = false;
     for item in &mut w.unit.items {
         let p = match &mut item.kind {

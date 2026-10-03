@@ -12,6 +12,7 @@ use crate::math::celestial;
 use crate::pipelines::{AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, gl_blend_factor, output_blend, output_class};
 use crate::resources::{ImageDesc, ImageId, clear_color_value, full_barrier, host_read_barrier};
 use crate::scene::formats::{SODIUM_TERRAIN, VertexLayout};
+use crate::scene::sky;
 use crate::texel::{self, NumericClass};
 use crate::uniforms::{DrawState, FrameInputs, FrameState, fill_host_block, fill_pack_block, push_constant_bytes, stage};
 use ash::vk;
@@ -32,7 +33,8 @@ enum MeshRef {
     Water,
     /// Sub-draw of the entity mesh.
     Entity(usize),
-    SkyDisc,
+    /// Sub-draw of the sky mesh ([`sky::SKY_HORIZON`] or [`sky::SKY_DISC`]).
+    Sky(usize),
     Sun,
     /// Moon phase sub-draw.
     Moon(usize),
@@ -185,6 +187,7 @@ impl Executor<'_> {
         let geometry_groups = [PassGroup::Shadow, PassGroup::GbuffersOpaque, PassGroup::GbuffersTranslucent];
         let mut done = [false; 3];
         let mut final_done = false;
+        let mut prev_group = None;
         for pass in &dim.passes {
             for (k, g) in geometry_groups.iter().enumerate() {
                 if !done[k] && *g < pass.group {
@@ -192,7 +195,8 @@ impl Executor<'_> {
                     done[k] = true;
                 }
             }
-            self.adopt_flip_state(pass);
+            self.adopt_flip_state(pass, prev_group != Some(pass.group));
+            prev_group = Some(pass.group);
             match pass.group {
                 PassGroup::Setup => {
                     if frame == 0 {
@@ -239,14 +243,16 @@ impl Executor<'_> {
     }
 
     /// Use the model's flip state for the pass (it is authoritative; a mismatch with
-    /// the runtime's own tracking is a model inconsistency).
-    fn adopt_flip_state(&mut self, pass: &Pass) {
+    /// the runtime's own tracking is a model inconsistency). The first pass of a group may
+    /// differ legitimately: Iris applies the group's `flip.<group>_pre.<buf>` flips before
+    /// it, which the model folds into `flip_state` only.
+    fn adopt_flip_state(&mut self, pass: &Pass, first_of_group: bool) {
         if pass.flip_state.is_empty() {
             return;
         }
         let color = &self.targets.color;
         let mismatches = self.flips.adopt(&pass.flip_state, |i| color.contains_key(&i));
-        if !mismatches.is_empty() {
+        if !mismatches.is_empty() && !first_of_group {
             self.warn(format!("pass {:?}{}: flip_state disagrees with the flips of the previous passes; using flip_state", pass.group, pass.index));
         }
     }
@@ -480,19 +486,35 @@ impl Executor<'_> {
         if shadow { s.for_shadow(fs) } else { s }
     }
 
+    /// The sky as Iris draws it: the horizon cone (fog colour) and the upper disc (sky
+    /// colour) with `gbuffers_skybasic` unless `sky=false`, then the sun and moon with
+    /// `gbuffers_skytextured` unless `sun=false` / `moon=false`.
     fn sky_batches(&self, out: &mut Vec<Batch>, fs: &FrameState) {
-        let mut disc = self.base_state(fs, false);
-        disc.color_modulator = [fs.sky_color[0], fs.sky_color[1], fs.sky_color[2], 1.0];
-        disc.render_stage = stage::SKY;
-        disc.texture_size = [1, 1];
-        out.push(Batch { geometry: GeometryProgram::SkyBasic, what: "sky", mesh: MeshRef::SkyDisc, state: disc, albedo: self.tex.white, depth_write: false, cull_back: false, shadow: false });
+        let settings = &self.dim.settings;
+        if settings.sky {
+            let mut horizon = self.base_state(fs, false);
+            // Iris: `renderHorizon(..., fogColor)` with alpha 1.
+            horizon.color_modulator = [fs.fog_color[0], fs.fog_color[1], fs.fog_color[2], 1.0];
+            horizon.render_stage = stage::SKY;
+            horizon.texture_size = [1, 1];
+            let mut disc = horizon.clone();
+            disc.color_modulator = [fs.sky_color[0], fs.sky_color[1], fs.sky_color[2], 1.0];
+            let sky = |what, sub, state| Batch { geometry: GeometryProgram::SkyBasic, what, mesh: MeshRef::Sky(sub), state, albedo: self.tex.white, depth_write: false, cull_back: false, shadow: false };
+            out.push(sky("horizon", sky::SKY_HORIZON, horizon));
+            out.push(sky("sky", sky::SKY_DISC, disc));
+        }
         let celestial = celestial::sky_model_view(&fs.model_view, fs.sky_angle, fs.sun_path_rotation);
         let mut sun = self.base_state(fs, false);
         sun.model_view = celestial;
         sun.color_modulator = [1.0, 1.0, 1.0, 1.0 - fs.rain];
         sun.render_stage = stage::SUN;
         sun.texture_size = [32, 32];
-        out.push(Batch { geometry: GeometryProgram::SkyTextured, what: "sun", mesh: MeshRef::Sun, state: sun.clone(), albedo: self.tex.sun, depth_write: false, cull_back: false, shadow: false });
+        if settings.sun {
+            out.push(Batch { geometry: GeometryProgram::SkyTextured, what: "sun", mesh: MeshRef::Sun, state: sun.clone(), albedo: self.tex.sun, depth_write: false, cull_back: false, shadow: false });
+        }
+        if !settings.moon {
+            return;
+        }
         let mut moon = sun;
         moon.render_stage = stage::MOON;
         moon.texture_size = [64, 32];
@@ -660,7 +682,7 @@ impl Executor<'_> {
                 mesh = MeshRef::Sodium(layer);
             }
             if let (Some(profile), Some(m)) = (program.draw_profile.as_deref(), self.mesh(mesh))
-                && profile != m.layout.profile
+                && crate::scene::formats::layout_profile(profile) != m.layout.profile
             {
                 self.warn(format!(
                     "{}: translated for the `{profile}` draw profile but draws {} in the `{}` vertex layout; inputs are matched by name",
@@ -793,6 +815,16 @@ impl Executor<'_> {
         (colors, depth)
     }
 
+    /// Viewport covering `viewport` with the scissor (and render area) `area`.
+    fn set_viewport_clipped(&self, cmd: vk::CommandBuffer, viewport: vk::Extent2D, area: vk::Extent2D) {
+        let vp = [vk::Viewport { x: 0.0, y: 0.0, width: viewport.width.max(1) as f32, height: viewport.height.max(1) as f32, min_depth: 0.0, max_depth: 1.0 }];
+        let sc = [vk::Rect2D { offset: vk::Offset2D::default(), extent: area }];
+        unsafe {
+            self.gpu.device.cmd_set_viewport(cmd, 0, &vp);
+            self.gpu.device.cmd_set_scissor(cmd, 0, &sc);
+        }
+    }
+
     fn set_viewport(&self, cmd: vk::CommandBuffer, extent: vk::Extent2D, scale: Option<&sb_core::model::ViewportScale>) {
         let (w, h) = (extent.width as f32, extent.height as f32);
         let (mut x, mut y, mut vw, mut vh) = (0.0, 0.0, w, h);
@@ -831,7 +863,11 @@ impl Executor<'_> {
         let extent = self.render_extent(&scope);
         let (color_formats, depth_format) = self.scope_formats(&scope);
         self.begin_scope(cmd, &scope, extent)?;
-        self.set_viewport(cmd, extent, None);
+        // Geometry keeps Minecraft's viewport (the depth buffer's size: the screen, or the
+        // shadow map) and is clipped to the smallest attachment, as in GL: a program that
+        // writes a `size.buffer`-scaled target fills only its part of the screen.
+        let full = scope.depth.map_or(extent, |d| self.arena.image(d).extent_2d());
+        self.set_viewport_clipped(cmd, full, extent);
         let mut set_cache: HashMap<(u32, ImageId), Vec<vk::DescriptorSet>> = HashMap::new();
         let dim = self.dim;
         for (b, pi, _, states) in items {
@@ -957,7 +993,7 @@ impl Executor<'_> {
             MeshRef::Cutout => (s.cutout.as_ref()?, None),
             MeshRef::Water => (s.water.as_ref()?, None),
             MeshRef::Entity(i) => (s.entities.as_ref()?, Some(i)),
-            MeshRef::SkyDisc => (s.sky_disc.as_ref()?, None),
+            MeshRef::Sky(i) => (s.sky_disc.as_ref()?, Some(i)),
             MeshRef::Sun => (s.sun.as_ref()?, None),
             MeshRef::Moon(i) => (s.moon.as_ref()?, Some(i)),
             MeshRef::DhOpaque(i) => (s.dh.get(i)?.1.as_ref()?, None),

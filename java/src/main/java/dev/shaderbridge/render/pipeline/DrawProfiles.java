@@ -16,6 +16,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class DrawProfiles {
     /** Resource directory of the built-in profile files ({@code <name>.toml}). */
     public static final String RESOURCE_DIR = "/dev/shaderbridge/profiles/";
+    /**
+     * The profile of Distant Horizons programs synthesized from {@code gbuffers_*} programs
+     * ({@code sb_transform::DH_SYNTH_PROFILE}). sb-transform derives it in code from
+     * {@code dh_terrain}: only its lightmap semantic differs, so its inputs, blocks and samplers
+     * are those of {@code dh_terrain}.
+     */
+    public static final String DH_SYNTH_PROFILE = "dh_terrain_synth";
 
     private static final DrawProfiles BUILTIN = new DrawProfiles();
 
@@ -35,6 +42,9 @@ public final class DrawProfiles {
      * @throws IllegalStateException if the packaged file of a built-in profile is invalid
      */
     public Optional<DrawProfileInfo> profile(String name) {
+        if (name.equals(DH_SYNTH_PROFILE)) {
+            return profile("dh_terrain").map(p -> new DrawProfileInfo(DH_SYNTH_PROFILE, p.fullscreen(), p.inputs(), p.blocks(), p.samplers()));
+        }
         return cache.computeIfAbsent(name, DrawProfiles::loadBuiltin);
     }
 

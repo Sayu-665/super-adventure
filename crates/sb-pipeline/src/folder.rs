@@ -193,13 +193,23 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
             gb_union.extend(directives.draw_buffers[u].iter().copied());
         }
     }
-    let gbuffer_attachments: Vec<u32> = if gb_union.len() <= max_attachments { gb_union.into_iter().collect() } else { Vec::new() };
+    // One shared gbuffer pass binds every attachment at once, so they must have one size:
+    // Iris binds a framebuffer of each program's own draw buffers, and a `size.buffer`
+    // target only clips the programs that write it (bloop draws the sky into a 0.75-scaled
+    // colortex8 with the full-screen viewport).
+    let size_of = |i: u32| props.buffer_size_of(i).and_then(|s| s.to_target_size()).unwrap_or_default();
+    let gb_sizes: Vec<TargetSize> = gb_union.iter().map(|&i| size_of(i)).collect();
+    let gb_one_size = gb_sizes.windows(2).all(|w| w[0] == w[1]);
+    let gb_shared = gb_union.len() <= max_attachments && gb_one_size;
+    let gbuffer_attachments: Vec<u32> = if gb_shared { gb_union.into_iter().collect() } else { Vec::new() };
     let shadow_attachments: Vec<u32> = if sh_union.len() <= max_attachments { sh_union.into_iter().collect() } else { Vec::new() };
     if gbuffer_attachments.is_empty() && plan.geometry.keys().any(|g| !is_shadow_group(*g)) {
-        diags.push(Diagnostic::info(
-            "pipeline.gbuffer-attachments",
-            format!("gbuffers programs write more than {max_attachments} distinct buffers; no shared gbuffer pass (per-program attachments)"),
-        ));
+        let why = if gb_one_size {
+            format!("gbuffers programs write more than {max_attachments} distinct buffers")
+        } else {
+            "gbuffers programs write buffers of different sizes (`size.buffer`)".to_string()
+        };
+        diags.push(Diagnostic::info("pipeline.gbuffer-attachments", format!("{why}; no shared gbuffer pass (per-program attachments)")));
     }
 
     // ---- Pre-compile schedule (flippedAtLeastOnce for custom textures) ----------------------
@@ -288,21 +298,25 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
             }
         }
         DhStrategy::Synthesized => {
+            // Programs synthesized from gbuffers_terrain/gbuffers_water/shadow get the
+            // `dh_terrain` variant whose lightmap follows the vanilla terrain convention
+            // those sources were written for (DH_SYNTH_PROFILE); dh_generic keeps its
+            // own profile.
             let specs = [
-                (GeometryProgram::DhTerrain, GeometryProgram::Terrain, "dh_terrain", false),
-                (GeometryProgram::DhWater, GeometryProgram::Water, "dh_terrain", false),
+                (GeometryProgram::DhTerrain, GeometryProgram::Terrain, sb_transform::DH_SYNTH_PROFILE, false),
+                (GeometryProgram::DhWater, GeometryProgram::Water, sb_transform::DH_SYNTH_PROFILE, false),
                 (GeometryProgram::DhGeneric, GeometryProgram::Terrain, "dh_generic", false),
-                (GeometryProgram::DhShadow, GeometryProgram::Shadow, "dh_terrain", true),
+                (GeometryProgram::DhShadow, GeometryProgram::Shadow, sb_transform::DH_SYNTH_PROFILE, true),
             ];
-            for (i, (dh, source, profile, shadow)) in specs.into_iter().enumerate() {
+            for (i, (dh, source, synth_profile, shadow)) in specs.into_iter().enumerate() {
                 if shadow && !shadow_on_for_dh {
                     continue;
                 }
-                // A pack shipping only dh_shadow keeps it.
+                // A pack shipping only dh_shadow keeps it (with the native DH profile).
                 let native = plan.geometry.get(&dh).copied().filter(|&u| ok(u));
-                let (candidates, synth) = match native {
-                    Some(u) => (vec![u], None),
-                    None => (chain_units(source), Some(dh)),
+                let (candidates, synth, profile) = match native {
+                    Some(u) => (vec![u], None, sb_transform::default_profile_for(dh)),
+                    None => (chain_units(source), Some(dh), synth_profile),
                 };
                 if candidates.is_empty() {
                     continue;
@@ -676,7 +690,13 @@ impl SpecInputs<'_> {
                 dh.file_name().to_string(),
                 Some(dh),
             ),
-            None => (unit.path.clone(), unit.kind.clone(), None, unit.props_name.clone(), unit.geometry()),
+            None => (
+                unit.path.clone(),
+                unit.kind.clone(),
+                unit.is_fallback().then(|| crate::resolve::FALLBACK_SOURCE.to_string()),
+                unit.props_name.clone(),
+                unit.geometry(),
+            ),
         };
         let draw_buffers = self.directives.draw_buffers[key.unit].clone();
         let shared: &[u32] = match key.class {
