@@ -238,6 +238,13 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
     if compute && refls.len() != 1 {
         return Err("a compute program must have exactly one stage".into());
     }
+    if compute {
+        let limit = gpu.limits().max_compute_shared_memory_size;
+        let used = spirvs.first().map_or(0, |(_, words, _)| workgroup_memory_bytes(words));
+        if used > u64::from(limit) {
+            return Err(format!("uses {used} bytes of shared memory; the device allows {limit} (maxComputeSharedMemorySize)"));
+        }
+    }
     let has = |s: ShaderStage| refls.iter().any(|(x, _)| *x == s);
     if !compute && !(has(ShaderStage::Vertex) && has(ShaderStage::Fragment)) {
         return Err("a graphics program needs a vertex and a fragment stage".into());
@@ -675,6 +682,69 @@ pub(crate) fn output_blend(program: &Program, target: u32) -> Option<BlendMode> 
     }
 }
 
+/// Bytes of `Workgroup` (GLSL `shared`) storage a SPIR-V module declares: the summed
+/// natural sizes of its `Workgroup` variables (scalars by width, booleans 4 bytes, no
+/// padding), the measure `maxComputeSharedMemorySize` is checked against. Malformed or
+/// unsized declarations count as 0.
+pub(crate) fn workgroup_memory_bytes(words: &[u32]) -> u64 {
+    const OP_TYPE_BOOL: u32 = 20;
+    const OP_TYPE_INT: u32 = 21;
+    const OP_TYPE_FLOAT: u32 = 22;
+    const OP_TYPE_VECTOR: u32 = 23;
+    const OP_TYPE_MATRIX: u32 = 24;
+    const OP_TYPE_ARRAY: u32 = 28;
+    const OP_TYPE_STRUCT: u32 = 30;
+    const OP_TYPE_POINTER: u32 = 32;
+    const OP_CONSTANT: u32 = 43;
+    const OP_VARIABLE: u32 = 59;
+    const WORKGROUP: u32 = 4;
+    let mut sizes: HashMap<u32, u64> = HashMap::new();
+    let mut constants: HashMap<u32, u64> = HashMap::new();
+    let mut pointees: HashMap<u32, u32> = HashMap::new();
+    let mut total = 0u64;
+    let mut i = 5;
+    while i < words.len() {
+        let (count, op) = ((words[i] >> 16) as usize, words[i] & 0xffff);
+        if count == 0 || i + count > words.len() {
+            break;
+        }
+        let w = &words[i..i + count];
+        let size = |id: u32| sizes.get(&id).copied().unwrap_or(0);
+        match op {
+            OP_TYPE_BOOL if count >= 2 => {
+                sizes.insert(w[1], 4);
+            }
+            OP_TYPE_INT | OP_TYPE_FLOAT if count >= 3 => {
+                sizes.insert(w[1], u64::from(w[2] / 8));
+            }
+            OP_TYPE_VECTOR | OP_TYPE_MATRIX if count >= 4 => {
+                let s = size(w[2]).saturating_mul(u64::from(w[3]));
+                sizes.insert(w[1], s);
+            }
+            OP_TYPE_ARRAY if count >= 4 => {
+                let s = size(w[2]).saturating_mul(constants.get(&w[3]).copied().unwrap_or(0));
+                sizes.insert(w[1], s);
+            }
+            OP_TYPE_STRUCT if count >= 2 => {
+                let s = w[2..].iter().fold(0u64, |a, m| a.saturating_add(size(*m)));
+                sizes.insert(w[1], s);
+            }
+            OP_TYPE_POINTER if count >= 4 => {
+                pointees.insert(w[1], w[3]);
+            }
+            OP_CONSTANT if count >= 4 => {
+                constants.insert(w[2], u64::from(w[3]));
+            }
+            OP_VARIABLE if count >= 4 && w[3] == WORKGROUP => {
+                total = total.saturating_add(pointees.get(&w[1]).map_or(0, |t| size(*t)));
+            }
+            _ => {}
+        }
+        i += count;
+    }
+    total
+}
+
 /// Iris' dispatch size for a compute program: absolute `workGroups`, or
 /// `ceil(ceil(width * x) / local_x), ceil(ceil(height * y) / local_y), 1` for
 /// `workGroupsRender` (default `1, 1`). Clamped to `max` per axis.
@@ -714,6 +784,19 @@ pub(crate) fn sample_type_matches(t: ScalarKind, class: crate::texel::NumericCla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `shared` arrays are measured as the validation layer does (renderpearl's 40964-byte
+    /// compute shader exceeds lavapipe's 32 KiB and must be skipped, not created).
+    #[test]
+    fn workgroup_memory_is_measured() {
+        let src = "#version 460\nlayout(local_size_x = 8) in;\nshared vec3 a[8][4];\nshared float b[100];\nshared mat2x3 m;\nshared struct { vec4 v; int i; } st;\n\
+                   layout(std430, set = 0, binding = 0) buffer B { float o[]; };\n\
+                   void main() { a[0][0] = vec3(1.0); b[1] = 2.0; m[0] = vec3(3.0); st.i = 1; barrier(); o[0] = a[1][1].x + b[2] + m[1].y + float(st.i); }\n";
+        let words = sb_compile::compile_glsl(src, ShaderStage::Compute, "shared.csh", &Default::default(), None).expect("compile");
+        assert_eq!(workgroup_memory_bytes(&words), 8 * 4 * 12 + 100 * 4 + 2 * 12 + 16 + 4);
+        assert_eq!(workgroup_memory_bytes(&[]), 0);
+        assert_eq!(workgroup_memory_bytes(&[0x0723_0203, 0, 0, 1, 0, 0xffff_ffff]), 0, "a truncated instruction stops the scan");
+    }
     use sb_core::model::WorkGroups;
 
     #[test]

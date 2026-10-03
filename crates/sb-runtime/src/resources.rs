@@ -60,6 +60,8 @@ pub(crate) struct GpuImage {
     pub desc: ImageDesc,
     pub aspect: vk::ImageAspectFlags,
     views: HashMap<ViewKey, vk::ImageView>,
+    /// Single-level 2D views (`level` → view), for rendering mip levels.
+    level_views: HashMap<u32, vk::ImageView>,
 }
 
 impl GpuImage {
@@ -254,7 +256,7 @@ impl Arena {
         }
         gpu.set_name(image, &desc.name);
         let aspect = if is_depth_format(desc.format) { vk::ImageAspectFlags::DEPTH } else { vk::ImageAspectFlags::COLOR };
-        self.images.push(GpuImage { image, allocation: Some(allocation), desc, aspect, views: HashMap::new() });
+        self.images.push(GpuImage { image, allocation: Some(allocation), desc, aspect, views: HashMap::new(), level_views: HashMap::new() });
         Ok(ImageId(self.images.len() - 1))
     }
 
@@ -279,6 +281,23 @@ impl Arena {
         let info = vk::ImageViewCreateInfo::default().image(img.image).view_type(key.ty).format(img.desc.format).subresource_range(range);
         let view = unsafe { gpu.device.create_image_view(&info, None) }.vk("vkCreateImageView")?;
         img.views.insert(key, view);
+        Ok(view)
+    }
+
+    /// A 2D view of mip level `level` alone (created on first use), to render into that
+    /// level or to sample exactly it.
+    pub fn level_view(&mut self, gpu: &Gpu, id: ImageId, level: u32) -> Result<vk::ImageView, RuntimeError> {
+        let img = &mut self.images[id.0];
+        if let Some(v) = img.level_views.get(&level) {
+            return Ok(*v);
+        }
+        if level >= img.desc.mip_levels || img.desc.dim != TexDim::D2 {
+            return Err(RuntimeError::InvalidRequest(format!("{}: no 2D mip level {level}", img.desc.name)));
+        }
+        let range = vk::ImageSubresourceRange { aspect_mask: img.aspect, base_mip_level: level, level_count: 1, base_array_layer: 0, layer_count: 1 };
+        let info = vk::ImageViewCreateInfo::default().image(img.image).view_type(vk::ImageViewType::TYPE_2D).format(img.desc.format).subresource_range(range);
+        let view = unsafe { gpu.device.create_image_view(&info, None) }.vk("vkCreateImageView")?;
+        img.level_views.insert(level, view);
         Ok(view)
     }
 
@@ -455,7 +474,7 @@ impl Arena {
         let images = std::mem::take(&mut self.images);
         for mut img in images {
             unsafe {
-                for (_, v) in img.views.drain() {
+                for v in img.views.drain().map(|(_, v)| v).chain(img.level_views.drain().map(|(_, v)| v)) {
                     gpu.device.destroy_image_view(v, None);
                 }
                 gpu.device.destroy_image(img.image, None);

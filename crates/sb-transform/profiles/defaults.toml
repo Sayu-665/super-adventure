@@ -9,7 +9,9 @@ uv0 = "vec4(0.0, 0.0, 0.0, 1.0)"
 lightmap = "vec4(240.0, 240.0, 0.0, 1.0)"
 # GL's initial current normal; Iris uses it for vertex formats without normals.
 normal = "vec3(0.0, 0.0, 1.0)"
-entity = "vec4(-1.0, 0.0, 0.0, 0.0)"
+# Formats without block ids: Iris leaves the mc_Entity attribute unbound, so it reads
+# GL's default generic attribute (0, 0, 0, 1).
+entity = "vec4(0.0, 0.0, 0.0, 1.0)"
 mid_tex_coord = "vec4(0.0, 0.0, 0.0, 1.0)"
 tangent = "vec4(1.0, 0.0, 0.0, 1.0)"
 mid_block = "vec4(0.0)"

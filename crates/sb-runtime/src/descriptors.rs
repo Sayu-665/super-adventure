@@ -383,7 +383,7 @@ impl Executor<'_> {
     }
 
     /// Allocate descriptor sets for `layouts` from the frame's pools.
-    fn allocate_sets(&mut self, layouts: &[vk::DescriptorSetLayout]) -> Result<Vec<vk::DescriptorSet>, RuntimeError> {
+    pub(crate) fn allocate_sets(&mut self, layouts: &[vk::DescriptorSetLayout]) -> Result<Vec<vk::DescriptorSet>, RuntimeError> {
         if layouts.is_empty() {
             return Ok(Vec::new());
         }

@@ -17,4 +17,3 @@ mod outputs;
 mod profiles;
 mod resources;
 mod shadow;
-mod probe;

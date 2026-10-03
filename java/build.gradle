@@ -163,6 +163,12 @@ processResources {
     filesMatching("fabric.mod.json") {
         expand "version": modVersion
     }
+    // The built-in draw profiles of sb-transform: the render integration reads their host
+    // samplers and vertex inputs (dev.shaderbridge.render.pipeline.DrawProfiles).
+    from(new File(repositoryRoot, "crates/sb-transform/profiles")) {
+        include "*.toml"
+        into "dev/shaderbridge/profiles"
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {

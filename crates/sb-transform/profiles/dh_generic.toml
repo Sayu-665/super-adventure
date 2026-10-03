@@ -33,7 +33,6 @@ lightmap_matrix = "mat4(1.0)"
 # Face normal from the vertex index (24 vertices per box: N, S, W, E, bottom, top), as in
 # Iris DHGenericTransformer and DH's own directional shading.
 normal = "sb_dhGenericNormal()"
-entity = "vec4(-1.0, 0.0, 0.0, 0.0)"
 model_view = "gbufferModelView"
 projection = "dhProjection"
 texture_matrix = "mat4(1.0)"

@@ -217,6 +217,28 @@ fn reversed_depth_reads_inside_user_functions_are_cloned() {
 }
 
 #[test]
+fn reversed_depth_parameters_hide_global_depth_sampler_names() {
+    // `depthtex0` the parameter is not `depthtex0` the depth texture (Iris resolves the
+    // enclosing function's parameters first): reading colortex1 through it must not be
+    // inverted, while the clone made for the depth-texture call is.
+    let fs = "#version 130\nuniform sampler2D depthtex0;\nuniform sampler2D colortex1;\nvarying vec2 uv;\n\
+              float fetch(sampler2D depthtex0, vec2 p) { return texture2D(depthtex0, p).r; }\n\
+              void main() { gl_FragData[0] = vec4(fetch(colortex1, uv), fetch(depthtex0, uv), texture2D(depthtex0, uv).r, 1.0); }\n";
+    let out = reversed().vs(VS_UV).fs(fs).run();
+    let fs_out = out.fs();
+    let original = &fs_out[fs_out.find("float fetch(").unwrap()..];
+    let original = &original[..original.find('}').unwrap()];
+    assert_eq!(original, "float fetch(sampler2D depthtex0, vec2 p) {\n    return texture(depthtex0, p).r;\n", "{fs_out}");
+    contains_all(
+        fs_out,
+        &[
+            "float sb_depth_0_fetch(sampler2D depthtex0, vec2 p) {\n    return vec4(1.0 - texture(depthtex0, p).x).r;",
+            "fetch(colortex1, uv), sb_depth_0_fetch(depthtex0, uv), vec4(1.0 - texture(depthtex0, uv).x).r",
+        ],
+    );
+}
+
+#[test]
 fn instance_id_with_a_non_zero_base_instance() {
     let vs = "#version 130\nvoid main() { gl_Position = vec4(float(gl_InstanceID), 0.0, 0.0, 1.0); }\n";
     let fs = "#version 130\nvoid main() { gl_FragColor = vec4(1.0); }\n";

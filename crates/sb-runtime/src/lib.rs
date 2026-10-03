@@ -64,6 +64,7 @@ mod executor;
 mod flips;
 mod frame;
 pub mod math;
+mod mipgen;
 mod pipelines;
 mod readback;
 mod resources;

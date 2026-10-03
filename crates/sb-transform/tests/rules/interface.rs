@@ -78,8 +78,21 @@ fn integer_varyings_are_flat_on_both_sides() {
     let vs = "#version 130\nout int id;\nflat out vec3 n;\nout uvec2 packed;\nvoid main() { gl_Position = vec4(0.0); id = 1; n = vec3(0.0); packed = uvec2(1u); }\n";
     let fs = "#version 130\nflat in int id;\nin vec3 n;\nflat in uvec2 packed;\nvoid main() { gl_FragData[0] = vec4(float(id), n.x, vec2(packed)); }\n";
     let out = T::fullscreen().vs(vs).fs(fs).run();
-    contains_all(out.vs(), &["flat out int id;", "flat out vec3 n;", "flat out uvec2 packed;"]);
-    contains_all(out.fs(), &["flat in int id;", "flat in vec3 n;", "flat in uvec2 packed;"]);
+    contains_all(out.vs(), &["flat out int id;", "flat out uvec2 packed;"]);
+    contains_all(out.fs(), &["flat in int id;", "flat in uvec2 packed;"]);
+    // A float the producer declares `flat` but the fragment stage reads smoothly is
+    // interpolated: the fragment input's qualifier decides (GLSL 4.30+, NVIDIA, Vulkan).
+    contains_all(out.vs(), &["out vec3 n;"]);
+    contains_all(out.fs(), &["in vec3 n;"]);
+    contains_none(out.vs(), &["flat out vec3 n;"]);
+    contains_none(out.fs(), &["flat in vec3 n;"]);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+    // ... and a smooth producer output read `flat` is flat.
+    let out = T::fullscreen()
+        .vs("#version 130\nout vec3 n;\nvoid main() { gl_Position = vec4(0.0); n = vec3(0.0); }\n")
+        .fs("#version 130\nflat in vec3 n;\nvoid main() { gl_FragData[0] = vec4(n, 1.0); }\n")
+        .run();
+    contains_all(out.vs(), &["flat out vec3 n;"]);
     linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
     // An integer input without `flat` in the pack (lenient drivers accept it in the VS).
     let vs = "#version 130\nout int id;\nvoid main() { gl_Position = vec4(0.0); id = 1; }\n";

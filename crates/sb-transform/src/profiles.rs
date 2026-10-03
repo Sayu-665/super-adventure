@@ -17,6 +17,34 @@ use serde::{Deserialize, Serialize};
 /// Name of the profile used by composite-style (fullscreen) passes.
 pub const FULLSCREEN_PROFILE: &str = "fullscreen";
 
+/// Draw profile for DH programs *synthesized* from the pack's `gbuffers_terrain`,
+/// `gbuffers_water` and `shadow` sources (ARCHITECTURE §9): `dh_terrain` with the
+/// lightmap in the vanilla terrain convention those sources were written for
+/// (`gl_MultiTexCoord1` / `vaUV2` = 16 × light level, 0..240, and the OptiFine lightmap
+/// matrix). Through `gl_TextureMatrix[1]` it yields exactly Iris's DH value
+/// (`(level + 0.5) / 16`, what native DH programs read with `dh_terrain`), while
+/// terrain code that scales the raw coordinate (`gl_MultiTexCoord1.xy / 240.0`,
+/// `vec2(vaUV2) / 240.0`) keeps working.
+pub const DH_SYNTH_PROFILE: &str = "dh_terrain_synth";
+
+/// `dh_terrain` lightmap semantic in vanilla units (see [`DH_SYNTH_PROFILE`]); `meta`'s low
+/// byte is `block << 4 | sky`.
+const DH_SYNTH_LIGHTMAP: &str = "vec4(float((meta >> 4u) & 15u) * 16.0, float(meta & 15u) * 16.0, 0.0, 1.0)";
+
+/// [`DH_SYNTH_PROFILE`] derived from the embedded `dh_terrain` profile.
+fn dh_synth_profile(dh: &DrawProfile) -> DrawProfile {
+    let mut p = dh.clone();
+    p.name = DH_SYNTH_PROFILE.to_string();
+    p.description = format!(
+        "{} Variant for DH programs synthesized from gbuffers_terrain/gbuffers_water/shadow: the lightmap follows the vanilla terrain convention (16 x level with the OptiFine lightmap matrix), as the source programs expect.",
+        dh.description
+    );
+    p.semantics.lightmap = Some(DH_SYNTH_LIGHTMAP.to_string());
+    // The defaults' OptiFine lightmap matrix (scale 1/256, offset 1/32).
+    p.semantics.lightmap_matrix = None;
+    p
+}
+
 /// A host vertex attribute.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -389,6 +417,11 @@ const EMBEDDED_FILES: &[(&str, &str)] = &[
     ("vanilla_position_color.toml", include_str!("../profiles/vanilla_position_color.toml")),
     ("vanilla_position_tex.toml", include_str!("../profiles/vanilla_position_tex.toml")),
     ("vanilla_position_tex_color.toml", include_str!("../profiles/vanilla_position_tex_color.toml")),
+    ("vanilla_block.toml", include_str!("../profiles/vanilla_block.toml")),
+    ("vanilla_terrain_section.toml", include_str!("../profiles/vanilla_terrain_section.toml")),
+    ("vanilla_position_color_lightmap.toml", include_str!("../profiles/vanilla_position_color_lightmap.toml")),
+    ("vanilla_text.toml", include_str!("../profiles/vanilla_text.toml")),
+    ("vanilla_clouds.toml", include_str!("../profiles/vanilla_clouds.toml")),
     ("dh_terrain.toml", include_str!("../profiles/dh_terrain.toml")),
     ("dh_generic.toml", include_str!("../profiles/dh_generic.toml")),
     ("sodium_terrain.toml", include_str!("../profiles/sodium_terrain.toml")),
@@ -416,10 +449,12 @@ static EMBEDDED: LazyLock<Embedded> = LazyLock::new(|| {
             push_constants: String::new(),
         })
     };
-    Embedded {
-        defaults: parse("defaults.toml", DEFAULTS_FILE),
-        profiles: EMBEDDED_FILES.iter().map(|(f, t)| parse(f, t)).collect(),
+    let mut profiles: Vec<DrawProfile> = EMBEDDED_FILES.iter().map(|(f, t)| parse(f, t)).collect();
+    if let Some(dh) = profiles.iter().find(|p| p.name == "dh_terrain") {
+        let synth = dh_synth_profile(dh);
+        profiles.push(synth);
     }
+    Embedded { defaults: parse("defaults.toml", DEFAULTS_FILE), profiles }
 });
 
 /// Every embedded draw profile (not including the `defaults` table).
@@ -485,7 +520,7 @@ fn hardcoded_default(key: &str) -> Option<&'static str> {
         "uv0" | "mid_tex_coord" => "vec4(0.0, 0.0, 0.0, 1.0)",
         "lightmap" => "vec4(240.0, 240.0, 0.0, 1.0)",
         "normal" => "vec3(0.0, 0.0, 1.0)",
-        "entity" => "vec4(-1.0, 0.0, 0.0, 0.0)",
+        "entity" => "vec4(0.0, 0.0, 0.0, 1.0)",
         "tangent" => "vec4(1.0, 0.0, 0.0, 1.0)",
         "mid_block" => "vec4(0.0)",
         "overlay" => "ivec2(0, 10)",
@@ -591,7 +626,9 @@ mod tests {
             assert_eq!(format!("{}.toml", p.name), *file);
         }
         parse_profile(DEFAULTS_FILE).expect("defaults.toml");
-        assert_eq!(builtin_profiles().len(), EMBEDDED_FILES.len());
+        // Plus the derived synthesized-DH profile.
+        assert_eq!(builtin_profiles().len(), EMBEDDED_FILES.len() + 1);
+        assert!(profile(DH_SYNTH_PROFILE).is_some());
         assert!(builtin_profiles().iter().all(|p| !p.name.starts_with("invalid:")));
     }
 
@@ -624,7 +661,8 @@ mod tests {
         assert_eq!(t.referenced_builtins(), vec!["gbufferProjection".to_string()]);
         let e = profile("vanilla_entity").unwrap();
         let r = e.referenced_builtins();
-        assert!(r.contains(&"entityId".to_string()), "{r:?}");
+        // mc_Entity is not the entity id (Iris: the ENTITY format has no mc_Entity).
+        assert!(!r.contains(&"entityId".to_string()), "{r:?}");
         assert!(r.contains(&"projectionMatrix".to_string()), "{r:?}");
         assert!(!r.contains(&"entityColor".to_string()), "{r:?}");
         let d = profile("dh_terrain").unwrap();

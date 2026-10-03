@@ -386,9 +386,12 @@ pub(crate) fn builtin_value(name: &str, f: &FrameState, d: &DrawState) -> Option
         | "is_riding" | "is_wet" | "hasCeiling" => b(false),
         "blindness" | "darknessFactor" | "darknessLightFactor" | "nightVision" | "playerMood" | "constantMood" | "currentPlayerArmor"
         | "endFlashIntensity" | "previousEndFlashIntensity" | "ambientLight" => Value::Float(0.0),
-        "currentPlayerHealth" | "maxPlayerHealth" | "currentPlayerHunger" | "maxPlayerHunger" => Value::Float(20.0),
+        // Iris' `current*` player stats are fractions of the maximum (health / maxHealth,
+        // food / 20, air / maxAir, armor / 50): a healthy, fed survival player out of water.
+        "currentPlayerHealth" | "currentPlayerHunger" | "currentPlayerAir" => Value::Float(1.0),
+        "maxPlayerHealth" | "maxPlayerHunger" => Value::Float(20.0),
         "maxPlayerArmor" => Value::Float(50.0),
-        "currentPlayerAir" | "maxPlayerAir" => Value::Float(300.0),
+        "maxPlayerAir" => Value::Float(300.0),
         // screen / time
         "viewWidth" => Value::Float(f.width),
         "viewHeight" => Value::Float(f.height),
@@ -837,6 +840,22 @@ mod tests {
         let f = state();
         assert_eq!(builtin_value("fogStart", &f, &DrawState::new(&f)), Some(Value::Float(DH_NO_FOG.0)));
         assert!(Fog::new(64.0, f32::NAN, false).environmental.1 == 1024.0);
+    }
+
+    /// Iris' `currentPlayer*` uniforms are fractions of the maximum (i-like-vanilla's
+    /// health vignette turned the whole screen red with `currentPlayerHealth = 20`).
+    #[test]
+    fn player_stats_are_fractions_as_in_iris() {
+        let f = state();
+        let d = DrawState::new(&f);
+        for name in ["currentPlayerHealth", "currentPlayerHunger", "currentPlayerAir"] {
+            assert_eq!(builtin_value(name, &f, &d), Some(Value::Float(1.0)), "{name}");
+        }
+        assert_eq!(builtin_value("currentPlayerArmor", &f, &d), Some(Value::Float(0.0)));
+        assert_eq!(builtin_value("maxPlayerHealth", &f, &d), Some(Value::Float(20.0)));
+        assert_eq!(builtin_value("maxPlayerHunger", &f, &d), Some(Value::Float(20.0)));
+        assert_eq!(builtin_value("maxPlayerAir", &f, &d), Some(Value::Float(300.0)));
+        assert_eq!(builtin_value("maxPlayerArmor", &f, &d), Some(Value::Float(50.0)));
     }
 
     #[test]

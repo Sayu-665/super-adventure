@@ -158,7 +158,8 @@ enum Command {
         /// World time in ticks (0 = sunrise, 6000 = noon).
         #[arg(long)]
         time: Option<i64>,
-        /// World folder to render (default: world0, else the root).
+        /// World folder to render; `world0` / `world-1` / `world1` also select the folder
+        /// `dimension.properties` assigns to the overworld / nether / end (default: world0).
         #[arg(long = "dim", default_value = "world0")]
         dim: String,
         #[arg(long, value_enum, default_value = "forward")]
@@ -675,6 +676,39 @@ pub struct RenderArgs {
     pub no_dh: bool,
 }
 
+/// The dimension id Iris loads a standard world folder for (`world0` → overworld, ...).
+fn standard_dimension_id(folder: &str) -> Option<&'static str> {
+    match folder {
+        "world0" => Some("minecraft:overworld"),
+        "world-1" => Some("minecraft:the_nether"),
+        "world1" => Some("minecraft:the_end"),
+        _ => None,
+    }
+}
+
+/// The world folder `render --dim <requested>` renders: the folder of that name; for a
+/// standard folder name (`world0`, `world-1`, `world1`) the pipeline that
+/// `dimension.properties` assigns to its dimension (packs may name folders freely, e.g.
+/// `world_default=*`), then the `*` pipeline; then the pack root; then the first one.
+pub fn render_dimension(pack: &sb_core::model::CompiledPack, requested: &str) -> String {
+    let folders: Vec<(&str, &[String])> = pack.dimensions.iter().map(|d| (d.folder.as_str(), d.dimension_ids.as_slice())).collect();
+    choose_folder(&folders, requested)
+}
+
+/// [`render_dimension`] over `(folder, dimension ids)` pairs.
+fn choose_folder(folders: &[(&str, &[String])], requested: &str) -> String {
+    let with_id = |id: &str| folders.iter().find(|(_, ids)| ids.iter().any(|i| i == id)).map(|(f, _)| (*f).to_string());
+    if let Some((f, _)) = folders.iter().find(|(f, _)| *f == requested) {
+        return (*f).to_string();
+    }
+    standard_dimension_id(requested)
+        .and_then(with_id)
+        .or_else(|| with_id("*"))
+        .or_else(|| folders.iter().find(|(f, _)| f.is_empty()).map(|_| String::new()))
+        .or_else(|| folders.first().map(|(f, _)| (*f).to_string()))
+        .unwrap_or_default()
+}
+
 fn cmd_render(path: &Path, a: &RenderArgs, out: &mut dyn Write) -> CmdResult {
     let pack = open_pack(path)?;
     let runtime = sb_runtime::RuntimeOptions { validation: a.validation, prefer_cpu_device: a.cpu, device_name_filter: None };
@@ -697,13 +731,7 @@ fn cmd_render(path: &Path, a: &RenderArgs, out: &mut dyn Write) -> CmdResult {
     if a.no_dh {
         scene.dh_render_distance = 0;
     }
-    let dimension = if c.pack.dimensions.iter().any(|d| d.folder == a.dim) {
-        a.dim.clone()
-    } else if c.pack.dimensions.iter().any(|d| d.folder.is_empty()) {
-        String::new()
-    } else {
-        c.pack.dimensions.first().map(|d| d.folder.clone()).unwrap_or_default()
-    };
+    let dimension = render_dimension(&c.pack, &a.dim);
     let png = sb_runtime::PngRenderSettings {
         output: a.output.clone(),
         width: a.width,
@@ -803,4 +831,30 @@ pub fn stage_counts(pack: &CompiledPack) -> IndexMap<ShaderStage, usize> {
         }
     }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pick(folders: &[(&str, &[&str])], requested: &str) -> String {
+        let owned: Vec<(&str, Vec<String>)> = folders.iter().map(|(f, ids)| (*f, ids.iter().map(|s| (*s).to_string()).collect())).collect();
+        let refs: Vec<(&str, &[String])> = owned.iter().map(|(f, ids)| (*f, ids.as_slice())).collect();
+        choose_folder(&refs, requested)
+    }
+
+    #[test]
+    fn render_dimension_follows_dimension_properties() {
+        // renderpearl: world_nether / world_end / world_default=* — the overworld is world_default.
+        let rp: &[(&str, &[&str])] = &[("world_nether", &["minecraft:the_nether"]), ("world_end", &["minecraft:the_end"]), ("world_default", &["*"])];
+        assert_eq!(pick(rp, "world0"), "world_default");
+        assert_eq!(pick(rp, "world-1"), "world_nether");
+        assert_eq!(pick(rp, "world_end"), "world_end");
+        let std: &[(&str, &[&str])] = &[("world-1", &["minecraft:the_nether"]), ("world0", &["minecraft:overworld", "*"])];
+        assert_eq!(pick(std, "world0"), "world0");
+        assert_eq!(pick(std, "world1"), "world0", "unlisted dimensions use the * pipeline");
+        assert_eq!(pick(&[("", &["*"])], "world0"), "");
+        assert_eq!(pick(&[], "world0"), "");
+        assert_eq!(pick(&[("a", &[]), ("b", &[])], "world0"), "a");
+    }
 }

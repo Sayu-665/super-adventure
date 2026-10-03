@@ -1,5 +1,5 @@
 name = "fullscreen"
-description = "Composite-style passes (setup/begin/shadowcomp/prepare/deferred/composite/final): a fullscreen triangle generated from gl_VertexIndex, no vertex buffer. Draw with 3 vertices. Matches Iris CompositeTransformer semantics: positions/UVs in [0,1], projection maps [0,1] to [-1,1], identity model-view/texture/normal matrices, white color."
+description = "Composite-style passes (setup/begin/shadowcomp/prepare/deferred/composite/final): the [0,1]^2 fullscreen quad of Iris' FullScreenQuadRenderer as two triangles generated from gl_VertexIndex, no vertex buffer. Draw with 6 vertices (triangle list). Matches Iris CompositeTransformer semantics: positions/UVs in [0,1], projection maps [0,1] to [-1,1], identity model-view/texture/normal matrices, white color."
 fullscreen = true
 
 [semantics]
@@ -20,7 +20,10 @@ chunk_offset = "vec3(0.0)"
 [code]
 vertex = """
 vec2 sb_fullscreenUv() {
-    // (0,0), (2,0), (0,2): one triangle covering the [0,1]^2 viewport
-    return vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+    // The [0,1]^2 quad as (0,0) (1,0) (1,1) + (0,0) (1,1) (0,1). Not one covering
+    // triangle: packs remap gl_Position into sub-rectangles (bloom tiles, render scale),
+    // where a triangle's overhang would draw outside the intended rectangle.
+    int i = gl_VertexIndex % 6;
+    return vec2(float(i == 1 || i == 2 || i == 4), float(i == 2 || i == 4 || i == 5));
 }
 """

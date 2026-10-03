@@ -60,6 +60,7 @@ public final class BuiltinUniforms {
         world(r);
         rendering(r);
         matrices(r);
+        voxy(r);
         coreProfile(r);
         shaderBridge(r);
         return Collections.unmodifiableMap(r.entries);
@@ -249,6 +250,21 @@ public final class BuiltinUniforms {
         r.frame("dhNearPlane", FLOAT, (f, d, o) -> o.putFloat(f.dhNearPlane));
         r.frame("dhFarPlane", FLOAT, (f, d, o) -> o.putFloat(f.dhFarPlane));
         r.frame("dhRenderDistance", INT, (f, d, o) -> o.putInt(f.dhRenderDistance));
+    }
+
+    /**
+     * The Voxy LOD uniforms. ShaderBridge does not integrate Voxy, so there are no LODs: the render
+     * distance is 0 and the LOD matrices are the camera's, which keeps packs that combine both
+     * depth ranges (e.g. {@code combinedFar = max(far, vxRenderDistance)}) on the vanilla range.
+     */
+    private static void voxy(Registry r) {
+        r.frame("vxRenderDistance", INT, (f, d, o) -> o.putInt(0));
+        r.frame("vxProj", MAT4, (f, d, o) -> o.putMat4(f.gbufferProjection));
+        r.frame("vxProjInv", MAT4, (f, d, o) -> o.putMat4(f.gbufferProjectionInverse));
+        r.frame("vxProjPrev", MAT4, (f, d, o) -> o.putMat4(f.gbufferPreviousProjection));
+        r.frame("vxModelView", MAT4, (f, d, o) -> o.putMat4(f.gbufferModelView));
+        r.frame("vxModelViewInv", MAT4, (f, d, o) -> o.putMat4(f.gbufferModelViewInverse));
+        r.frame("vxModelViewPrev", MAT4, (f, d, o) -> o.putMat4(f.gbufferPreviousModelView));
     }
 
     private static void coreProfile(Registry r) {

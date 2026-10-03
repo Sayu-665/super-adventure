@@ -54,7 +54,7 @@ fn every_builtin_profile_translates_legacy_and_core_programs() {
                     .fs(fs)
                     .run();
                 assert_eq!(out.prog.stages.len(), 2, "{}", p.name);
-                if p.fullscreen {
+                if p.fullscreen || p.inputs.is_empty() {
                     assert!(out.prog.vertex_inputs.is_empty(), "{}: {:?}", p.name, out.prog.vertex_inputs);
                 } else {
                     assert!(!out.prog.vertex_inputs.is_empty(), "{}", p.name);
@@ -74,14 +74,15 @@ fn every_builtin_profile_translates_legacy_and_core_programs() {
 }
 
 #[test]
-fn fullscreen_profile_generates_a_triangle_without_inputs() {
+fn fullscreen_profile_generates_a_quad_without_inputs() {
     let vs = "#version 120\nvarying vec2 uv;\nvoid main() { gl_Position = ftransform(); uv = gl_MultiTexCoord0.st; gl_FrontColor = gl_Color; }\n";
     let out = T::fullscreen().vs(vs).fs("#version 120\nvarying vec2 uv;\nvoid main() { gl_FragColor = vec4(uv, 0.0, 1.0) * gl_Color; }\n").run();
     let v = out.vs();
     contains_all(
         v,
         &[
-            "vec2(float(gl_VertexIndex << 1 & 2), float(gl_VertexIndex & 2))",
+            "int i = gl_VertexIndex % 6;",
+            "vec2(float(i == 1 || i == 2 || i == 4), float(i == 2 || i == 4 || i == 5))",
             "mat4 sb_Projection = mat4(2.0, 0.0, 0.0, 0.0,  0.0, 2.0, 0.0, 0.0,  0.0, 0.0, 0.0, 0.0,  -1.0, -1.0, 0.0, 1.0);",
             "mat4 sb_ModelView = mat4(1.0);",
             "vec4 sb_gl_Color = vec4(1.0);",
@@ -388,6 +389,28 @@ fn builtins_missing_from_a_vertex_format_read_iris_defaults() {
 }
 
 #[test]
+fn mc_entity_is_the_block_id_only_in_terrain_formats() {
+    // Iris binds mc_Entity only in terrain formats; elsewhere the attribute is unbound and
+    // reads GL's default (0, 0, 0, 1). Entity ids (entity.properties, read through
+    // `entityId`) share their numbers with block ids, so mc_Entity.x must not carry them:
+    // packs that classify materials by mc_Entity.x in shared code (mellow) would
+    // misclassify entities.
+    let vs = "#version 120\nattribute vec4 mc_Entity;\nvarying vec4 v;\nvoid main() { gl_Position = ftransform(); v = mc_Entity; }\n";
+    let fs = "#version 120\nvarying vec4 v;\nvoid main() { gl_FragData[0] = v; }\n";
+    for (p, entity) in [
+        ("vanilla_entity", "vec4(0.0, 0.0, 0.0, 1.0)"),
+        ("vanilla_particle", "vec4(0.0, 0.0, 0.0, 1.0)"),
+        ("vanilla_position_tex_color", "vec4(0.0, 0.0, 0.0, 1.0)"),
+        ("dh_generic", "vec4(0.0, 0.0, 0.0, 1.0)"),
+        ("vanilla_terrain", "vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 1.0)"),
+    ] {
+        let out = T::new(p).vs(vs).fs(fs).run();
+        assert_eq!(semantic_init(&out, "sb_mc_Entity"), entity, "{p}");
+        contains_none(out.vs(), &["entityId"]);
+    }
+}
+
+#[test]
 fn fullscreen_lightmap_coordinates_follow_iris_composite() {
     // Iris CompositeTransformer: gl_MultiTexCoord1..7 = vec4(0, 0, 0, 1) and every
     // gl_TextureMatrix[i] is the identity.
@@ -399,6 +422,35 @@ fn fullscreen_lightmap_coordinates_follow_iris_composite() {
     // World geometry keeps the OptiFine lightmap matrix (scale 1/256, offset 1/32).
     let out = T::gbuffers().vs(vs).fs(fs).run();
     assert!(semantic_init(&out, "sb_LightmapMatrix").contains("vec4(0.03125, 0.03125, 0.03125, 1.0)"));
+}
+
+#[test]
+fn synthesized_dh_programs_read_the_terrain_lightmap_convention() {
+    // Native DH programs (Iris DHTerrainTransformer) read pre-normalized lightmap
+    // coordinates ((level + 0.5) / 16) with an identity gl_TextureMatrix[1]; programs
+    // synthesized from gbuffers_terrain were written for 16 * level (0..240) and the
+    // OptiFine matrix, and some scale the raw value (`/ 240.0`, `vaUV2`).
+    let vs = "#version 120\nvarying vec2 lm;\nvarying vec2 raw;\nvoid main() { gl_Position = ftransform(); lm = (gl_TextureMatrix[1] * gl_MultiTexCoord1).st; raw = gl_MultiTexCoord1.st / 240.0; }\n";
+    let fs = "#version 120\nvarying vec2 lm;\nvarying vec2 raw;\nvoid main() { gl_FragData[0] = vec4(lm, raw); }\n";
+    let native = T::new("dh_terrain").vs(vs).fs(fs).run();
+    assert_eq!(semantic_init(&native, "sb_gl_MultiTexCoord1"), "vec4((float((meta >> 4u) & 15u) + 0.5) / 16.0, (float(meta & 15u) + 0.5) / 16.0, 0.0, 1.0)");
+    assert_eq!(semantic_init(&native, "sb_LightmapMatrix"), "mat4(1.0)");
+    let synth = T::new(sb_transform::DH_SYNTH_PROFILE).vs(vs).fs(fs).run();
+    assert_eq!(semantic_init(&synth, "sb_gl_MultiTexCoord1"), "vec4(float((meta >> 4u) & 15u) * 16.0, float(meta & 15u) * 16.0, 0.0, 1.0)");
+    assert!(semantic_init(&synth, "sb_LightmapMatrix").contains("vec4(0.03125, 0.03125, 0.03125, 1.0)"));
+    // Through the matrix both give Iris's value exactly: 16 L / 256 + 1 / 32 = (L + 0.5) / 16.
+    for level in 0..16u8 {
+        let l = f32::from(level);
+        assert_eq!(16.0 * l * 0.003_906_25 + 0.031_25, (l + 0.5) / 16.0);
+    }
+    // Core code reads vaUV2 in 0..240 units too.
+    let core = "#version 330\nin ivec2 vaUV2;\nout vec2 lm;\nvoid main() { gl_Position = vec4(0.0); lm = vec2(vaUV2) / 240.0; }\n";
+    let out = T::new(sb_transform::DH_SYNTH_PROFILE).vs(core).fs("#version 330\nin vec2 lm;\nout vec4 c;\nvoid main() { c = vec4(lm, 0.0, 1.0); }\n").run();
+    contains_all(out.vs(), &["ivec2 vaUV2 = ivec2((sb_gl_MultiTexCoord1).xy);", "float((meta >> 4u) & 15u) * 16.0"]);
+    // Everything else is dh_terrain's.
+    let (a, b) = (sb_transform::profile("dh_terrain").unwrap(), sb_transform::profile(sb_transform::DH_SYNTH_PROFILE).unwrap());
+    assert_eq!((&a.inputs, &a.blocks, &a.samplers, &a.globals, &a.code_vertex), (&b.inputs, &b.blocks, &b.samplers, &b.globals, &b.code_vertex));
+    assert_eq!(a.semantics.position, b.semantics.position);
 }
 
 #[test]

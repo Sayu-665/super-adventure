@@ -121,6 +121,9 @@ impl GeometryProgram {
                     dst_alpha: BlendFactor::One,
                 }),
                 G::TerrainSolid | G::TerrainCutout | G::DhTerrain | G::DhShadow => None,
+                // The sun and moon (Minecraft's `CELESTIAL` pipeline, Iris' SKY_TEXTURED) are
+                // blended additively: their textures have opaque black backgrounds.
+                G::SkyTextured => Some(BlendMode::OVERLAY),
                 _ => Some(BlendMode::TRANSLUCENT),
             },
         }
@@ -224,6 +227,15 @@ impl BlendMode {
         dst_color: BlendFactor::OneMinusSrcAlpha,
         src_alpha: BlendFactor::One,
         dst_alpha: BlendFactor::OneMinusSrcAlpha,
+    };
+
+    /// Minecraft's `BlendFunction.OVERLAY` (SRC_ALPHA ONE ONE ZERO): additive colour, used
+    /// by the `CELESTIAL` (sun / moon) and `STARS` pipelines.
+    pub const OVERLAY: BlendMode = BlendMode {
+        src_color: BlendFactor::SrcAlpha,
+        dst_color: BlendFactor::One,
+        src_alpha: BlendFactor::One,
+        dst_alpha: BlendFactor::Zero,
     };
 }
 
@@ -369,6 +381,18 @@ mod tests {
         assert_eq!(chain, ["shadow_lightning", "shadow_entities", "shadow"]);
         assert_eq!(GeometryProgram::DhWater.fallback(), Some(GeometryProgram::DhTerrain));
         assert_eq!(GeometryProgram::ALL.len(), 38);
+    }
+
+    /// Vanilla blend states that apply without a `blend.<program>` override: the sun and
+    /// moon are additive (their black backgrounds must not cover the sky), solid terrain
+    /// and shadows are unblended, other geometry is translucent.
+    #[test]
+    fn default_blends_follow_vanilla_pipelines() {
+        assert_eq!(GeometryProgram::SkyTextured.default_blend(), Some(BlendMode::OVERLAY));
+        assert_eq!(GeometryProgram::SkyBasic.default_blend(), Some(BlendMode::TRANSLUCENT));
+        assert_eq!(GeometryProgram::Water.default_blend(), Some(BlendMode::TRANSLUCENT));
+        assert_eq!(GeometryProgram::TerrainSolid.default_blend(), None);
+        assert_eq!(GeometryProgram::Shadow.default_blend(), None);
     }
 
     #[test]

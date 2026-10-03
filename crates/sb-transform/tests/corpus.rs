@@ -81,7 +81,7 @@ enum Variant {
     Reversed,
     /// Renderpearl target (no set/binding), compiled with glslang auto-mapping.
     Renderpearl,
-    /// Synthesized Distant Horizons programs: gbuffers_terrain/water with `dh_terrain`.
+    /// Synthesized Distant Horizons programs: gbuffers_terrain/water with `dh_terrain_synth`.
     DhSynth,
 }
 
@@ -202,7 +202,7 @@ fn analyze_folder(env: &PackEnv, folder: &str) -> Vec<Analyzed> {
 
 fn profile_name(name: &ProgramName, variant: Variant) -> &'static str {
     match name {
-        _ if variant == Variant::DhSynth => "dh_terrain",
+        _ if variant == Variant::DhSynth => sb_transform::DH_SYNTH_PROFILE,
         ProgramName::Geometry { program } => sb_transform::default_profile_for(*program),
         ProgramName::Composite { .. } => sb_transform::FULLSCREEN_PROFILE,
     }

@@ -149,6 +149,13 @@ dhPreviousProjection	mat4	frame
 dhNearPlane	float	frame
 dhFarPlane	float	frame
 dhRenderDistance	int	frame
+vxRenderDistance	int	frame
+vxProj	mat4	frame
+vxProjInv	mat4	frame
+vxProjPrev	mat4	frame
+vxModelView	mat4	frame
+vxModelViewInv	mat4	frame
+vxModelViewPrev	mat4	frame
 modelViewMatrix	mat4	draw
 modelViewMatrixInverse	mat4	draw
 projectionMatrix	mat4	draw

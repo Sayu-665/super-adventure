@@ -46,7 +46,7 @@ color = "..."       # vec4  gl_Color
 uv0 = "..."         # vec4  gl_MultiTexCoord0
 lightmap = "..."    # vec4  gl_MultiTexCoord1/2, 0..240 range (x = block, y = sky)
 normal = "..."      # vec3  gl_Normal
-entity = "..."      # vec4  mc_Entity (x = block id or -1, y = render type)
+entity = "..."      # vec4  mc_Entity (x = block id or -1, y = render type; default (0, 0, 0, 1))
 mid_tex_coord = "..." # vec4 mc_midTexCoord / gl_MultiTexCoord3
 tangent = "..."     # vec4  at_tangent
 mid_block = "..."   # vec4  at_midBlock
@@ -93,3 +93,9 @@ Built-in profiles: `fullscreen`, `vanilla_terrain`, `vanilla_terrain_basic`,
 `dh_terrain`, `dh_generic` and `sodium_terrain` (Sodium 0.9 compact chunk format with
 ShaderBridge's extension attributes and Sodium's 20-byte push constants). Semantics a profile does not define fall
 back to the defaults in `defaults.toml`.
+
+`dh_terrain_synth` (`sb_transform::DH_SYNTH_PROFILE`) is derived in code from
+`dh_terrain` for DH programs synthesized from `gbuffers_terrain`/`gbuffers_water`/`shadow`:
+only its lightmap differs, in the vanilla terrain convention those sources expect
+(`gl_MultiTexCoord1`/`vaUV2` = 16 x light level with the OptiFine lightmap matrix, which
+through `gl_TextureMatrix[1]` equals the `(level + 0.5) / 16` native DH programs read).

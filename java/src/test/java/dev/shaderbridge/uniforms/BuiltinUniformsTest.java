@@ -137,4 +137,21 @@ class BuiltinUniformsTest {
         ByteBuffer projection = write("gbufferProjection", frame, draw, GlslType.MAT4);
         assertEquals(frame.gbufferProjection().m00(), projection.getFloat(0));
     }
+
+    @Test
+    void voxyUniformsMirrorTheCameraWithoutVoxy() {
+        FrameState frame = new FrameState();
+        frame.viewWidth = 1920;
+        frame.viewHeight = 1080;
+        frame.update();
+        DrawState draw = new DrawState();
+        draw.reset(frame);
+        assertEquals(0, write("vxRenderDistance", frame, draw, GlslType.INT).getInt(0));
+        assertEquals(write("gbufferProjection", frame, draw, GlslType.MAT4), write("vxProj", frame, draw, GlslType.MAT4));
+        assertEquals(write("gbufferProjectionInverse", frame, draw, GlslType.MAT4), write("vxProjInv", frame, draw, GlslType.MAT4));
+        assertEquals(write("gbufferPreviousProjection", frame, draw, GlslType.MAT4), write("vxProjPrev", frame, draw, GlslType.MAT4));
+        assertEquals(write("gbufferModelView", frame, draw, GlslType.MAT4), write("vxModelView", frame, draw, GlslType.MAT4));
+        assertEquals(write("gbufferModelViewInverse", frame, draw, GlslType.MAT4), write("vxModelViewInv", frame, draw, GlslType.MAT4));
+        assertEquals(write("gbufferPreviousModelView", frame, draw, GlslType.MAT4), write("vxModelViewPrev", frame, draw, GlslType.MAT4));
+    }
 }

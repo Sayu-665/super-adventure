@@ -1,0 +1,45 @@
+name = "vanilla_block"
+description = "Minecraft 26.3 BLOCK format drawn outside chunk sections with DynamicTransforms: pipeline/solid_block, cutout_block and translucent_block (moving pistons, falling blocks), beacon beams and the block breaking overlay. Position, Color, UV0, UV2; the format has no normal (up is used) and no block id."
+
+[[inputs]]
+name = "Position"
+type = "vec3"
+location = 0
+[[inputs]]
+name = "Color"
+type = "vec4"
+location = 1
+[[inputs]]
+name = "UV0"
+type = "vec2"
+location = 2
+[[inputs]]
+name = "UV2"
+type = "ivec2"
+location = 3
+
+[[blocks]]
+name = "DynamicTransforms"
+instance = "sb_hDynamic"
+members = "mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset;"
+
+[[samplers]]
+name = "Sampler0"
+type = "sampler2D"
+provides = ["gtexture"]
+[[samplers]]
+name = "Sampler2"
+type = "sampler2D"
+provides = ["lightmap"]
+
+[semantics]
+position = "vec4(Position + sb_hDynamic.ModelOffset, 1.0)"
+color = "Color * sb_hDynamic.ColorModulator"
+uv0 = "vec4(UV0, 0.0, 1.0)"
+lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
+normal = "vec3(0.0, 1.0, 0.0)"
+mid_tex_coord = "vec4(UV0, 0.0, 1.0)"
+model_view = "sb_hDynamic.ModelViewMat"
+projection = "projectionMatrix"
+texture_matrix = "sb_hDynamic.TextureMat"
+chunk_offset = "sb_hDynamic.ModelOffset"

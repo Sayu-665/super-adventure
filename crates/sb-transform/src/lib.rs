@@ -50,7 +50,7 @@ pub use analyze::{
 pub use compat::register_profile_resources;
 pub use pack::{PackBuilder, PackData};
 pub use profiles::{
-    DrawProfile, FULLSCREEN_PROFILE, ProfileBlock, ProfileGlobal, ProfileInput, ProfileSampler, Semantics,
+    DH_SYNTH_PROFILE, DrawProfile, FULLSCREEN_PROFILE, ProfileBlock, ProfileGlobal, ProfileInput, ProfileSampler, Semantics,
     builtin_profiles, default_profile_for, parse_profile, profile,
 };
 pub use transform::{

@@ -201,6 +201,8 @@ pub(crate) struct Executor<'r> {
     pub dh_enabled: bool,
     pub unified: bool,
     pub shadow_enabled: bool,
+    /// Downsample pipelines for formats whose mipmaps cannot be blitted (created lazily).
+    pub mip_renderer: Option<crate::mipgen::MipRenderer>,
     warned: HashSet<String>,
 }
 
@@ -279,6 +281,7 @@ impl<'r> Executor<'r> {
                 dh_enabled: parts.dh_enabled,
                 unified: parts.unified,
                 shadow_enabled: parts.shadow_enabled,
+                mip_renderer: None,
                 warned: parts.warned,
             }),
             Err(e) => {

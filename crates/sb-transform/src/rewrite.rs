@@ -341,9 +341,14 @@ pub(crate) fn is_builtin_type(n: &str) -> bool {
 /// Legacy sampling calls (`texture2D` -> `texture`, `shadow2D(..)` -> `vec4(texture(..))`),
 /// group votes (`anyInvocation` -> `subgroupAny`, see [`names::group_vote_function`])
 /// and pack functions that clash with GLSL 4.60 built-ins or legacy names (renamed to
-/// `sb_u_<name>` with the calls that match their arity).
+/// `sb_u_<name>`; calls of legacy names and keywords follow by arity, calls of a
+/// built-in's name by argument types, see [`resolve_builtin_overloads`]).
 fn legacy_and_collisions(w: &mut StageWork) {
+    let env = crate::consteval::global_consts(&w.unit);
     let mut user: HashMap<String, BTreeSet<usize>> = HashMap::new();
+    // Pack overloads of functions that are still built-ins in GLSL 4.60: their
+    // parameter types (calls are resolved by argument types, see below).
+    let mut overloads: HashMap<String, Vec<Vec<Option<GlslType>>>> = HashMap::new();
     for item in &w.unit.items {
         let p = match &item.kind {
             ItemKind::Function(f) => &f.proto,
@@ -360,6 +365,13 @@ fn legacy_and_collisions(w: &mut StageWork) {
         {
             let arity = if p.params.len() == 1 && p.params[0].name.is_none() && p.params[0].ty.name() == Some("void") { 0 } else { p.params.len() };
             user.entry(n.to_string()).or_default().insert(arity);
+            if (names::is_builtin_function(n) || names::is_extension_builtin(n)) && names::legacy_texture(n).is_none() {
+                let sig: Vec<Option<GlslType>> = p.params[..arity].iter().map(|x| crate::types::declared_type(&x.ty, &x.array, &env)).collect();
+                let sigs = overloads.entry(n.to_string()).or_default();
+                if !sigs.contains(&sig) {
+                    sigs.push(sig);
+                }
+            }
         }
     }
     for item in &mut w.unit.items {
@@ -372,12 +384,15 @@ fn legacy_and_collisions(w: &mut StageWork) {
             p.name = format!("sb_u_{}", p.name);
         }
     }
+    if !overloads.is_empty() {
+        resolve_builtin_overloads(w, &overloads);
+    }
     let trinary = w.src.extensions.iter().any(|e| e.name == "GL_AMD_shader_trinary_minmax" && e.behavior != "disable");
     let mut polyfills: BTreeSet<&'static str> = BTreeSet::new();
     let mut vote = false;
     w.unit.walk_exprs_mut(&mut |e| {
         if let Expr::Call(Callee::Name(n), args) = e {
-            if user.get(n.as_str()).is_some_and(|a| a.contains(&args.len())) {
+            if !overloads.contains_key(n.as_str()) && user.get(n.as_str()).is_some_and(|a| a.contains(&args.len())) {
                 *n = format!("sb_u_{n}");
                 return Walk::Children;
             }
@@ -427,6 +442,67 @@ fn legacy_and_collisions(w: &mut StageWork) {
         let text: Vec<String> = types.iter().map(|t| format!("{t} {p}({t} a, {t} b, {t} c) {{ return {body}; }}")).collect();
         w.piece(Section::Late, &[p], text.join("\n"));
     }
+}
+
+/// Types of the compatibility built-in variables (before their rewrite), for the overload
+/// resolution of [`resolve_builtin_overloads`].
+const COMPAT_VARIABLE_TYPES: &[(&str, GlslType)] = &[
+    ("gl_Vertex", GlslType::VEC4),
+    ("gl_Color", GlslType::VEC4),
+    ("gl_SecondaryColor", GlslType::VEC4),
+    ("gl_Normal", GlslType::VEC3),
+    ("gl_MultiTexCoord0", GlslType::VEC4),
+    ("gl_MultiTexCoord1", GlslType::VEC4),
+    ("gl_MultiTexCoord2", GlslType::VEC4),
+    ("gl_MultiTexCoord3", GlslType::VEC4),
+    ("gl_FrontColor", GlslType::VEC4),
+    ("gl_FragColor", GlslType::VEC4),
+    ("gl_ModelViewMatrix", GlslType::MAT4),
+    ("gl_ProjectionMatrix", GlslType::MAT4),
+    ("gl_ModelViewProjectionMatrix", GlslType::MAT4),
+    ("gl_ModelViewMatrixInverse", GlslType::MAT4),
+    ("gl_ProjectionMatrixInverse", GlslType::MAT4),
+    ("gl_NormalMatrix", GlslType::MAT3),
+];
+
+/// Calls of a name the pack overloads although it is a GLSL 4.60 built-in
+/// (`vec3 pow(vec3 x, float y)`): GLSL resolves each call by its argument types, so a
+/// call goes to the pack overload (renamed `sb_u_<name>`) only when its arguments match
+/// one of the pack's signatures, exactly or through implicit conversions; calls such as
+/// `pow(2.0, 3.0)`, or `pow(x, vec3(y))` inside the overload itself, stay built-in
+/// calls. Calls whose argument types cannot be inferred go to the pack overload.
+fn resolve_builtin_overloads(w: &mut StageWork, overloads: &HashMap<String, Vec<Vec<Option<GlslType>>>>) {
+    let extra = crate::fixes::BUILTIN_VARIABLE_TYPES.iter().chain(COMPAT_VARIABLE_TYPES).map(|(n, t)| ((*n).to_string(), *t));
+    let types = crate::types::UnitTypes::collect(&w.unit, extra);
+    let opaque: HashMap<String, String> = w
+        .src
+        .info
+        .opaque_uniforms
+        .iter()
+        .map(|o| (o.name.clone(), o.glsl_type.clone()))
+        .collect();
+    let user_call = |name: &str, args: &[Expr], scope: &crate::types::TypeScope| -> bool {
+        let Some(sigs) = overloads.get(name) else { return false };
+        let arg_types: Vec<Option<GlslType>> = args.iter().map(|a| scope.infer(a)).collect();
+        sigs.iter().filter(|s| s.len() == args.len()).any(|sig| {
+            sig.iter().zip(&arg_types).all(|(p, a)| match (p, a) {
+                (Some(p), Some(a)) => crate::types::converts_implicitly(*a, *p),
+                // Unknown parameter or argument types: assume the pack overload.
+                _ => true,
+            })
+        })
+    };
+    crate::types::walk_typed(&mut w.unit, &types, &opaque, &mut |root, scope| {
+        // Pre-order: arguments are typed with their original (built-in) names.
+        root.walk_mut(&mut |e| {
+            if let Expr::Call(Callee::Name(n), args) = e
+                && user_call(n, args, scope)
+            {
+                *n = format!("sb_u_{n}");
+            }
+            Walk::Children
+        });
+    });
 }
 
 /// `attribute` -> `in`; `varying` -> `out` in producing stages, `in` in the fragment

@@ -105,6 +105,33 @@ fn pack_functions_named_like_builtins_are_renamed() {
 }
 
 #[test]
+fn pack_overloads_of_builtins_only_take_the_calls_that_match_them() {
+    // GLSL resolves `pow` per call: the pack's `vec3 pow(vec3, float)` takes vec3/float
+    // (and int, converted) arguments, every other call, including the one inside the
+    // overload itself, is the built-in (it used to become a recursive `sb_u_pow` call
+    // that glslang rejects).
+    let out = fs("#version 130\nvarying vec2 uv;\nvec3 pow(vec3 x, float y) { return pow(x, vec3(y)); }\nfloat mod(float x, int m) { return x - float(m) * floor(x / float(m)); }\n\
+                  void main() {\n  float a = pow(2.0, 3.0);\n  vec3 b = pow(vec3(uv, 1.0), 2.0);\n  vec3 c = pow(b, 2);\n  vec2 d = pow(uv, vec2(2.0));\n\
+                    float e = mod(a, 3);\n  float f = mod(a, 3.0);\n  gl_FragData[0] = vec4(b + c, a + d.x + e + f);\n}\n");
+    contains_all(
+        out.fs(),
+        &[
+            "vec3 sb_u_pow(vec3 x, float y) {\n    return pow(x, vec3(y));",
+            "float a = pow(2.0, 3.0);",
+            "vec3 b = sb_u_pow(vec3(uv, 1.0), 2.0);",
+            "vec3 c = sb_u_pow(b, 2);",
+            "vec2 d = pow(uv, vec2(2.0));",
+            "float e = sb_u_mod(a, 3);",
+            "float f = mod(a, 3.0);",
+        ],
+    );
+    // A redefinition with the built-in's own signature takes the matching calls only.
+    let out = fs("#version 130\nvarying vec2 uv;\nfloat clamp(float x, float lo, float hi) { return min(max(x, lo), hi); }\n\
+                  void main() { gl_FragData[0] = vec4(clamp(uv.x, 0.0, 1.0), clamp(uv, vec2(0.0), vec2(1.0)), 1.0); }\n");
+    contains_all(out.fs(), &["float sb_u_clamp(float x, float lo, float hi)", "sb_u_clamp(uv.x, 0.0, 1.0)", "clamp(uv, vec2(0.0), vec2(1.0))"]);
+}
+
+#[test]
 fn amd_trinary_minmax_is_polyfilled() {
     let out = fs("#version 130\n#extension GL_AMD_shader_trinary_minmax : enable\nvoid main() { gl_FragData[0] = vec4(min3(1.0, 2.0, 3.0), max3(vec2(1.0), vec2(2.0), vec2(0.0)), mid3(1, 2, 3)); }\n");
     contains_all(out.fs(), &["sb_min3(1.0, 2.0, 3.0)", "float sb_min3(float a, float b, float c)", "vec2 sb_max3(vec2 a, vec2 b, vec2 c)", "int sb_mid3(int a, int b, int c)"]);
@@ -203,6 +230,24 @@ fn non_constant_texel_offsets_are_folded_into_the_coordinate() {
         ],
     );
     assert!(out.has_diag("xf.dynamic-offset"));
+    // Local `const`s with constant initializers are constant expressions: the offset form
+    // stays (the folded form is exact only at the level whose size it divides by, so an
+    // implicit-LOD lookup on a smaller mip level would move by fewer texels). A local that
+    // hides one, or a `const` initialized from a uniform, is not constant.
+    let out = fs("#version 130\nuniform sampler2D colortex0;\nuniform int frameCounter;\nconst ivec2 g = ivec2(0, 1);\nvarying vec2 uv;\n\
+                  void main() {\n  const ivec2 o = ivec2(1, 0);\n  const ivec2 o2 = o * 2 + g;\n  vec4 c = textureOffset(colortex0, uv, o) + textureLodOffset(colortex0, uv, 1.0, o2) + textureOffset(colortex0, uv, g);\n\
+                    { ivec2 g = ivec2(frameCounter, 0); c += textureOffset(colortex0, uv, g); }\n  const ivec2 d = ivec2(frameCounter, 0);\n  c += textureOffset(colortex0, uv, d);\n  gl_FragData[0] = c;\n}\n");
+    contains_all(
+        out.fs(),
+        &[
+            "vec4 c = textureOffset(colortex0, uv, o) + textureLodOffset(colortex0, uv, 1.0, o2) + textureOffset(colortex0, uv, g);",
+            "c += texture(colortex0, uv + vec2(g) / vec2(textureSize(colortex0, 0)));",
+            "c += texture(colortex0, uv + vec2(d) / vec2(textureSize(colortex0, 0)));",
+        ],
+    );
+    // Sampler parameters are 2D samplers too.
+    let out = fs("#version 130\nuniform sampler2D colortex0;\nuniform int frameCounter;\nvec4 tap(sampler2D s, vec2 p) { return textureOffset(s, p, ivec2(frameCounter, 0)); }\nvoid main() { gl_FragData[0] = tap(colortex0, vec2(0.5)); }\n");
+    contains_all(out.fs(), &["return texture(s, p + vec2(ivec2(frameCounter, 0)) / vec2(textureSize(s, 0)));"]);
 }
 
 #[test]

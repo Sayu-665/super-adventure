@@ -51,7 +51,8 @@ uv0 = "vec4(UV0, 0.0, 1.0)"
 lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
 normal = "Normal"
 overlay = "UV1"
-entity = "vec4(float(entityId), 0.0, 0.0, 0.0)"
+# No mc_Entity in the ENTITY format: Iris reads (0, 0, 0, 1) (the default), never the
+# entity id (entity.properties ids overlap block ids, which packs test on mc_Entity.x).
 mid_tex_coord = "vec4(UV0, 0.0, 1.0)"
 model_view = "sb_hDynamic.ModelViewMat"
 projection = "projectionMatrix"

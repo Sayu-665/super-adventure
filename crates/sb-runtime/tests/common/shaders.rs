@@ -311,7 +311,8 @@ pub fn fullscreen_vsh() -> String {
         r#"
 layout(location = 0) out vec2 texcoord;
 void main() {
-    vec2 uv = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+    int i = gl_VertexIndex % 6;
+    vec2 uv = vec2(float(i == 1 || i == 2 || i == 4), float(i == 2 || i == 4 || i == 5));
     texcoord = uv;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
     SB_DEPTH_EPILOGUE

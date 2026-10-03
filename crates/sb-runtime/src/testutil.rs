@@ -91,7 +91,7 @@ pub(crate) fn mini_pack() -> (CompiledPack, BlobTable) {
          gl_Position = gbufferProjection * (gbufferModelView * vec4(p, 1.0)); gl_Position.z = 0.5 * (gl_Position.z + gl_Position.w); }\n"
     );
     let terrain_fsh = "#version 460\nlayout(set = 1, binding = 0) uniform sampler2D gtexture;\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 o;\nvoid main() { o = texture(gtexture, uv); }\n";
-    let fullscreen_vsh = "#version 460\nlayout(location = 0) out vec2 uv;\nvoid main() { uv = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2)); gl_Position = vec4(uv * 2.0 - 1.0, 0.5, 1.0); }\n";
+    let fullscreen_vsh = "#version 460\nlayout(location = 0) out vec2 uv;\nvoid main() { int i = gl_VertexIndex % 6; uv = vec2(float(i == 1 || i == 2 || i == 4), float(i == 2 || i == 4 || i == 5)); gl_Position = vec4(uv * 2.0 - 1.0, 0.5, 1.0); }\n";
     let final_fsh = "#version 460\nlayout(set = 1, binding = 1) uniform sampler2D colortex0;\nlayout(std430, set = 2, binding = 0) readonly buffer B { vec4 v[]; } b;\nlayout(location = 0) in vec2 uv;\nlayout(location = 0) out vec4 o;\nvoid main() { o = texture(colortex0, uv) * b.v[0]; }\n";
     let csh = "#version 460\nlayout(local_size_x = 1) in;\nlayout(std430, set = 2, binding = 0) buffer B { vec4 v[]; } b;\nvoid main() { b.v[0] = vec4(1.0); }\n";
     let geo = |p| ProgramKind::Geometry { program: p };

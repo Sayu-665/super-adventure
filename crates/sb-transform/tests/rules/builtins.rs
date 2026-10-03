@@ -85,11 +85,24 @@ fn iris_attributes_become_globals_of_the_declared_type() {
             "vec3 vaPosition = sb_gl_Vertex.xyz - sb_ChunkOffset;",
             "ivec2 vaUV2 = ivec2((sb_gl_MultiTexCoord1).xy);",
             "float mc_chunkFade = ChunkVisibility;",
-            "vec4 myCustomAttribute = vec4(0);",
+            // An attribute without a vertex buffer reads GL's initial generic value.
+            "vec4 myCustomAttribute = vec4(0, 0, 0, 1);",
         ],
     );
     assert!(out.has_diag("xf.unknown-attribute"));
     contains_none(out.vs(), &["in int mc_Entity", "in vec3 vaPosition"]);
+}
+
+#[test]
+fn chunk_fade_is_minus_one_in_the_shadow_pass() {
+    // Iris: chunks fade in only in the main pass; shadow programs read -1 (no fade).
+    let src = "#version 330\nin vec3 vaPosition;\nout float fade;\nvoid main() { gl_Position = vec4(vaPosition, 1.0); fade = mc_chunkFade; }\n";
+    let fs = "#version 330\nin float fade;\nout vec4 c;\nvoid main() { c = vec4(fade); }\n";
+    let out = T::gbuffers().vs(src).fs(fs).run();
+    contains_all(out.vs(), &["float mc_chunkFade = ChunkVisibility;", "in float ChunkVisibility;"]);
+    let out = T::gbuffers().with(|o| o.is_shadow_pass = true).vs(src).fs(fs).run();
+    contains_all(out.vs(), &["float mc_chunkFade = -1.0;"]);
+    contains_none(out.vs(), &["ChunkVisibility"]);
 }
 
 #[test]

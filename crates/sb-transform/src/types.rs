@@ -106,6 +106,142 @@ impl UnitTypes {
     }
 }
 
+/// Visit every expression tree root of the unit (global initializers and function
+/// bodies) with the types in scope at that point. The callback is responsible for
+/// descending into the tree.
+pub(crate) fn walk_typed(
+    unit: &mut TranslationUnit,
+    types: &UnitTypes,
+    opaque: &HashMap<String, String>,
+    f: &mut dyn FnMut(&mut Expr, &TypeScope),
+) {
+    let env = crate::consteval::global_consts(unit);
+    for item in &mut unit.items {
+        match &mut item.kind {
+            ItemKind::Function(func) => {
+                let mut scope = types.scope(&func.proto.params, opaque);
+                for s in &mut func.body {
+                    typed_stmt(s, &mut scope, &env, f);
+                }
+            }
+            ItemKind::Decl(d) => {
+                let scope = types.scope(&[], opaque);
+                for v in &mut d.vars {
+                    if let Some(i) = &mut v.init {
+                        typed_init(i, &scope, f);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn typed_init(i: &mut Init, scope: &TypeScope, f: &mut dyn FnMut(&mut Expr, &TypeScope)) {
+    match i {
+        Init::Expr(e) => f(e, scope),
+        Init::List(l) => {
+            for x in l {
+                typed_init(x, scope, f);
+            }
+        }
+    }
+}
+
+fn typed_stmt(s: &mut Stmt, scope: &mut TypeScope, env: &crate::consteval::ConstEnv, f: &mut dyn FnMut(&mut Expr, &TypeScope)) {
+    match &mut s.kind {
+        StmtKind::Decl(d) => {
+            for v in &mut d.vars {
+                if let Some(i) = &mut v.init {
+                    typed_init(i, scope, f);
+                }
+                scope.declare(&v.name, declared_type(&d.ty.ty, &v.array, env));
+            }
+        }
+        StmtKind::Expr(e) | StmtKind::Case(e) | StmtKind::Return(Some(e)) => f(e, scope),
+        StmtKind::Block(b) => {
+            scope.push();
+            for x in b {
+                typed_stmt(x, scope, env, f);
+            }
+            scope.pop();
+        }
+        StmtKind::If { cond, then, els } => {
+            f(cond, scope);
+            scope.push();
+            typed_stmt(then, scope, env, f);
+            scope.pop();
+            if let Some(e) = els {
+                scope.push();
+                typed_stmt(e, scope, env, f);
+                scope.pop();
+            }
+        }
+        StmtKind::Switch { expr, body } => {
+            f(expr, scope);
+            scope.push();
+            for x in body {
+                typed_stmt(x, scope, env, f);
+            }
+            scope.pop();
+        }
+        StmtKind::While { cond, body } => {
+            scope.push();
+            typed_condition(cond, scope, env, f);
+            typed_stmt(body, scope, env, f);
+            scope.pop();
+        }
+        StmtKind::DoWhile { body, cond } => {
+            scope.push();
+            typed_stmt(body, scope, env, f);
+            scope.pop();
+            f(cond, scope);
+        }
+        StmtKind::For { init, cond, step, body } => {
+            scope.push();
+            if let Some(i) = init {
+                typed_stmt(i, scope, env, f);
+            }
+            if let Some(c) = cond {
+                typed_condition(c, scope, env, f);
+            }
+            if let Some(st) = step {
+                f(st, scope);
+            }
+            typed_stmt(body, scope, env, f);
+            scope.pop();
+        }
+        StmtKind::Return(None) | StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard => {}
+    }
+}
+
+fn typed_condition(c: &mut Condition, scope: &mut TypeScope, env: &crate::consteval::ConstEnv, f: &mut dyn FnMut(&mut Expr, &TypeScope)) {
+    match c {
+        Condition::Expr(e) => f(e, scope),
+        Condition::Decl { ty, name, init } => {
+            typed_init(init, scope, f);
+            scope.declare(name, declared_type(&ty.ty, &[], env));
+        }
+    }
+}
+
+/// Whether a value of type `from` converts implicitly to `to` (GLSL 4.60 §4.1.10:
+/// `int` -> `uint` -> `float` -> `double`, component-wise for vectors and matrices of
+/// the same shape).
+pub(crate) fn converts_implicitly(from: GlslType, to: GlslType) -> bool {
+    use ScalarKind as K;
+    if from == to {
+        return true;
+    }
+    if from.rows != to.rows || from.cols != to.cols || from.array != to.array {
+        return false;
+    }
+    matches!(
+        (from.scalar, to.scalar),
+        (K::Int, K::Uint | K::Float | K::Double) | (K::Uint, K::Float | K::Double) | (K::Float, K::Double)
+    )
+}
+
 const SWIZZLE_SETS: [&str; 3] = ["xyzw", "rgba", "stpq"];
 
 fn is_swizzle(f: &str) -> bool {

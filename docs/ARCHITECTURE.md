@@ -235,8 +235,9 @@ vertex = """ ... """
 
 Built-in profiles:
 * `fullscreen` is used by composite-style passes. It has **no vertex inputs**.
-  Vertices are generated from `gl_VertexIndex` as a fullscreen triangle
-  covering UV `[0,1]`. `gl_ProjectionMatrix` maps `[0,1]→[-1,1]`, `gl_Color`
+  Vertices are generated from `gl_VertexIndex` as Iris' fullscreen quad, UV
+  `[0,1]^2` drawn as two triangles (6 vertices; not one covering triangle,
+  because packs remap `gl_Position` into sub-rectangles such as bloom tiles). `gl_ProjectionMatrix` maps `[0,1]→[-1,1]`, `gl_Color`
   is 1, and the model-view, texture and normal matrices are identity, as in Iris.
 * `vanilla_terrain`, `vanilla_entity` and `vanilla_generic` mirror Mojang
   26.3's core vertex formats and UBOs, plus the Iris extension attributes

@@ -84,7 +84,7 @@ fn hoist_opaque_ternaries(e: &mut Expr, is_opaque: &dyn Fn(&str) -> bool, count:
 // ------------------------------------------------------- narrowing conversions
 
 /// Types of built-in variables the conversion fix reads.
-const BUILTIN_VARIABLE_TYPES: &[(&str, GlslType)] = &[
+pub(crate) const BUILTIN_VARIABLE_TYPES: &[(&str, GlslType)] = &[
     ("gl_FragCoord", GlslType::VEC4),
     ("gl_Position", GlslType::VEC4),
     ("gl_FragDepth", GlslType::FLOAT),
@@ -279,6 +279,11 @@ fn narrow_stmt(s: &mut Stmt, scope: &mut crate::types::TypeScope, ret: Option<Gl
 /// samplers: `textureLodOffset(s, P, l, o)` -> `textureLod(s, P + vec2(o) / vec2(textureSize(s, int(l))), l)`,
 /// `texelFetchOffset(s, P, l, o)` -> `texelFetch(s, P + o, l)`, and likewise for
 /// `textureOffset`, `textureGradOffset` and `textureGatherOffset` (level-0 size).
+///
+/// The rewrite is exact only at the size it divides by (an implicit-LOD lookup that
+/// lands on a smaller mip level moves by fewer texels), so it is applied only when the
+/// offset really is not constant: local `const` variables with constant initializers
+/// (in scope) are constant expressions like global ones.
 fn dynamic_offsets(
     unit: &mut TranslationUnit,
     types: &HashMap<String, String>,
@@ -286,7 +291,172 @@ fn dynamic_offsets(
     structs: &HashSet<String>,
 ) -> usize {
     let mut count = 0;
-    unit.walk_exprs_mut(&mut |e| {
+    let env = OffsetEnv { types, consts, structs };
+    for item in &mut unit.items {
+        match &mut item.kind {
+            ItemKind::Function(f) => {
+                // Parameters: never constant expressions; sampler parameters by their type.
+                let mut scope = LocalScopes::default();
+                scope.push();
+                for p in &f.proto.params {
+                    if let Some(n) = &p.name {
+                        scope.declare(n, false, p.ty.name().filter(|t| sb_uniforms::is_opaque_type(t)).map(str::to_string));
+                    }
+                }
+                for s in &mut f.body {
+                    offsets_stmt(s, &mut scope, &env, &mut count);
+                }
+            }
+            ItemKind::Decl(d) => {
+                let scope = LocalScopes::default();
+                d.walk_exprs_mut(&mut |e| {
+                    offsets_expr(e, &scope, &env, &mut count);
+                    Walk::Skip
+                });
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+struct OffsetEnv<'a> {
+    types: &'a HashMap<String, String>,
+    consts: &'a HashSet<String>,
+    structs: &'a HashSet<String>,
+}
+
+/// Local names in scope: (is a constant expression, opaque type).
+#[derive(Default)]
+struct LocalScopes {
+    scopes: Vec<HashMap<String, (bool, Option<String>)>>,
+}
+
+impl LocalScopes {
+    fn push(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn declare(&mut self, name: &str, constant: bool, opaque: Option<String>) {
+        if let Some(top) = self.scopes.last_mut() {
+            top.insert(name.to_string(), (constant, opaque));
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&(bool, Option<String>)> {
+        self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    /// Whether `name` is a constant (a local `const` with a constant initializer, or a
+    /// global constant not hidden by a local).
+    fn is_const(&self, name: &str, env: &OffsetEnv) -> bool {
+        match self.get(name) {
+            Some((c, _)) => *c,
+            None => env.consts.contains(name),
+        }
+    }
+
+    /// The opaque type of sampler `name` (a parameter, or a global not hidden by a local).
+    fn opaque_type<'a>(&'a self, name: &str, env: &'a OffsetEnv) -> Option<&'a str> {
+        match self.get(name) {
+            Some((_, t)) => t.as_deref(),
+            None => env.types.get(name).map(String::as_str),
+        }
+    }
+}
+
+fn offsets_stmt(s: &mut Stmt, scope: &mut LocalScopes, env: &OffsetEnv, count: &mut usize) {
+    match &mut s.kind {
+        StmtKind::Decl(d) => {
+            let is_const = d.ty.has_storage(&Storage::Const);
+            for v in &mut d.vars {
+                if let Some(i) = &mut v.init {
+                    i.walk_mut(&mut |e| {
+                        offsets_expr(e, scope, env, count);
+                        Walk::Skip
+                    });
+                }
+                let constant = is_const
+                    && v.init.as_ref().is_some_and(|i| init_const_with(i, &|n: &str| scope.is_const(n, env), env.structs));
+                scope.declare(&v.name, constant, None);
+            }
+        }
+        StmtKind::Expr(e) | StmtKind::Case(e) | StmtKind::Return(Some(e)) => offsets_expr(e, scope, env, count),
+        StmtKind::Block(b) => {
+            scope.push();
+            for x in b {
+                offsets_stmt(x, scope, env, count);
+            }
+            scope.pop();
+        }
+        StmtKind::If { cond, then, els } => {
+            offsets_expr(cond, scope, env, count);
+            scope.push();
+            offsets_stmt(then, scope, env, count);
+            scope.pop();
+            if let Some(e) = els {
+                scope.push();
+                offsets_stmt(e, scope, env, count);
+                scope.pop();
+            }
+        }
+        StmtKind::Switch { expr, body } => {
+            offsets_expr(expr, scope, env, count);
+            scope.push();
+            for x in body {
+                offsets_stmt(x, scope, env, count);
+            }
+            scope.pop();
+        }
+        StmtKind::While { cond, body } => {
+            scope.push();
+            offsets_condition(cond, scope, env, count);
+            offsets_stmt(body, scope, env, count);
+            scope.pop();
+        }
+        StmtKind::DoWhile { body, cond } => {
+            scope.push();
+            offsets_stmt(body, scope, env, count);
+            scope.pop();
+            offsets_expr(cond, scope, env, count);
+        }
+        StmtKind::For { init, cond, step, body } => {
+            scope.push();
+            if let Some(i) = init {
+                offsets_stmt(i, scope, env, count);
+            }
+            if let Some(c) = cond {
+                offsets_condition(c, scope, env, count);
+            }
+            if let Some(st) = step {
+                offsets_expr(st, scope, env, count);
+            }
+            offsets_stmt(body, scope, env, count);
+            scope.pop();
+        }
+        StmtKind::Return(None) | StmtKind::Empty | StmtKind::Default | StmtKind::Break | StmtKind::Continue | StmtKind::Discard => {}
+    }
+}
+
+fn offsets_condition(c: &mut Condition, scope: &mut LocalScopes, env: &OffsetEnv, count: &mut usize) {
+    match c {
+        Condition::Expr(e) => offsets_expr(e, scope, env, count),
+        Condition::Decl { name, init, .. } => {
+            init.walk_mut(&mut |e| {
+                offsets_expr(e, scope, env, count);
+                Walk::Skip
+            });
+            scope.declare(name, false, None);
+        }
+    }
+}
+
+fn offsets_expr(e: &mut Expr, scope: &LocalScopes, env: &OffsetEnv, count: &mut usize) {
+    e.walk_mut(&mut |e| {
         let Expr::Call(Callee::Name(name), args) = e else { return Walk::Children };
         let (offset_at, plain) = match name.as_str() {
             "textureOffset" => (2, "texture"),
@@ -297,8 +467,8 @@ fn dynamic_offsets(
             _ => return Walk::Children,
         };
         let Some(sampler) = args.first().and_then(|a| a.as_ident()).map(str::to_string) else { return Walk::Children };
-        let is_2d = types.get(&sampler).is_some_and(|t| matches!(t.as_str(), "sampler2D" | "isampler2D" | "usampler2D"));
-        if !is_2d || args.len() <= offset_at || is_const_expr(&args[offset_at], consts, structs) {
+        let is_2d = scope.opaque_type(&sampler, env).is_some_and(|t| matches!(t, "sampler2D" | "isampler2D" | "usampler2D"));
+        if !is_2d || args.len() <= offset_at || is_const_expr_with(&args[offset_at], &|n: &str| scope.is_const(n, env), env.structs) {
             return Walk::Children;
         }
         let offset = args.remove(offset_at);
@@ -315,10 +485,9 @@ fn dynamic_offsets(
             Expr::Binary(BinaryOp::Add, Box::new(p), Box::new(delta))
         };
         *name = plain.to_string();
-        count += 1;
+        *count += 1;
         Walk::Children
     });
-    count
 }
 
 fn arity(p: &Prototype) -> usize {
@@ -449,30 +618,35 @@ const FOLDABLE: &[&str] = &[
     "greaterThanEqual", "equal", "notEqual", "not", "matrixCompMult",
 ];
 
-fn is_const_expr(e: &Expr, consts: &HashSet<String>, structs: &HashSet<String>) -> bool {
+/// Whether `e` is a constant expression; `is_const` tells whether a variable name is a
+/// constant.
+fn is_const_expr_with(e: &Expr, is_const: &dyn Fn(&str) -> bool, structs: &HashSet<String>) -> bool {
+    let rec = |x: &Expr| is_const_expr_with(x, is_const, structs);
     match e {
         Expr::Int(_) | Expr::UInt(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Double(_) => true,
-        Expr::Ident(n) => consts.contains(n) || n == "gl_WorkGroupSize" || n.starts_with("gl_Max") || n.starts_with("gl_Min"),
-        Expr::Unary(op, a) => !matches!(op, UnaryOp::Inc | UnaryOp::Dec) && is_const_expr(a, consts, structs),
-        Expr::Binary(_, a, b) | Expr::Index(a, b) => is_const_expr(a, consts, structs) && is_const_expr(b, consts, structs),
-        Expr::Ternary(a, b, c) => {
-            is_const_expr(a, consts, structs) && is_const_expr(b, consts, structs) && is_const_expr(c, consts, structs)
-        }
-        Expr::Field(a, _) => is_const_expr(a, consts, structs),
+        Expr::Ident(n) => is_const(n) || n == "gl_WorkGroupSize" || n.starts_with("gl_Max") || n.starts_with("gl_Min"),
+        Expr::Unary(op, a) => !matches!(op, UnaryOp::Inc | UnaryOp::Dec) && rec(a),
+        Expr::Binary(_, a, b) | Expr::Index(a, b) => rec(a) && rec(b),
+        Expr::Ternary(a, b, c) => rec(a) && rec(b) && rec(c),
+        Expr::Field(a, _) => rec(a),
         Expr::Call(Callee::Name(n), args) => {
             let ctor = crate::rewrite::is_builtin_type(n) || structs.contains(n);
-            (ctor || FOLDABLE.contains(&n.as_str())) && args.iter().all(|a| is_const_expr(a, consts, structs))
+            (ctor || FOLDABLE.contains(&n.as_str())) && args.iter().all(rec)
         }
-        Expr::Call(Callee::ArrayCtor(_), args) => args.iter().all(|a| is_const_expr(a, consts, structs)),
+        Expr::Call(Callee::ArrayCtor(_), args) => args.iter().all(rec),
         Expr::Call(Callee::Method(r, m), args) => m == "length" && args.is_empty() && matches!(r.as_ref(), Expr::Ident(_)),
         Expr::Assign(..) | Expr::PostInc(_) | Expr::PostDec(_) | Expr::Comma(..) | Expr::Raw(_) => false,
     }
 }
 
 fn init_const(i: &Init, consts: &HashSet<String>, structs: &HashSet<String>) -> bool {
+    init_const_with(i, &|n: &str| consts.contains(n), structs)
+}
+
+fn init_const_with(i: &Init, is_const: &dyn Fn(&str) -> bool, structs: &HashSet<String>) -> bool {
     match i {
-        Init::Expr(e) => is_const_expr(e, consts, structs),
-        Init::List(l) => l.iter().all(|x| init_const(x, consts, structs)),
+        Init::Expr(e) => is_const_expr_with(e, is_const, structs),
+        Init::List(l) => l.iter().all(|x| init_const_with(x, is_const, structs)),
     }
 }
 

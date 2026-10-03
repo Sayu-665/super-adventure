@@ -299,7 +299,13 @@ impl Gpu {
             }
             unsafe { instance.get_physical_device_features2(physical, &mut q) };
         }
-        let base_features = unsafe { instance.get_physical_device_features(physical) };
+        let mut base_features = unsafe { instance.get_physical_device_features(physical) };
+        // GL (and Iris) never enable `GL_PROGRAM_POINT_SIZE`, so points from geometry and
+        // tessellation shaders are 1 pixel and packs do not write `gl_PointSize` there
+        // (soft-voxels-lite voxelizes with `layout(points) out`). With this feature enabled
+        // Vulkan requires such shaders to write PointSize (VUID-...-08776); without it the
+        // size is 1.0, as in GL. Minecraft 26.3 does not enable it either.
+        base_features.shader_tessellation_and_geometry_point_size = vk::FALSE;
         let mut f11 = vk::PhysicalDeviceVulkan11Features { p_next: std::ptr::null_mut(), ..f11 };
         let mut f12 = vk::PhysicalDeviceVulkan12Features { p_next: std::ptr::null_mut(), ..f12 };
         let mut f13 = vk::PhysicalDeviceVulkan13Features { p_next: std::ptr::null_mut(), ..f13 };
@@ -316,6 +322,11 @@ impl Gpu {
         }
         if depth_clip_control {
             dev_exts.push(ash::ext::depth_clip_control::NAME.as_ptr());
+        }
+        // `GL_ARB_shader_group_vote` (anyInvocationARB, ...) compiles to the
+        // `SubgroupVoteKHR` capability, which needs this extension (renderpearl uses it).
+        if has_extension(&exts, ash::ext::shader_subgroup_vote::NAME) {
+            dev_exts.push(ash::ext::shader_subgroup_vote::NAME.as_ptr());
         }
         let priorities = [1.0f32];
         let queue_info = [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&priorities)];

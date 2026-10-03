@@ -257,12 +257,12 @@ fn rewrite_reads(w: &mut StageWork, globals: &HashMap<String, Depth>) {
     for item in &mut w.unit.items {
         match &mut item.kind {
             ItemKind::Function(f) => {
-                for s in &mut f.body {
-                    s.walk_exprs_mut(&mut |e| {
-                        rewrite_expr(e, &global_lookup, &user, &mut clones, &mut helpers);
-                        Walk::Skip
-                    });
-                }
+                // A parameter named like a global depth sampler (`float lin(sampler2D
+                // depthtex0, ...)`) hides it: only clones treat their parameters.
+                crate::scope::walk_function_exprs(f, &mut |root, is_local| {
+                    let lookup = |n: &str| if is_local(n) { None } else { globals.get(n).copied() };
+                    rewrite_expr(root, &lookup, &user, &mut clones, &mut helpers);
+                });
             }
             ItemKind::Decl(d) => d.walk_exprs_mut(&mut |e| {
                 rewrite_expr(e, &global_lookup, &user, &mut clones, &mut helpers);
@@ -298,13 +298,10 @@ fn rewrite_reads(w: &mut StageWork, globals: &HashMap<String, Depth>) {
                     Some((p.name.clone()?, param_treatment(&p.ty)?))
                 })
                 .collect();
-            let lookup = |n: &str| params.get(n).copied().or_else(|| globals.get(n).copied());
-            for s in &mut f.body {
-                s.walk_exprs_mut(&mut |e| {
-                    rewrite_expr(e, &lookup, &user, &mut clones, &mut helpers);
-                    Walk::Skip
-                });
-            }
+            crate::scope::walk_function_exprs(&mut f, &mut |root, is_local| {
+                let lookup = |n: &str| if is_local(n) { params.get(n).copied() } else { globals.get(n).copied() };
+                rewrite_expr(root, &lookup, &user, &mut clones, &mut helpers);
+            });
             inserts.entry(i).or_default().push(Item { kind: ItemKind::Function(f), line: w.unit.items[i].line });
         }
     }

@@ -361,8 +361,17 @@ pub(crate) fn vertex_inputs(w: &mut StageWork, ctx: &Ctx) {
             vars: vec![Declarator { name: name.clone(), array: v.array.clone(), init: None }],
         };
         let mut text = crate::print::declaration(&decl);
-        if dims.is_empty() && ty.is_some() && d.ty.ty.array.is_empty() {
-            text.push_str(&format!(" = {ty_name}(0)"));
+        if dims.is_empty()
+            && let Some(t) = ty
+            && d.ty.ty.array.is_empty()
+        {
+            // GL's initial generic attribute value is (0, 0, 0, 1): what an attribute
+            // without a vertex buffer reads (narrower types read its first components).
+            if t.rows == 4 && t.cols == 1 {
+                text.push_str(&format!(" = {ty_name}(0, 0, 0, 1)"));
+            } else {
+                text.push_str(&format!(" = {ty_name}(0)"));
+            }
         }
         text.push(';');
         w.piece(Section::Derived, &[&name], text);
@@ -566,7 +575,9 @@ pub(crate) fn profile_pieces(w: &mut StageWork, ctx: &Ctx) {
     // Profile globals (vertex stage).
     if stage == ShaderStage::Vertex {
         for g in &p.globals {
-            w.piece(Section::ProfileGlobals, &[&g.name], format!("{} {} = {};", g.ty, g.name, g.init));
+            // Iris: chunks never fade in the shadow pass (`mc_chunkFade` is -1 there).
+            let init = if ctx.opts.is_shadow_pass && g.name == "mc_chunkFade" { "-1.0" } else { g.init.as_str() };
+            w.piece(Section::ProfileGlobals, &[&g.name], format!("{} {} = {};", g.ty, g.name, init));
         }
     }
     // gl_Fog.

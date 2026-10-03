@@ -83,6 +83,10 @@ struct Scope {
     depth: Option<ImageId>,
 }
 
+/// Vertices of a composite-style (`fullscreen` profile) draw: Iris' [0,1]^2 quad as two
+/// triangles, generated from `gl_VertexIndex` without vertex buffers.
+pub(crate) const FULLSCREEN_VERTICES: u32 = 6;
+
 impl Executor<'_> {
     /// Render `frames` frames.
     pub(crate) fn run(&mut self, frames: u32) -> Result<(), RuntimeError> {
@@ -1092,7 +1096,8 @@ impl Executor<'_> {
             if let Some((stages, _)) = push {
                 d.cmd_push_constants(cmd, playout, stages, 0, &push_bytes);
             }
-            d.cmd_draw(cmd, 3, 1, 0, 0);
+            // The `fullscreen` profile's quad: two triangles from gl_VertexIndex.
+            d.cmd_draw(cmd, FULLSCREEN_VERTICES, 1, 0, 0);
         }
         self.gpu.cmd_end_rendering(cmd);
         full_barrier(&self.gpu.device, cmd);
@@ -1127,9 +1132,17 @@ impl Executor<'_> {
             return;
         }
         let feats = self.gpu.format_features(img.desc.format);
-        if !feats.contains(vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST) {
-            let msg = format!("{}: format {:?} cannot be blitted; mipmaps are not generated", img.desc.name, img.desc.format);
-            self.warn(msg);
+        if !crate::mipgen::can_blit(feats) {
+            // Render the levels instead (lavapipe cannot blit into B10G11R11_UFLOAT).
+            let (name, format) = (img.desc.name.clone(), img.desc.format);
+            let result = if crate::mipgen::can_render(format, feats) {
+                self.render_mips(cmd, image)
+            } else {
+                Err(RuntimeError::Unsupported(format!("format {format:?} can neither be blitted nor rendered")))
+            };
+            if let Err(e) = result {
+                self.warn(format!("{name}: mipmaps are not generated: {e}"));
+            }
             return;
         }
         let filter = if texel::numeric_class(img.desc.format) == NumericClass::Float && feats.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR) { vk::Filter::LINEAR } else { vk::Filter::NEAREST };

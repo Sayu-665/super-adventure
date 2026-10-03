@@ -169,6 +169,10 @@ fn set_location(item: &mut Item, location: u32, flat: bool, env: &crate::constev
         }
     }
     if !flat {
+        // A producer output the consumer reads smoothly (see `assign_locations`).
+        if let ItemKind::Decl(d) = &mut item.kind {
+            d.ty.quals.retain(|x| !matches!(x, Qualifier::Interp(Interp::Flat)));
+        }
         return;
     }
     match &mut item.kind {
@@ -666,10 +670,13 @@ fn assign_locations(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
         let n = slot_count(input, &structs, &env);
         let wanted = producer_name(&input.name, ctx);
         let pname = outputs.iter().find(|o| o.name == wanted || o.name == input.name).cloned();
+        // The consumer's interpolation qualifier decides (GLSL 4.30+, Vulkan): a `flat`
+        // producer output does not make a smooth fragment input flat. Integer varyings
+        // must be flat on both sides.
         let flat = input.flat
             || int_like(&input.elem, &structs)
             || input.block.as_ref().is_some_and(|f| f.iter().any(|x| int_like(&x.ty, &structs)))
-            || pname.as_ref().is_some_and(|o| o.flat || int_like(&o.elem, &p_structs));
+            || pname.as_ref().is_some_and(|o| int_like(&o.elem, &p_structs));
         set_location(item_mut(c, input), next, flat, &env);
         if let Some(o) = &pname {
             set_location(item_mut(p, o), next, flat, &p_env);
