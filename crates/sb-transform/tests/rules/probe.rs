@@ -173,3 +173,13 @@ fn probe_gs_profile_global_referenced() {
         Err(e) => println!("ERR {e:?}"),
     }
 }
+
+#[test]
+fn probe_gs_pass() {
+    let vs = "#version 150\nin vec3 vaPosition;\nvoid main() { gl_Position = vec4(vaPosition, 1.0); }\n";
+    let gs = "#version 150\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; EmitVertex(); } }\n";
+    let fs = "#version 150\nuniform vec4 entityColor;\nout vec4 c;\nvoid main() { c = entityColor; }\n";
+    let out = T::new("vanilla_entity").vs(vs).gs(gs).fs(fs).run();
+    show("gs pass", &out);
+}

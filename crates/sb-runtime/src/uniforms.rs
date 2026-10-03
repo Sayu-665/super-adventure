@@ -83,13 +83,58 @@ pub(crate) struct FrameState {
     pub up_position: Vec3,
     pub fog_color: [f32; 3],
     pub sky_color: [f32; 3],
+    /// Environmental fog (`FogData.environmentalStart/End`): Iris' `fogStart` / `fogEnd`
+    /// and `gl_Fog.start` / `.end`. See [`Fog`].
     pub fog_start: f32,
     pub fog_end: f32,
+    /// Render-distance fog (`FogData.renderDistanceStart/End`).
+    pub render_fog_start: f32,
+    pub render_fog_end: f32,
+    /// `FogData.skyEnd` / `cloudEnd`.
+    pub sky_fog_end: f32,
+    pub cloud_fog_end: f32,
     pub rain: f32,
     pub thunder: f32,
     pub moon_phase: i32,
     pub center_depth: f32,
     pub sun_path_rotation: f64,
+}
+
+/// Minecraft 26.3's fog distances (`FogRenderer.setupFog` with the overworld's
+/// `AtmosphericFogEnvironment`) for a camera in the open.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Fog {
+    pub environmental: (f32, f32),
+    pub render_distance: (f32, f32),
+    pub sky_end: f32,
+    pub cloud_end: f32,
+}
+
+/// What Distant Horizons writes into `FogData` when it disables vanilla fog
+/// (`MixinFogRenderer`: `A_REALLY_REALLY_BIG_VALUE` / `A_EVEN_LARGER_VALUE`).
+pub(crate) const DH_NO_FOG: (f32, f32) = (420_694_206_942_069.0, 42_069_420_694_206_942_069.0);
+
+impl Fog {
+    /// * environmental fog: the `visual/fog_start_distance` / `fog_end_distance`
+    ///   attribute defaults (0 and 1024 blocks; the overworld does not override them),
+    ///   pulled in by rain (`-160` / `-256` blocks at full rain, the end never below 96);
+    /// * render-distance fog: the last `clamp(rd / 10, 4, 64)` blocks of the render
+    ///   distance;
+    /// * sky / cloud fog ends: `min(rd, 512)` and the 2048-block default cloud range.
+    ///
+    /// Distant Horizons (`fog.enableVanillaFog = false`, its default) replaces the
+    /// environmental and render-distance distances with huge values while it renders, so
+    /// packs see no vanilla fog in front of the LODs (Iris reads the same `FogData`).
+    pub fn new(render_distance_blocks: f32, rain: f32, distant_horizons: bool) -> Self {
+        let rain = if rain.is_finite() { rain.clamp(0.0, 1.0) } else { 0.0 };
+        let span = (render_distance_blocks / 10.0).clamp(4.0, 64.0);
+        let (environmental, render_distance) = if distant_horizons {
+            (DH_NO_FOG, DH_NO_FOG)
+        } else {
+            ((-160.0 * rain, (1024.0 - 256.0 * rain).max(96.0)), (render_distance_blocks - span, render_distance_blocks))
+        };
+        Self { environmental, render_distance, sky_end: render_distance_blocks.min(512.0), cloud_end: 2048.0 }
+    }
 }
 
 fn mix3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -149,8 +194,7 @@ impl FrameState {
         let sky_color = mix3([0.0, 0.0, 0.02], [0.47, 0.65, 1.0], daylight).map(|c| c * dim);
         let fog_color = mix3([0.02, 0.02, 0.05], [0.75, 0.85, 1.0], daylight).map(|c| c * dim);
         let frame_time = if s.frame_time.is_finite() && s.frame_time > 0.0 { s.frame_time.min(1.0) } else { 1.0 / 60.0 };
-        let fog_end = far as f32;
-        let fog_start = fog_end - (fog_end / 10.0).clamp(4.0, 64.0);
+        let fog = Fog::new(rd_blocks as f32, rain, inp.dh);
         Self {
             frame_counter: inp.frame % FRAME_COUNTER_WRAP,
             frame_time,
@@ -180,8 +224,12 @@ impl FrameState {
             up_position,
             fog_color,
             sky_color,
-            fog_start,
-            fog_end,
+            fog_start: fog.environmental.0,
+            fog_end: fog.environmental.1,
+            render_fog_start: fog.render_distance.0,
+            render_fog_end: fog.render_distance.1,
+            sky_fog_end: fog.sky_end,
+            cloud_fog_end: fog.cloud_end,
             rain,
             thunder,
             moon_phase: world_day.rem_euclid(8) as i32,
@@ -422,6 +470,13 @@ pub(crate) fn builtin_value(name: &str, f: &FrameState, d: &DrawState) -> Option
         "dhNearPlane" => fl(f.dh_near),
         "dhFarPlane" => fl(f.dh_far),
         "dhRenderDistance" => Value::Int(f.dh_render_distance),
+        // Voxy is not part of the synthetic scene: no LOD distance, and the LOD matrices
+        // equal the level's (what a pack falls back to when it combines both).
+        "vxRenderDistance" => Value::Int(0),
+        "vxProj" | "vxProjPrev" => m4(&f.projection),
+        "vxProjInv" => m4(&f.projection.inverse_or_identity()),
+        "vxModelView" | "vxModelViewPrev" => m4(&f.model_view),
+        "vxModelViewInv" => m4(&f.model_view_inverse()),
         "modelViewMatrix" => m4(&d.model_view),
         "modelViewMatrixInverse" => m4(&d.model_view.inverse_or_identity()),
         "projectionMatrix" => m4(&d.projection),
@@ -455,9 +510,12 @@ pub(crate) fn host_member_value(block: &str, member: &str, f: &FrameState, d: &D
         ("DynamicTransforms", "ModelOffset") => Value::Vec3(d.model_offset),
         ("Projection", "ProjMat") => m4(&d.projection),
         ("Fog", "FogColor") => Value::Vec4([f.fog_color[0], f.fog_color[1], f.fog_color[2], 1.0]),
-        ("Fog", "FogEnvironmentalStart" | "FogRenderDistanceStart") => Value::Float(f.fog_start),
-        ("Fog", "FogEnvironmentalEnd" | "FogRenderDistanceEnd") => Value::Float(f.fog_end),
-        ("Fog", "FogSkyEnd" | "FogCloudsEnd") => Value::Float(f.fog_end),
+        ("Fog", "FogEnvironmentalStart") => Value::Float(f.fog_start),
+        ("Fog", "FogEnvironmentalEnd") => Value::Float(f.fog_end),
+        ("Fog", "FogRenderDistanceStart") => Value::Float(f.render_fog_start),
+        ("Fog", "FogRenderDistanceEnd") => Value::Float(f.render_fog_end),
+        ("Fog", "FogSkyEnd") => Value::Float(f.sky_fog_end),
+        ("Fog", "FogCloudsEnd") => Value::Float(f.cloud_fog_end),
         ("vertUniqueUniformBlock", "uModelOffset") => Value::Vec3(d.dh_model_offset),
         ("vertSharedUniformBlock", "uIsWhiteWorld") => b(false),
         ("vertSharedUniformBlock", "uWorldYOffset") => Value::Float(crate::scene::dh::REGION_MIN_Y as f32),
@@ -483,7 +541,8 @@ pub(crate) fn host_member_value(block: &str, member: &str, f: &FrameState, d: &D
         ("u_Globals", "u_ProjectionMatrix") => m4(&d.projection),
         ("u_Globals", "u_ModelViewMatrix") => m4(&d.model_view),
         ("u_Globals", "u_FogColor") => Value::Vec4([f.fog_color[0], f.fog_color[1], f.fog_color[2], 1.0]),
-        ("u_Globals", "u_EnvironmentFog" | "u_RenderFog") => Value::Vec2([f.fog_start, f.fog_end]),
+        ("u_Globals", "u_EnvironmentFog") => Value::Vec2([f.fog_start, f.fog_end]),
+        ("u_Globals", "u_RenderFog") => Value::Vec2([f.render_fog_start, f.render_fog_end]),
         ("u_Globals", "u_TexelSize") => Value::Vec2(d.texture_size.map(|s| 1.0 / s.max(1) as f32)),
         // A 1/64-texel nudge of each corner towards its quad centre (against bleeding).
         ("u_Globals", "u_TexCoordShrink") => Value::Vec2(d.texture_size.map(|s| 1.0 / (64.0 * s.max(1) as f32))),
@@ -634,6 +693,10 @@ mod tests {
     use sb_uniforms::Frequency;
 
     fn state() -> FrameState {
+        state_with_dh(true)
+    }
+
+    fn state_with_dh(dh: bool) -> FrameState {
         let scene = SceneParams::default();
         let settings = PackSettings::default();
         let shadow = ShadowSettings::default();
@@ -645,7 +708,7 @@ mod tests {
             frame: 3,
             settings: &settings,
             shadow: &shadow,
-            dh: true,
+            dh,
             unified_projection: false,
             center_depth: 0.5,
         })
@@ -750,6 +813,30 @@ mod tests {
         assert!((f.projection.project_point([0.0, 0.0, -NEAR])[2] + 1.0).abs() < 1e-9);
         let d = DrawState::new(&f);
         assert_eq!(builtin_value("far", &f, &d), Some(Value::Float(64.0)));
+    }
+
+    /// Iris' `fogStart` / `fogEnd` are Minecraft's environmental fog (0 / 1024 blocks in
+    /// the open overworld), not the render-distance fog; Distant Horizons pushes both out
+    /// of reach while it renders LODs.
+    #[test]
+    fn fog_follows_minecraft_and_distant_horizons() {
+        let f = state_with_dh(false);
+        let d = DrawState::new(&f);
+        assert_eq!(builtin_value("fogStart", &f, &d), Some(Value::Float(0.0)));
+        assert_eq!(builtin_value("fogEnd", &f, &d), Some(Value::Float(1024.0)));
+        assert_eq!(host_member_value("Fog", "FogRenderDistanceStart", &f, &d), Some(Value::Float(57.6)));
+        assert_eq!(host_member_value("Fog", "FogRenderDistanceEnd", &f, &d), Some(Value::Float(64.0)));
+        assert_eq!(host_member_value("Fog", "FogSkyEnd", &f, &d), Some(Value::Float(64.0)));
+        assert_eq!(host_member_value("Fog", "FogCloudsEnd", &f, &d), Some(Value::Float(2048.0)));
+        let rain = Fog::new(64.0, 1.0, false);
+        assert_eq!(rain.environmental, (-160.0, 768.0));
+        assert_eq!(Fog::new(512.0, 0.0, false).render_distance, (460.8, 512.0));
+        assert_eq!(Fog::new(2048.0, 0.0, false).render_distance, (1984.0, 2048.0));
+        let dh = Fog::new(64.0, 0.5, true);
+        assert_eq!((dh.environmental, dh.render_distance), (DH_NO_FOG, DH_NO_FOG));
+        let f = state();
+        assert_eq!(builtin_value("fogStart", &f, &DrawState::new(&f)), Some(Value::Float(DH_NO_FOG.0)));
+        assert!(Fog::new(64.0, f32::NAN, false).environmental.1 == 1024.0);
     }
 
     #[test]

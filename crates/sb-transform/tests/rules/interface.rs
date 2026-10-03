@@ -17,9 +17,10 @@ fn iface(r: &Reflection, outputs: bool) -> BTreeMap<String, (u32, u32, bool)> {
     let v = if outputs { &r.outputs } else { &r.inputs };
     v.iter()
         .map(|x| {
-            // Generated names: `sb_vin_X` (geometry inputs) pairs with `sb_v_X`, and the
-            // forwarded profile global `X` with the vertex output `sb_vary_X`.
-            let name = x.name.replace("sb_vin_", "sb_v_").replace("sb_vary_", "");
+            // Generated names: `sb_vin_X` (per-vertex inputs) pairs with `sb_v_X`, and the
+            // forwarded profile global `X` (fragment input) and `sb_varyin_X` (per-vertex
+            // input) with the output `sb_vary_X`.
+            let name = x.name.replace("sb_varyin_", "").replace("sb_vin_", "sb_v_").replace("sb_vary_", "");
             let key = match name.split_once('.') {
                 Some((_, member)) => format!("<block>.{member}"),
                 None => name,
@@ -250,6 +251,21 @@ fn fixed_function_varyings_and_their_defaults() {
     let out = T::fullscreen().vs(vs).fs(fs).run();
     contains_all(out.vs(), &["sb_v_Color = sb_gl_Color;", "sb_v_SecondaryColor = vec4(0.5);"]);
     linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
+    // GL_CLAMP_VERTEX_COLOR (TRUE in compatibility contexts) clamps the colors per vertex
+    // after the last pre-raster stage, before interpolation.
+    let main = &out.vs()[out.vs().find("void main()").unwrap()..];
+    contains_all(main, &["sb_user_main();", "sb_v_Color = clamp(sb_v_Color, 0.0, 1.0);", "sb_v_SecondaryColor = clamp(sb_v_SecondaryColor, 0.0, 1.0);"]);
+    // Through a geometry stage only the geometry stage clamps (before every emit).
+    let vs = "#version 120\nvoid main() { gl_Position = ftransform(); gl_FrontColor = gl_Color * 4.0; }\n";
+    let gs = "#version 150 compatibility\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; gl_FrontColor = gl_FrontColorIn[i]; EmitVertex(); } }\n";
+    let fs = "#version 120\nvoid main() { gl_FragColor = gl_Color; }\n";
+    let out = T::gbuffers().vs(vs).gs(gs).fs(fs).run();
+    contains_none(out.vs(), &["clamp("]);
+    contains_all(out.glsl(ShaderStage::Geometry), &["sb_v_Color = clamp(sb_v_Color, 0.0, 1.0);\n    vec4 sb_packPosition = gl_Position;"]);
+    // Fixed-function colors nobody reads are not touched.
+    let out = T::fullscreen().vs(vs).fs("#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n").run();
+    contains_none(out.vs(), &["clamp("]);
 }
 
 #[test]
@@ -291,10 +307,63 @@ fn varying_profile_globals_pass_through_a_geometry_stage() {
     let fs = "#version 150\nuniform vec4 entityColor;\nout vec4 c;\nvoid main() { c = entityColor; }\n";
     let out = T::new("vanilla_entity").vs(vs).gs(gs).fs(fs).run();
     contains_all(out.vs(), &["sb_vary_entityColor = entityColor;"]);
-    contains_all(out.glsl(ShaderStage::Geometry), &["in vec4 sb_vary_entityColor[];", "entityColor = sb_vary_entityColor[0];"]);
+    contains_all(
+        out.glsl(ShaderStage::Geometry),
+        &["in vec4 sb_varyin_entityColor[];", "out vec4 sb_vary_entityColor;", "sb_vary_entityColor = sb_varyin_entityColor[0];"],
+    );
     contains_all(out.fs(), &["in vec4 entityColor;"]);
     linked(&out, ShaderStage::Vertex, ShaderStage::Geometry);
     linked(&out, ShaderStage::Geometry, ShaderStage::Fragment);
+}
+
+#[test]
+fn varying_profile_globals_read_by_an_intermediate_stage_are_forwarded_once() {
+    // The geometry stage reads entityColor itself (declared as a uniform, as packs do)
+    // and the fragment stage reads it too: one per-vertex input, one output carrying the
+    // geometry stage's value (it used to declare both twice).
+    let vs = "#version 150\nin vec3 vaPosition;\nvoid main() { gl_Position = vec4(vaPosition, 1.0); }\n";
+    let gs = "#version 150\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\nuniform vec4 entityColor;\nout vec4 tint;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; tint = entityColor * 0.5; EmitVertex(); } }\n";
+    let fs = "#version 150\nuniform vec4 entityColor;\nin vec4 tint;\nout vec4 c;\nvoid main() { c = entityColor * tint; }\n";
+    let out = T::new("vanilla_entity").vs(vs).gs(gs).fs(fs).run();
+    let g = out.glsl(ShaderStage::Geometry);
+    assert_eq!(g.matches("in vec4 sb_varyin_entityColor[];").count(), 1, "{g}");
+    contains_all(g, &["entityColor = sb_varyin_entityColor[0];", "out vec4 sb_vary_entityColor;", "sb_vary_entityColor = entityColor;"]);
+    linked(&out, ShaderStage::Vertex, ShaderStage::Geometry);
+    linked(&out, ShaderStage::Geometry, ShaderStage::Fragment);
+    // A fixed-function input the geometry stage reads is not declared twice either when
+    // the stage does not write the matching output.
+    let vs = "#version 120\nvoid main() { gl_Position = ftransform(); gl_FrontColor = gl_Color; }\n";
+    let gs = "#version 150 compatibility\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\nout float shade;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; shade = gl_FrontColorIn[i].r; EmitVertex(); } }\n";
+    let fs = "#version 120\nvarying float shade;\nvoid main() { gl_FragData[0] = gl_Color * shade; }\n";
+    let out = T::gbuffers().vs(vs).gs(gs).fs(fs).run();
+    let g = out.glsl(ShaderStage::Geometry);
+    assert_eq!(g.matches("in vec4 sb_vin_Color[];").count(), 1, "{g}");
+    contains_all(g, &["sb_v_Color = sb_vin_Color[0];"]);
+    linked(&out, ShaderStage::Geometry, ShaderStage::Fragment);
+}
+
+#[test]
+fn varying_profile_globals_pass_through_tessellation() {
+    // entityColor used to reach the fragment stage as zero through tessellation stages.
+    let vs = "#version 400\nin vec3 vaPosition;\nout vec3 p;\nvoid main() { p = vaPosition; }\n";
+    let tcs = "#version 400\nlayout(vertices = 3) out;\nin vec3 p[];\nout vec3 q[];\n\
+               void main() { q[gl_InvocationID] = p[gl_InvocationID]; gl_TessLevelOuter[0] = 1.0; gl_TessLevelOuter[1] = 1.0; gl_TessLevelOuter[2] = 1.0; gl_TessLevelInner[0] = 1.0; }\n";
+    let tes = "#version 400\nlayout(triangles) in;\nin vec3 q[];\nvoid main() { gl_Position = vec4(q[0] * gl_TessCoord.x + q[1] * gl_TessCoord.y + q[2] * gl_TessCoord.z, 1.0); }\n";
+    let fs = "#version 400\nuniform vec4 entityColor;\nout vec4 c;\nvoid main() { c = entityColor; }\n";
+    let out = T::new("vanilla_entity")
+        .vs(vs)
+        .stage(ShaderStage::TessControl, tcs)
+        .stage(ShaderStage::TessEval, tes)
+        .fs(fs)
+        .run();
+    contains_all(out.glsl(ShaderStage::TessControl), &["sb_vary_entityColor[gl_InvocationID] = sb_varyin_entityColor[gl_InvocationID];"]);
+    contains_all(out.glsl(ShaderStage::TessEval), &["sb_vary_entityColor = sb_varyin_entityColor[0];"]);
+    contains_none(out.glsl(ShaderStage::TessEval), &["vec4(0)"]);
+    linked(&out, ShaderStage::Vertex, ShaderStage::TessControl);
+    linked(&out, ShaderStage::TessControl, ShaderStage::TessEval);
+    linked(&out, ShaderStage::TessEval, ShaderStage::Fragment);
 }
 
 #[test]

@@ -261,15 +261,36 @@ fn int_like(ty: &TypeSpec, structs: &HashMap<String, StructDef>) -> bool {
     }
 }
 
-/// The producer output a consumer input is matched with.
-fn producer_name(input: &str, producer: ShaderStage, ctx: &Ctx) -> String {
+/// The producer output a consumer input is matched with. Generated varyings travel
+/// between pre-rasterization stages under their output names and are read through
+/// per-vertex inputs with distinct names: fixed-function varyings as `sb_v_X` /
+/// `sb_vin_X[]`, varying profile globals `g` as `sb_vary_g` / `sb_varyin_g[]` (the
+/// fragment stage reads `g` itself).
+fn producer_name(input: &str, ctx: &Ctx) -> String {
     if let Some(rest) = input.strip_prefix("sb_vin_") {
         return format!("sb_v_{rest}");
     }
-    if producer == ShaderStage::Vertex && ctx.varying_globals.contains_key(input) {
+    if let Some(rest) = input.strip_prefix("sb_varyin_") {
+        return format!("sb_vary_{rest}");
+    }
+    if ctx.varying_globals.contains_key(input) {
         return format!("sb_vary_{input}");
     }
     input.to_string()
+}
+
+/// The per-vertex input an intermediate stage forwards the generated varying `pname`
+/// from (see [`producer_name`]).
+fn forwarded_input(pname: &str) -> Option<String> {
+    if let Some(rest) = pname.strip_prefix("sb_v_") {
+        return Some(format!("sb_vin_{rest}"));
+    }
+    pname.strip_prefix("sb_vary_").map(|rest| format!("sb_varyin_{rest}"))
+}
+
+/// Whether the stage already declares an interface variable named `name`.
+fn declares(w: &StageWork, name: &str) -> bool {
+    w.gen_iface.iter().chain(&w.unit.items).any(|i| matches!(&i.kind, ItemKind::Decl(d) if d.vars.iter().any(|v| v.name == name)))
 }
 
 fn same_type(a: &IVar, b: &IVar) -> bool {
@@ -348,7 +369,7 @@ pub(crate) fn link(works: &mut [StageWork], ctx: &Ctx) {
     // First-stage inputs are vertex attributes (profile inputs), not varyings.
     for c in 1..works.len() {
         let (left, right) = works.split_at_mut(c);
-        assign_locations(&mut left[c - 1], &mut right[0]);
+        assign_locations(&mut left[c - 1], &mut right[0], ctx);
     }
 }
 
@@ -385,7 +406,7 @@ fn resolve(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
     let mut consumed: BTreeSet<String> = BTreeSet::new();
     let mut remove_inputs: Vec<IVar> = Vec::new();
     for input in &inputs {
-        let pname = producer_name(&input.name, p.stage, ctx);
+        let pname = producer_name(&input.name, ctx);
         if let Some(out) = outputs.iter().find(|o| o.name == pname) {
             consumed.insert(pname.clone());
             if same_type(out, input) {
@@ -444,6 +465,37 @@ fn add_producer_output(p: &mut StageWork, input: &IVar, pname: &str, ctx: &Ctx, 
     let decl = output_decl(p, input, pname);
     p.add_iface(&decl);
     let is_generated = pname.starts_with("sb_v_") || pname.starts_with("sb_vary_") || ctx.varying_globals.contains_key(pname);
+    // Intermediate stages (tessellation, geometry) forward generated varyings: a varying
+    // profile global the stage holds itself (it reads or writes it) with its own value,
+    // anything else from its per-vertex input (the first vertex; the control point of
+    // the invocation in a tessellation control stage).
+    if p.stage != ShaderStage::Vertex
+        && input.block.is_none()
+        && let Some(in_name) = forwarded_input(pname)
+    {
+        let own = pname
+            .strip_prefix("sb_vary_")
+            .filter(|g| p.has_piece(g) || crate::compat::pack_globals(&p.unit).contains_key(*g))
+            .map(str::to_string);
+        let vertex = if p.stage == ShaderStage::TessControl { "gl_InvocationID" } else { "0" };
+        let source = match own {
+            Some(g) => g,
+            None => {
+                if !declares(p, &in_name) {
+                    let dims = crate::print::array_dims(&input.dims);
+                    let flat = if input.flat { "flat " } else { "" };
+                    p.add_iface(&format!("{flat}in {} {in_name}[]{dims};", crate::print::type_spec(&input.elem)));
+                }
+                format!("{in_name}[{vertex}]")
+            }
+        };
+        match p.stage {
+            ShaderStage::Geometry => p.emit_hooks.push(format!("{pname} = {source};")),
+            ShaderStage::TessControl => p.epilogue.push(format!("{pname}[gl_InvocationID] = {source};")),
+            _ => p.epilogue.push(format!("{pname} = {source};")),
+        }
+        return;
+    }
     match p.stage {
         ShaderStage::Vertex => {
             if let Some(g) = pname.strip_prefix("sb_vary_") {
@@ -463,14 +515,6 @@ fn add_producer_output(p: &mut StageWork, input: &IVar, pname: &str, ctx: &Ctx, 
                     );
                 }
             }
-        }
-        ShaderStage::Geometry if is_generated && input.block.is_none() => {
-            // Forward from the first input vertex.
-            let in_name = if let Some(rest) = pname.strip_prefix("sb_v_") { format!("sb_vin_{rest}") } else { format!("sb_vary_{pname}") };
-            let dims = crate::print::array_dims(&input.dims);
-            let flat = if input.flat { "flat " } else { "" };
-            p.add_iface(&format!("{flat}in {} {in_name}[]{dims};", crate::print::type_spec(&input.elem)));
-            p.emit_hooks.push(format!("{pname} = {in_name}[0];"));
         }
         _ => {
             if input.block.is_none()
@@ -609,7 +653,7 @@ fn repair_mismatch(
     );
 }
 
-fn assign_locations(p: &mut StageWork, c: &mut StageWork) {
+fn assign_locations(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
     let inputs = collect(c, true);
     let outputs = collect(p, false);
     let structs = struct_defs(c);
@@ -620,14 +664,8 @@ fn assign_locations(p: &mut StageWork, c: &mut StageWork) {
     let mut matched: BTreeSet<String> = BTreeSet::new();
     for input in &inputs {
         let n = slot_count(input, &structs, &env);
-        let pname = outputs
-            .iter()
-            .find(|o| {
-                o.name == input.name
-                    || input.name.strip_prefix("sb_vin_").is_some_and(|r| o.name == format!("sb_v_{r}"))
-                    || o.name == format!("sb_vary_{}", input.name)
-            })
-            .cloned();
+        let wanted = producer_name(&input.name, ctx);
+        let pname = outputs.iter().find(|o| o.name == wanted || o.name == input.name).cloned();
         let flat = input.flat
             || int_like(&input.elem, &structs)
             || input.block.as_ref().is_some_and(|f| f.iter().any(|x| int_like(&x.ty, &structs)))

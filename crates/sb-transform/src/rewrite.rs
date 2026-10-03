@@ -35,8 +35,23 @@ pub(crate) fn rewrite_stage(w: &mut StageWork, ctx: &Ctx) {
     epilogues(w, ctx);
 }
 
-/// After linking: geometry-stage `EmitVertex()` hooks.
-pub(crate) fn finish_stage(w: &mut StageWork, _ctx: &Ctx) {
+/// After linking: fixed-function color clamping and geometry-stage `EmitVertex()`
+/// hooks.
+pub(crate) fn finish_stage(w: &mut StageWork, ctx: &Ctx) {
+    // `GL_CLAMP_VERTEX_COLOR` is TRUE by default in compatibility contexts: the
+    // fixed-function colors leaving the last pre-rasterization stage are clamped to
+    // [0, 1] per vertex (before interpolation).
+    if ctx.last_pre_raster == Some(w.stage) {
+        for name in ["sb_v_Color", "sb_v_SecondaryColor"] {
+            let is_output = w.gen_iface.iter().any(|i| {
+                matches!(&i.kind, ItemKind::Decl(d) if d.vars.iter().any(|v| v.name == name) && crate::analyze::is_output(w.stage, &d.ty.quals))
+            });
+            if is_output {
+                let clamp = format!("{name} = clamp({name}, 0.0, 1.0);");
+                if w.stage == ShaderStage::Geometry { w.emit_hooks.push(clamp) } else { w.epilogue.push(clamp) }
+            }
+        }
+    }
     if w.stage != ShaderStage::Geometry || (w.emit_hooks.is_empty() && w.emit_position.is_empty()) {
         return;
     }
@@ -1017,9 +1032,10 @@ fn varying_global_inputs(w: &mut StageWork, ctx: &Ctx) {
             ShaderStage::Fragment => w.add_iface(&format!("{flat}in {ty} {name};")),
             _ => {
                 // Pre-raster consumers read the first vertex's value through a global.
-                w.add_iface(&format!("{flat}in {ty} sb_vary_{name}[];"));
+                let vertex = if w.stage == ShaderStage::TessControl { "gl_InvocationID" } else { "0" };
+                w.add_iface(&format!("{flat}in {ty} sb_varyin_{name}[];"));
                 w.piece(Section::Late, &[name], format!("{ty} {name};"));
-                w.prologue.push(format!("{name} = sb_vary_{name}[0];"));
+                w.prologue.push(format!("{name} = sb_varyin_{name}[{vertex}];"));
             }
         }
     }
