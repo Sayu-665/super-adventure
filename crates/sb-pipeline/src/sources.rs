@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 /// (long-lived sessions, e.g. the JNI layer).
 #[derive(Clone)]
 pub enum PackRef<'p> {
+    /// A pack the caller owns (one-shot compiles).
     Borrowed(&'p ShaderPack),
+    /// A shared pack (sessions that outlive the caller's borrow).
     Shared(Arc<ShaderPack>),
 }
 

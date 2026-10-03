@@ -27,11 +27,11 @@ use std::time::Instant;
 /// Depth convention (ARCHITECTURE §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DepthArg {
-    /// Forward Z in [0,1] (LESS, clear 1).
+    /// Forward Z in `[0,1]` (LESS, clear 1).
     Forward,
-    /// Reversed Z in [0,1] (GEQUAL, clear 0; Minecraft 26.2+).
+    /// Reversed Z in `[0,1]` (GEQUAL, clear 0; Minecraft 26.2+).
     Reversed,
-    /// GL [-1,1] (no remap; needs depth clip control).
+    /// GL `[-1,1]` (no remap; needs depth clip control).
     Gl,
 }
 

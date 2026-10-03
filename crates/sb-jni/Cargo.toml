@@ -1,9 +1,32 @@
 [package]
 name = "sb-jni"
+description = "ShaderBridge JNI library: the native side of dev.shaderbridge.natives.ShaderBridgeNative (handle registry, compile sessions, custom-uniform evaluators)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+# cdylib: the library the Java mod loads (libsb_jni.so / sb_jni.dll / libsb_jni.dylib).
+# rlib: lets tests and other Rust code call the pure-Rust `api` layer without a JVM.
+crate-type = ["cdylib", "rlib"]
+# No doc examples: the API is exercised by the unit tests (and the Java smoke test).
+doctest = false
+
 [dependencies]
 sb-core.workspace = true
+sb-pack.workspace = true
+sb-expr.workspace = true
+sb-uniforms.workspace = true
+sb-transform.workspace = true
+sb-pipeline.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+jni.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+zip.workspace = true

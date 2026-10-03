@@ -88,18 +88,26 @@ pub fn parse_draw_buffers(fragment: &str, diags: &mut Diagnostics) -> Option<Vec
 /// Type keyword of a const directive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstType {
+    /// `const int` (also used for string-valued directives such as formats).
     Int,
+    /// `const float`.
     Float,
+    /// `const vec2`.
     Vec2,
+    /// `const ivec3`.
     Ivec3,
+    /// `const vec4`.
     Vec4,
+    /// `const bool`.
     Bool,
 }
 
 /// One `const <type> <key> = <value>;` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstDirective {
+    /// Declared type.
     pub ty: ConstType,
+    /// Constant name.
     pub key: String,
     /// Raw value text (trimmed, before the `;`).
     pub value: String,
@@ -204,25 +212,38 @@ fn parse_floats<const N: usize>(value: &str, name: &str) -> Option<[f32; N]> {
 /// Settings of one colour buffer collected from directives.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BufferDirectives {
+    /// `<buf>Format`.
     pub format: Option<TextureFormat>,
+    /// `<buf>Clear`.
     pub clear: Option<bool>,
+    /// `<buf>ClearColor`.
     pub clear_color: Option<[f32; 4]>,
 }
 
 /// The pack-level directive state of one program folder (Iris `PackDirectives`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackDirectiveState {
+    /// colortex buffer settings by index (legacy aliases resolved).
     pub colortex: BTreeMap<u32, BufferDirectives>,
+    /// shadowcolor buffer settings by index.
     pub shadowcolor: BTreeMap<u32, BufferDirectives>,
+    /// Shadow-map consts (`shadowMapResolution`, filtering, mipmaps, ...).
     pub shadow: ShadowSettings,
-    /// `shadowMapResolution` etc. were set explicitly.
+    /// Names of the numeric consts that were set explicitly.
     pub shadow_explicit: BTreeSet<String>,
+    /// `noiseTextureResolution`.
     pub noise_texture_resolution: u32,
+    /// `sunPathRotation`.
     pub sun_path_rotation: f32,
+    /// `ambientOcclusionLevel` (clamped to 0..1).
     pub ambient_occlusion_level: f32,
+    /// `wetnessHalflife` (and, mirroring Iris, `drynessHalflife`).
     pub wetness_half_life: f32,
+    /// Dryness half-life (Iris never changes it from the default).
     pub dryness_half_life: f32,
+    /// `eyeBrightnessHalflife`.
     pub eye_brightness_half_life: f32,
+    /// `centerDepthHalflife`.
     pub center_depth_half_life: f32,
 }
 

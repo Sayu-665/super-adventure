@@ -74,7 +74,9 @@ pub struct ScheduleInput {
 /// Output of [`schedule`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Schedule {
+    /// Passes in execution order, with `flip_state` and `flips_after`.
     pub passes: Vec<Pass>,
+    /// Buffers flipped an odd number of times and not cleared: copied alt → main.
     pub end_of_frame_copies: Vec<u32>,
     /// Flip state when each group starts (after its `_pre` flips).
     pub group_state: BTreeMap<PassGroup, BTreeSet<u32>>,

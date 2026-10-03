@@ -35,6 +35,8 @@
 //! # let _ = (json, buffer);
 //! ```
 
+#![warn(missing_docs)]
+
 mod analysis;
 mod bindings;
 mod cache;
@@ -115,6 +117,7 @@ pub struct Timings {
     pub load_ms: f64,
     /// Per folder: preprocessing, analysis, translation, compilation.
     pub folders_ms: Vec<(String, f64)>,
+    /// The whole compile.
     pub total_ms: f64,
     /// The result came from the cache.
     pub cache_hit: bool,
@@ -136,9 +139,13 @@ pub struct CompileStats {
 /// The result of [`compile_pack`].
 #[derive(Debug, Clone)]
 pub struct CompileOutput {
+    /// The model (its `blobs` index matches [`BlobTable::concat`] of `blobs`).
     pub pack: CompiledPack,
+    /// SPIR-V and GLSL payloads referenced by the model.
     pub blobs: BlobTable,
+    /// Wall-clock timings.
     pub timings: Timings,
+    /// Program counts (empty for cached results).
     pub stats: CompileStats,
 }
 

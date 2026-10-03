@@ -20,7 +20,9 @@ pub struct ProgramSummary {
 /// One program folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderSummary {
+    /// `""` (pack root), `world0`, ...
     pub folder: String,
+    /// Dimension ids the folder serves (`*` wildcard).
     pub dimension_ids: Vec<String>,
     /// Enabled programs (default option values).
     pub programs: Vec<ProgramSummary>,
@@ -33,19 +35,33 @@ pub struct FolderSummary {
 /// What [`inspect`] reports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackSummary {
+    /// Pack name.
     pub name: String,
+    /// Program folders that would be compiled.
     pub folders: Vec<FolderSummary>,
+    /// Discovered options.
     pub option_count: usize,
+    /// `profile.*` definitions.
     pub profile_count: usize,
+    /// `screen.*` sub-screens.
     pub screen_count: usize,
+    /// Profile matching the default values, if any.
     pub current_profile: Option<String>,
+    /// `iris.features.required` as written.
     pub features_required: Vec<String>,
+    /// `iris.features.optional` as written.
     pub features_optional: Vec<String>,
+    /// Required flags ShaderBridge does not support.
     pub features_unsupported: Vec<String>,
+    /// `lang/*.lang` codes.
     pub languages: Vec<String>,
+    /// `uniform.*` / `variable.*` definitions.
     pub custom_uniform_count: usize,
+    /// Effective `texture.*` / `customTexture.*` entries.
     pub custom_texture_count: usize,
+    /// The pack has a `block.properties`.
     pub has_block_properties: bool,
+    /// Loading diagnostics (properties, options, id maps).
     pub diagnostics: Diagnostics,
 }
 

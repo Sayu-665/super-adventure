@@ -63,6 +63,7 @@ const KNOWN_PACK_BUGS: &[(&str, OptionSet, &str, &str)] = &[
     ("complementary-unbound", OptionSet::Max, "'nightMiddleSkyColor' : undeclared", "cloudColors.glsl uses overworld-only sky colors in the Nether/End folders"),
     ("ComplementaryReimagined", OptionSet::Max, "'translucentMult' : undeclared", "WATER_ALPHA_MULT > 100: water.glsl writes translucentMult, which dh_water never declares"),
     ("potato-shaders", OptionSet::Max, "'sRGB_P3D65' : undeclared", "sRGB_P3D65 is not defined anywhere in the pack"),
+    ("vanilla-plus-shader", OptionSet::Max, "'sRGB_P3D65' : undeclared", "sRGB_P3D65 is not defined anywhere in the pack"),
     ("redhat-shaders", OptionSet::Max, "'ENTITY_GLOWSTONE' : undeclared", "ENTITY_GLOWSTONE is not defined anywhere in the pack"),
     ("redhat-shaders", OptionSet::Max, "'lenscolor' : redefinition", "two lens-flare options both declare the local `lenscolor` in one scope"),
     ("renderpearl", OptionSet::Max, "'view_size' : no matching", "COMPASS calls view_size(), which the pack never defines"),

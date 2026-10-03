@@ -292,3 +292,21 @@ fn varyings_named_after_builtin_functions_are_renamed_on_both_sides() {
     assert!(!out.has_diag("xf.missing-varying"));
     linked(&out, ShaderStage::Vertex, ShaderStage::Fragment);
 }
+
+#[test]
+fn block_members_renamed_in_one_stage_still_link() {
+    // soft-voxels-lite shadow with vanilla_entity: the anonymous vertex block's member
+    // `Normal` collides with the profile input `Normal` and is renamed in the vertex
+    // stage only; interfaces match by location, so the program still links.
+    let vs = "#version 330\nin vec3 vaNormal;\nout vertexOut { vec2 uv; vec3 Normal; };\nvoid main() { gl_Position = vec4(0.0); uv = vec2(0.0); Normal = vaNormal; }\n";
+    let gs = "#version 330\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\nin vertexOut { vec2 uv; vec3 Normal; } vIn[];\nout vec3 n;\n\
+              void main() { for (int i = 0; i < 3; i++) { gl_Position = gl_in[i].gl_Position; n = vIn[i].Normal; EmitVertex(); } }\n";
+    let fs = "#version 330\nin vec3 n;\nout vec4 c;\nvoid main() { c = vec4(n, 1.0); }\n";
+    let out = T::new("vanilla_entity").vs(vs).gs(gs).fs(fs).run();
+    contains_all(out.vs(), &["vec3 sbu_Normal;", "sbu_Normal = vaNormal;"]);
+    contains_all(out.glsl(ShaderStage::Geometry), &["vec3 Normal; } vIn[];"]);
+    let vs_outs = iface(out.refl(ShaderStage::Vertex), true);
+    let gs_ins = iface(out.refl(ShaderStage::Geometry), false);
+    let locs = |m: &BTreeMap<String, (u32, u32, bool)>| m.values().map(|v| (v.0, v.1)).collect::<Vec<_>>();
+    assert_eq!(locs(&vs_outs), locs(&gs_ins));
+}

@@ -275,10 +275,20 @@ fn producer_name(input: &str, producer: ShaderStage, ctx: &Ctx) -> String {
 fn same_type(a: &IVar, b: &IVar) -> bool {
     crate::print::type_spec(&a.elem) == crate::print::type_spec(&b.elem)
         && crate::print::array_dims(&a.dims) == crate::print::array_dims(&b.dims)
-        && a.block.as_ref().map(|f| block_members(f)) == b.block.as_ref().map(|f| block_members(f))
+        && a.block.as_ref().map(|f| block_shape(f)) == b.block.as_ref().map(|f| block_shape(f))
 }
 
-/// Member names and types of an interface block (qualifiers ignored).
+/// Member types of an interface block in order. Vulkan matches interfaces by location,
+/// so member names may differ between stages (hygiene renames a member of an anonymous
+/// block that collides with a profile name in one stage only); types and order may not.
+fn block_shape(fields: &[Field]) -> Vec<String> {
+    fields
+        .iter()
+        .flat_map(|f| f.names.iter().map(move |(_, d)| format!("{}{}", crate::print::type_spec(&f.ty), crate::print::array_dims(d))))
+        .collect()
+}
+
+/// Member names and types of an interface block (qualifiers ignored), for messages.
 fn block_members(fields: &[Field]) -> Vec<String> {
     fields
         .iter()
@@ -380,8 +390,13 @@ fn resolve(p: &mut StageWork, c: &mut StageWork, ctx: &Ctx) {
             consumed.insert(pname.clone());
             if same_type(out, input) {
                 // Rule b: an output the producer never assigns (its name occurs only in
-                // the declaration) reads zero instead of an undefined value.
-                if !out.generated && out.block.is_none() && !p_refs.contains(&pname) && p.stage != ShaderStage::TessControl {
+                // the declaration) but the consumer reads is zero instead of undefined.
+                if !out.generated
+                    && out.block.is_none()
+                    && !p_refs.contains(&pname)
+                    && c_refs.contains(&input.name)
+                    && p.stage != ShaderStage::TessControl
+                {
                     zero_unwritten(p, out, &pname, &p_env);
                 }
                 continue;
@@ -482,7 +497,7 @@ fn zero_unwritten(p: &mut StageWork, out: &IVar, pname: &str, env: &crate::const
     } else {
         p.prologue.push(stmt);
     }
-    p.warn("xf.unwritten-varying", format!("`{pname}` is never written by the {} stage; it reads zero", p.stage), 0);
+    p.info("xf.unwritten-varying", format!("`{pname}` is never written by the {} stage; it reads zero", p.stage), 0);
 }
 
 /// Constant length of a one-dimensional array interface variable.

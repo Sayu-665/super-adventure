@@ -34,6 +34,8 @@ dependencies {
 // ---------------------------------------------------------------------------------------------
 // Native library (crates/sb-jni) built with cargo and packaged as /natives/<os>-<arch>/<lib>.
 // Skippable with -PskipNative; skipped with a warning when cargo or the sb-jni crate is missing.
+// The packaged copy has its debug info stripped (the release profile keeps line tables, ~10x
+// the code size); -PkeepNativeDebugInfo packages it unstripped.
 // ---------------------------------------------------------------------------------------------
 
 def repositoryRoot = rootProject.projectDir.parentFile
@@ -58,6 +60,7 @@ abstract class BuildNativeTask extends DefaultTask {
     @Internal abstract DirectoryProperty getCargoTargetDir()
     @Input abstract Property<String> getPlatform()
     @Input abstract Property<String> getLibraryFile()
+    @Input abstract Property<Boolean> getStripDebugInfo()
     @OutputDirectory abstract DirectoryProperty getOutputRoot()
 
     @Inject abstract ExecOperations getExecOperations()
@@ -81,13 +84,41 @@ abstract class BuildNativeTask extends DefaultTask {
         }
         File library = new File(cargoTargetDir.get().asFile, "release/" + libraryFile.get())
         if (!library.isFile()) {
-            logger.warn("buildNative: cargo did not produce {} (sb-jni is not a cdylib yet); skipping", library)
+            logger.warn("buildNative: cargo did not produce {}; the jar will not contain the native library", library)
             return
         }
         stagingDir.mkdirs()
-        java.nio.file.Files.copy(library.toPath(), new File(stagingDir, libraryFile.get()).toPath(),
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-        logger.lifecycle("buildNative: packaged {} as natives/{}/{}", library, platform.get(), libraryFile.get())
+        File staged = new File(stagingDir, libraryFile.get())
+        java.nio.file.Files.copy(library.toPath(), staged.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        if (stripDebugInfo.get()) {
+            stripDebug(staged)
+        }
+        logger.lifecycle("buildNative: packaged {} as natives/{}/{} ({} bytes)", library, platform.get(), libraryFile.get(), staged.length())
+    }
+
+    /** Removes debug sections (symbols stay, so native backtraces keep function names). */
+    private void stripDebug(File staged) {
+        String os = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+        if (os.contains("win")) {
+            return // MSVC keeps debug info in separate .pdb files
+        }
+        List<String> command = (os.contains("mac") || os.contains("darwin"))
+            ? ["strip", "-S", staged.absolutePath]
+            : ["strip", "--strip-debug", staged.absolutePath]
+        try {
+            def output = new ByteArrayOutputStream()
+            def result = execOperations.exec {
+                commandLine command
+                standardOutput = output
+                errorOutput = output
+                ignoreExitValue = true
+            }
+            if (result.exitValue != 0) {
+                logger.warn("buildNative: '{}' failed ({}); packaging the library with debug info", command.join(" "), output.toString().trim())
+            }
+        } catch (Exception e) {
+            logger.warn("buildNative: strip is not available ({}); packaging the library with debug info", e.message)
+        }
     }
 
     private boolean cargoAvailable() {
@@ -106,13 +137,17 @@ abstract class BuildNativeTask extends DefaultTask {
     }
 }
 
+// Where cargo puts its output: $CARGO_TARGET_DIR, or <repo>/target.
+def cargoTargetRoot = new File(System.getenv("CARGO_TARGET_DIR") ?: new File(repositoryRoot, "target").path)
+
 def buildNative = tasks.register("buildNative", BuildNativeTask) {
     group = "build"
     description = "Builds crates/sb-jni with cargo and stages it as a jar resource (skip with -PskipNative)."
     repoRoot.set(repositoryRoot)
-    cargoTargetDir.set(new File(System.getenv("CARGO_TARGET_DIR") ?: new File(repositoryRoot, "target").path))
+    cargoTargetDir.set(cargoTargetRoot)
     platform.set(nativePlatform())
     libraryFile.set(nativeLibraryFile())
+    stripDebugInfo.set(!project.hasProperty("keepNativeDebugInfo"))
     outputRoot.set(nativeResourceRoot)
     onlyIf("not disabled with -PskipNative") { !skipNative }
     // cargo tracks its own inputs; always ask it.
@@ -155,4 +190,21 @@ test {
     doFirst { testRunDir.mkdirs() }
     systemProperty "shaderbridge.repoRoot", repositoryRoot.absolutePath
     systemProperty "shaderbridge.nativeDir", nativeResourceRoot.get().asFile.absolutePath
+
+    // The native smoke tests load the library cargo built (target/release/libsb_jni.so, honouring
+    // $CARGO_TARGET_DIR) when buildNative produced it, and skip themselves otherwise (-PskipNative,
+    // no cargo). NativeCorpusSmokeTest also needs a shader pack corpus directory containing
+    // ComplementaryReimagined: -Pshaderbridge.corpus=<dir> or $SB_CORPUS_DIR.
+    dependsOn buildNative
+    def builtLibrary = new File(cargoTargetRoot, "release/" + nativeLibraryFile())
+    def corpusDir = project.findProperty("shaderbridge.corpus") ?: System.getenv("SB_CORPUS_DIR")
+    inputs.property("shaderbridge.corpus", corpusDir == null ? "" : file(corpusDir).absolutePath)
+    doFirst {
+        if (!skipNative && builtLibrary.isFile()) {
+            systemProperty "shaderbridge.native", builtLibrary.absolutePath
+        }
+        if (corpusDir != null) {
+            systemProperty "shaderbridge.corpus", file(corpusDir).absolutePath
+        }
+    }
 }

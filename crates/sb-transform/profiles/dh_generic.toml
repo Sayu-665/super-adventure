@@ -41,3 +41,11 @@ name = "dhMaterialId"
 type = "int"
 stage = "vertex"
 init = "int(aMaterial)"
+
+[code]
+fragment = """
+// Iris DHGenericTransformer: generic DH objects (beacon beams, clouds, API boxes) have no
+// block texture; packs share their dh_terrain fragment code, which calls these.
+bool dh_hasTexture() { return false; }
+vec4 dh_sampleTexture() { return vec4(1.0); }
+"""

@@ -346,3 +346,13 @@ fn vertex_inputs_declared_like_host_attributes_read_them() {
     assert!(out.has_diag("xf.unknown-attribute"));
     assert!(out.prog.vertex_inputs.iter().any(|i| i.name == "Position" && i.location == 0));
 }
+
+#[test]
+fn dh_generic_provides_iris_texture_stubs() {
+    // Packs without a dh_generic program reuse their dh_terrain fragment shader, which
+    // calls the DH texture helpers (Iris DHGenericTransformer injects these stubs).
+    let vs = "#version 330\nin vec3 vaPosition;\nvoid main() { gl_Position = vec4(vaPosition, 1.0); }\n";
+    let fs = "#version 330\nout vec4 c;\nvoid main() { c = dh_hasTexture() ? dh_sampleTexture() : vec4(0.5); }\n";
+    let out = T::new("dh_generic").vs(vs).fs(fs).run();
+    contains_all(out.fs(), &["bool dh_hasTexture()", "return false;", "vec4 dh_sampleTexture()"]);
+}
