@@ -7,7 +7,9 @@
 //! locations. The element formats follow Mojang's `DefaultVertexFormat` (26.3) and DH's
 //! `BlazeVertexFormatBuilder`. The terrain extension attributes (`sb_Normal`, `sb_Entity`,
 //! `sb_MidTexCoord`, `sb_Tangent`, `sb_MidBlock`) are appended by the host after the
-//! vanilla `BLOCK` elements, with the encodings Iris uses for the same data.
+//! vanilla `BLOCK` elements, with the encodings Iris uses for the same data; Sodium's
+//! compact vertex gets the extension attributes Iris appends to it ([`SODIUM_TERRAIN`]).
+//! `tests/profile_layouts.rs` checks every layout against its profile TOML.
 
 use ash::vk;
 
@@ -166,8 +168,44 @@ pub const DH_TERRAIN: VertexLayout = VertexLayout {
     ],
 };
 
+/// Bytes per Sodium terrain vertex: the 20-byte compact vertex plus the ShaderBridge
+/// extension attributes.
+pub const SODIUM_STRIDE: u32 = 36;
+
+/// `sodium_terrain`: Sodium 0.9 (Minecraft 26.3) compact chunk vertex, 20 bytes, followed
+/// by the ShaderBridge extension attributes the host appends (the attributes Iris adds,
+/// in Iris' order), little-endian:
+///
+/// | offset | element          | format            | meaning |
+/// |-------:|------------------|-------------------|---------|
+/// | 0      | `a_Position`     | `R32G32_UINT`     | 20-bit section-local x/y/z (`(p + 8) / 32 * 2^20`): word 0 = high 10 bits of each (x at bit 0, y at 10, z at 20), word 1 = low 10 bits |
+/// | 8      | `a_Color`        | `R8G8B8A8_UNORM`  | colour × AO |
+/// | 12     | `a_TexCoord`     | `R16G16_UINT`     | `round(uv * 32768)` in 15 bits, bit 15 = nudge towards the quad centre is positive |
+/// | 16     | `a_LightAndData` | `R8G8B8A8_UINT`   | block light, sky light (each `16 L + 8`), material bits, section index in the region (x `<< 5`, z `<< 2`, y) |
+/// | 20     | `sb_Entity`      | `R32_UINT`        | `((block id + 1) << 1) | is_fluid` |
+/// | 24     | `sb_Normal`      | `R8G8B8A8_SNORM`  | face normal (w unused) |
+/// | 28     | `sb_MidTexCoord` | `R16G16_UINT`     | sprite centre × 32768 |
+/// | 32     | `sb_MidBlock`    | `R8G8B8A8_SNORM`  | (block centre − vertex) × 64 as signed bytes, w = light emission |
+///
+/// Regions are 8×4×8 sections; each draw pushes `u_RegionOffset` (region origin minus
+/// camera), `u_CurrentTime` and `u_RegionID` as push constants.
+pub const SODIUM_TERRAIN: VertexLayout = VertexLayout {
+    profile: "sodium_terrain",
+    bindings: &[per_vertex(0, SODIUM_STRIDE)],
+    elements: &[
+        el("a_Position", 0, 0, vk::Format::R32G32_UINT),
+        el("a_Color", 0, 8, vk::Format::R8G8B8A8_UNORM),
+        el("a_TexCoord", 0, 12, vk::Format::R16G16_UINT),
+        el("a_LightAndData", 0, 16, vk::Format::R8G8B8A8_UINT),
+        el("sb_Entity", 0, 20, vk::Format::R32_UINT),
+        el("sb_Normal", 0, 24, vk::Format::R8G8B8A8_SNORM),
+        el("sb_MidTexCoord", 0, 28, vk::Format::R16G16_UINT),
+        el("sb_MidBlock", 0, 32, vk::Format::R8G8B8A8_SNORM),
+    ],
+};
+
 /// Every layout of the scene.
-pub const ALL_LAYOUTS: [&VertexLayout; 5] = [&VANILLA_TERRAIN, &VANILLA_ENTITY, &VANILLA_POSITION, &VANILLA_POSITION_TEX, &DH_TERRAIN];
+pub const ALL_LAYOUTS: [&VertexLayout; 6] = [&VANILLA_TERRAIN, &VANILLA_ENTITY, &VANILLA_POSITION, &VANILLA_POSITION_TEX, &DH_TERRAIN, &SODIUM_TERRAIN];
 
 /// Byte size of a vertex element format (0 for unknown formats).
 pub fn format_size(format: vk::Format) -> u32 {
@@ -175,12 +213,15 @@ pub fn format_size(format: vk::Format) -> u32 {
         vk::Format::R8_UINT => 1,
         vk::Format::R16_UINT => 2,
         vk::Format::R16G16_SINT
+        | vk::Format::R16G16_UINT
         | vk::Format::R8G8B8A8_UNORM
         | vk::Format::R8G8B8A8_SNORM
         | vk::Format::R8G8B8A8_SINT
+        | vk::Format::R8G8B8A8_UINT
+        | vk::Format::R32_UINT
         | vk::Format::R32_SFLOAT => 4,
         vk::Format::R16G16B16_UINT => 6,
-        vk::Format::R32G32_SFLOAT | vk::Format::R16G16B16A16_UINT => 8,
+        vk::Format::R32G32_SFLOAT | vk::Format::R32G32_UINT | vk::Format::R16G16B16A16_UINT => 8,
         vk::Format::R32G32B32_SFLOAT | vk::Format::R32G32B32_SINT => 12,
         vk::Format::R32G32B32A32_SFLOAT | vk::Format::R32G32B32A32_SINT | vk::Format::R32G32B32A32_UINT => 16,
         _ => 0,
@@ -205,6 +246,10 @@ impl VertexWriter {
         self
     }
     pub fn i32(&mut self, v: i32) -> &mut Self {
+        self.bytes.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+    pub fn u32(&mut self, v: u32) -> &mut Self {
         self.bytes.extend_from_slice(&v.to_le_bytes());
         self
     }

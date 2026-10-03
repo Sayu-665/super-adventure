@@ -421,6 +421,19 @@ impl Gpu {
         &self.setup_notes
     }
 
+    /// The message sink, which outlives the device: the validation layer reports objects
+    /// still alive at `vkDestroyDevice` into it.
+    #[cfg(test)]
+    pub(crate) fn message_sink(&self) -> Arc<Mutex<Vec<ValidationMessage>>> {
+        Arc::clone(&self.sink)
+    }
+
+    /// Live sub-allocations of the GPU allocator.
+    #[cfg(test)]
+    pub(crate) fn live_allocations(&self) -> usize {
+        self.allocator.as_ref().map_or(0, |a| a.generate_report().allocations.len())
+    }
+
     pub fn limits(&self) -> &vk::PhysicalDeviceLimits {
         &self.props.limits
     }

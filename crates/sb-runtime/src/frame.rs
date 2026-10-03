@@ -1,22 +1,28 @@
 //! Frame execution, following Iris' frame order and the model's pass list and static flip
-//! schedule: clears → setup (first frame) → begin → shadow → shadowcomp → prepare →
-//! opaque gbuffers (sky, DH LODs, terrain, entities) → depthtex1 copy → deferred →
-//! translucent gbuffers (water, DH water) → composite → final → end-of-frame copies.
+//! schedule: clears → setup (first frame) → begin → shadow (opaque casters, shadowtex1
+//! copy, translucent casters) → shadowcomp → prepare → opaque gbuffers (sky, DH LODs,
+//! terrain, entities) → centre depth sample, depthtex2 and depthtex1 copies (Iris'
+//! `beginHand` / `beginTranslucents`), dhDepthTex1 copy → deferred → translucent gbuffers
+//! (water, DH water) → composite → final → end-of-frame copies.
 
 use crate::descriptors::BindContext;
 use crate::error::{RuntimeError, VkResultExt};
 use crate::executor::{ColorPair, Executor, ProgramState, default_clear};
 use crate::math::celestial;
-use crate::pipelines::{AttachmentState, Role, VariantKey, dispatch_size, gl_blend_factor, output_blend, NULL_VERTEX_BINDING};
-use crate::resources::{ImageDesc, ImageId, clear_color_value, full_barrier};
-use crate::scene::formats::VertexLayout;
+use crate::pipelines::{AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, gl_blend_factor, output_blend, output_class};
+use crate::resources::{ImageDesc, ImageId, clear_color_value, full_barrier, host_read_barrier};
+use crate::scene::formats::{SODIUM_TERRAIN, VertexLayout};
 use crate::texel::{self, NumericClass};
-use crate::uniforms::{DrawState, FrameInputs, FrameState, fill_host_block, fill_pack_block, stage};
+use crate::uniforms::{DrawState, FrameInputs, FrameState, fill_host_block, fill_pack_block, push_constant_bytes, stage};
 use ash::vk;
 use sb_core::model::{Pass, Program, ProgramKind};
 use sb_core::program::{GeometryGroup, GeometryProgram};
 use sb_core::PassGroup;
 use std::collections::HashMap;
+
+/// Largest host copy of the `sb_Frame` layout (std140 blocks of real packs are a few KiB;
+/// uniform buffer ranges are limited to 64 KiB on most devices).
+const MAX_HOST_BLOCK: u64 = 1 << 20;
 
 /// Where a batch's geometry comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +38,29 @@ enum MeshRef {
     Moon(usize),
     DhOpaque(usize),
     DhWater(usize),
+    /// A terrain layer (0 solid, 1 cutout, 2 translucent) in Sodium's format.
+    Sodium(usize),
+}
+
+impl MeshRef {
+    /// The terrain layer of a vanilla terrain mesh.
+    fn terrain_layer(self) -> Option<usize> {
+        match self {
+            MeshRef::Solid => Some(0),
+            MeshRef::Cutout => Some(1),
+            MeshRef::Water => Some(2),
+            _ => None,
+        }
+    }
+}
+
+/// The vertex layout, buffers and sub-draws of a mesh; Sodium sub-draws carry their
+/// region (origin in blocks, `u_RegionID`).
+struct MeshDraws {
+    layout: &'static VertexLayout,
+    vertex: vk::Buffer,
+    index: vk::Buffer,
+    draws: Vec<(crate::scene::SubDraw, Option<crate::scene::terrain::SodiumRegion>)>,
 }
 
 /// One batch of draws with one program and one draw state.
@@ -108,20 +137,28 @@ impl Executor<'_> {
         })
     }
 
-    /// `sb_Frame` contents: builtins, defaults and custom uniforms.
+    /// `sb_Frame` contents: builtins, defaults and custom uniforms, cut to what the
+    /// programs declare (the largest `sb_Frame` range of any program).
+    ///
+    /// The host copy spans every member of the layout (custom uniforms may read builtins
+    /// that no program declares), bounded by [`MAX_HOST_BLOCK`] so that a corrupt
+    /// `size` or member offset cannot exhaust memory.
     fn frame_block(&mut self, fs: &FrameState) -> Vec<u8> {
         let layout = &self.dim.uniforms.frame;
-        let mut size = layout.size as usize;
+        let mut upload = 16usize;
         for p in &self.programs {
             if let ProgramState::Ready(p) = p {
                 for s in p.slots.iter().filter(|s| s.role == Role::Frame) {
-                    size = size.max(s.range as usize);
+                    upload = upload.max(s.range as usize);
                 }
             }
         }
-        let mut bytes = vec![0u8; size.max(16)];
+        let members = layout.members.iter().map(|m| u64::from(m.offset) + u64::from(m.ty.std140_size())).max().unwrap_or(0);
+        let host = members.max(u64::from(layout.size)).min(MAX_HOST_BLOCK) as usize;
+        let mut bytes = vec![0u8; host.max(upload)];
         fill_pack_block(layout, &mut bytes, fs, &DrawState::new(fs));
         self.custom.evaluate_into_block(layout, &mut bytes, fs.frame_time);
+        bytes.truncate(upload);
         bytes
     }
 
@@ -277,6 +314,7 @@ impl Executor<'_> {
         let offsets = self.dynamic_offsets(index, &DrawState::new(fs), fs, frame_offset);
         let Some(p) = self.program(index) else { return Ok(()) };
         let (layout, push, local) = (p.layout, p.push_constants, p.local_size);
+        let push_bytes = push.map(|(_, size)| push_constant_bytes(&p.push_members, size, fs, &DrawState::new(fs))).unwrap_or_default();
         let ext = self.targets.extent;
         let lim = self.gpu.limits().max_compute_work_group_count;
         let size = dispatch_size(model.compute.as_ref().map(|c| &c.work_groups), local, ext.width, ext.height, lim);
@@ -301,8 +339,8 @@ impl Executor<'_> {
             if !sets.is_empty() {
                 d.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, layout, 0, &sets, &offsets);
             }
-            if let Some((stages, size)) = push {
-                d.cmd_push_constants(cmd, layout, stages, 0, &vec![0u8; size as usize]);
+            if let Some((stages, _)) = push {
+                d.cmd_push_constants(cmd, layout, stages, 0, &push_bytes);
             }
             match indirect_buf {
                 Some((b, off)) => d.cmd_dispatch_indirect(cmd, b, u64::from(off)),
@@ -323,9 +361,9 @@ impl Executor<'_> {
             let offset = match &s.role {
                 Role::Frame => frame_offset,
                 Role::Draw => {
-                    let layout = &self.dim.uniforms.draw;
-                    let mut bytes = vec![0u8; (layout.size.max(s.range)) as usize];
-                    fill_pack_block(layout, &mut bytes, fs, state);
+                    // Only the declared range is read (members beyond it are skipped).
+                    let mut bytes = vec![0u8; s.range as usize];
+                    fill_pack_block(&self.dim.uniforms.draw, &mut bytes, fs, state);
                     self.ring.push(&mut self.arena, &bytes, s.range)
                 }
                 Role::HostBlock(name) => {
@@ -390,7 +428,13 @@ impl Executor<'_> {
                 self.terrain_batches(&mut batches, fs, false, false);
                 self.entity_batches(&mut batches, fs, false);
                 self.draw_batches(cmd, &batches, fs, frame_offset)?;
+                // Iris `beginHand`: the centre depth sample and depthtex2 (no translucents,
+                // no hand), then `beginTranslucents`: depthtex1 (no translucents) before
+                // `deferred`. The scene has no hand, so both copies hold the same depth.
+                self.sample_center_depth(cmd);
+                self.copy_image(cmd, self.targets.depth[0], self.targets.depth[2]);
                 self.copy_image(cmd, self.targets.depth[0], self.targets.depth[1]);
+                // DH: dhDepthTex1 is the LOD depth before dh_water.
                 self.copy_image(cmd, self.targets.dh_depth[0], self.targets.dh_depth[1]);
             }
             _ => {
@@ -400,25 +444,31 @@ impl Executor<'_> {
                     self.dh_batches(&mut batches, fs, false, true);
                 }
                 self.draw_batches(cmd, &batches, fs, frame_offset)?;
-                self.copy_image(cmd, self.targets.depth[0], self.targets.depth[2]);
-                // Centre depth for `centerDepthSmooth` of the next frame.
-                let img = self.arena.image(self.targets.depth[0]);
-                let ext = img.extent_2d();
-                let region = vk::BufferImageCopy {
-                    buffer_offset: 0,
-                    buffer_row_length: 0,
-                    buffer_image_height: 0,
-                    image_subresource: vk::ImageSubresourceLayers { aspect_mask: vk::ImageAspectFlags::DEPTH, mip_level: 0, base_array_layer: 0, layer_count: 1 },
-                    image_offset: vk::Offset3D { x: (ext.width / 2) as i32, y: (ext.height / 2) as i32, z: 0 },
-                    image_extent: vk::Extent3D { width: 1, height: 1, depth: 1 },
-                };
-                let (image, buffer) = (img.image, self.arena.buffer(self.center_buffer).buffer);
-                let d = &self.gpu.device;
-                unsafe { d.cmd_copy_image_to_buffer(cmd, image, vk::ImageLayout::GENERAL, buffer, &[region]) };
-                full_barrier(d, cmd);
             }
         }
         Ok(())
+    }
+
+    /// Copy the depth at the screen centre (GL convention after readback) for
+    /// `centerDepthSmooth` of the next frame, as Iris' `CenterDepthSampler` does at
+    /// `beginHand` (after opaque geometry, before translucents).
+    fn sample_center_depth(&self, cmd: vk::CommandBuffer) {
+        let img = self.arena.image(self.targets.depth[0]);
+        let ext = img.extent_2d();
+        let region = vk::BufferImageCopy {
+            buffer_offset: 0,
+            buffer_row_length: 0,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers { aspect_mask: vk::ImageAspectFlags::DEPTH, mip_level: 0, base_array_layer: 0, layer_count: 1 },
+            image_offset: vk::Offset3D { x: (ext.width / 2) as i32, y: (ext.height / 2) as i32, z: 0 },
+            image_extent: vk::Extent3D { width: 1, height: 1, depth: 1 },
+        };
+        let (image, buffer) = (img.image, self.arena.buffer(self.center_buffer).buffer);
+        let d = &self.gpu.device;
+        full_barrier(d, cmd);
+        unsafe { d.cmd_copy_image_to_buffer(cmd, image, vk::ImageLayout::GENERAL, buffer, &[region]) };
+        full_barrier(d, cmd);
+        host_read_barrier(d, cmd);
     }
 
     fn base_state(&self, fs: &FrameState, shadow: bool) -> DrawState {
@@ -454,30 +504,36 @@ impl Executor<'_> {
         });
     }
 
+    /// Whether a terrain layer renders its back faces: `backFace.<layer>` (OptiFine; the
+    /// cutout layer also honours `backFace.cutoutMipped`, merged into cutout since
+    /// Minecraft 1.21.5). Minecraft culls every terrain layer by default; Iris 26.3 parses
+    /// these keys but ignores them.
+    fn back_faces(&self, keys: &[&str]) -> bool {
+        keys.iter().any(|k| self.dim.settings.back_face.get(*k).copied().unwrap_or(false))
+    }
+
     fn terrain_batches(&self, out: &mut Vec<Batch>, fs: &FrameState, shadow: bool, translucent: bool) {
         let mut s = self.base_state(fs, shadow);
         s.texture_size = [64, 64];
-        let mk = |g, what, mesh, st: i32| {
+        let mk = |g, what, mesh, st: i32, back_faces: bool| {
             let mut state = s.clone();
             state.render_stage = st;
-            Batch { geometry: g, what, mesh, state, albedo: self.tex.atlas, depth_write: true, cull_back: true, shadow }
+            Batch { geometry: g, what, mesh, state, albedo: self.tex.atlas, depth_write: true, cull_back: !back_faces, shadow }
         };
         if translucent {
             if self.scene.water.is_some() {
                 let g = if shadow { GeometryProgram::ShadowWater } else { GeometryProgram::Water };
-                out.push(mk(g, "water", MeshRef::Water, stage::TERRAIN_TRANSLUCENT));
+                out.push(mk(g, "water", MeshRef::Water, stage::TERRAIN_TRANSLUCENT, self.back_faces(&["translucent"])));
             }
             return;
         }
         if self.scene.solid.is_some() {
             let g = if shadow { GeometryProgram::ShadowSolid } else { GeometryProgram::TerrainSolid };
-            out.push(mk(g, "terrain", MeshRef::Solid, stage::TERRAIN_SOLID));
+            out.push(mk(g, "terrain", MeshRef::Solid, stage::TERRAIN_SOLID, self.back_faces(&["solid"])));
         }
         if self.scene.cutout.is_some() {
             let g = if shadow { GeometryProgram::ShadowCutout } else { GeometryProgram::TerrainCutout };
-            let mut b = mk(g, "leaves", MeshRef::Cutout, stage::TERRAIN_CUTOUT);
-            b.cull_back = false;
-            out.push(b);
+            out.push(mk(g, "leaves", MeshRef::Cutout, stage::TERRAIN_CUTOUT, self.back_faces(&["cutout", "cutoutMipped"])));
         }
     }
 
@@ -525,8 +581,10 @@ impl Executor<'_> {
         if shared.is_empty() { (program.draw_buffers.clone(), false, &program.draw_buffers) } else { (shared.clone(), true, &program.draw_buffers) }
     }
 
-    fn sink(&mut self, format: vk::Format, extent: vk::Extent2D) -> Result<ImageId, RuntimeError> {
-        let key = format;
+    /// A write-only attachment standing in for a missing target at attachment `slot`
+    /// (one per format and slot, so one scope never binds the same image twice).
+    fn sink(&mut self, format: vk::Format, slot: usize, extent: vk::Extent2D) -> Result<ImageId, RuntimeError> {
+        let key = (format, slot);
         if let Some(id) = self.targets.sinks.get(&key) {
             let e = self.arena.image(*id).extent_2d();
             if e.width >= extent.width && e.height >= extent.height {
@@ -548,6 +606,26 @@ impl Executor<'_> {
         }
     }
 
+    /// The image to bind at attachment `location` (currently `img`) for `program`, and
+    /// whether the program writes it:
+    /// * no fragment output at the location: bound, not written (Vulkan would write
+    ///   undefined values; a GL pack that lists a buffer it never writes keeps its
+    ///   contents);
+    /// * an output of the attachment's numeric class: written;
+    /// * an output of another class (a float output into an integer target is undefined
+    ///   in GL and Vulkan alike, even with writes masked): a sink of the output's class is
+    ///   bound instead and the mismatch is reported.
+    fn output_attachment(&mut self, program: &Program, outputs: &HashMap<u32, String>, location: usize, img: ImageId, extent: vk::Extent2D) -> Result<(ImageId, bool), RuntimeError> {
+        let Some(class) = outputs.get(&(location as u32)) else { return Ok((img, false)) };
+        let format = self.arena.image(img).desc.format;
+        if texel::numeric_class(format) == output_class(class) {
+            return Ok((img, true));
+        }
+        let name = self.arena.image(img).desc.name.clone();
+        self.warn(format!("{}: output location {location} is {class} but its target {name} is {format:?}; the output is discarded", program.name));
+        Ok((self.sink(Self::sink_format(class), location, extent)?, false))
+    }
+
     fn draw_batches(&mut self, cmd: vk::CommandBuffer, batches: &[Batch], fs: &FrameState, frame_offset: u32) -> Result<(), RuntimeError> {
         let dim = self.dim;
         // Resolve programs and scopes.
@@ -567,14 +645,47 @@ impl Executor<'_> {
                 self.stats.skip_program(&program.name, "a compute program is used for geometry");
                 continue;
             }
-            let outputs: Vec<u32> = prepared.fragment_outputs.iter().flat_map(|o| o.location..o.location + o.location_count.max(1)).collect();
+            let outputs = prepared.output_classes();
+            // Terrain for programs translated for Sodium's mesh format comes from the
+            // Sodium buffers.
+            let mut mesh = b.mesh;
+            if program.draw_profile.as_deref() == Some(SODIUM_TERRAIN.profile)
+                && let Some(layer) = mesh.terrain_layer()
+                && self.scene.sodium.is_some()
+            {
+                mesh = MeshRef::Sodium(layer);
+            }
+            if let (Some(profile), Some(m)) = (program.draw_profile.as_deref(), self.mesh(mesh))
+                && profile != m.layout.profile
+            {
+                self.warn(format!(
+                    "{}: translated for the `{profile}` draw profile but draws {} in the `{}` vertex layout; inputs are matched by name",
+                    program.name, b.what, m.layout.profile
+                ));
+            }
             let (targets, shared, draw_buffers) = self.attachment_targets(program, b.shadow);
             let max_attachments = self.gpu.limits().max_color_attachments as usize;
             if targets.len() > max_attachments {
                 self.stats.skip_program(&program.name, &format!("{} colour attachments exceed the device limit of {max_attachments}", targets.len()));
                 continue;
             }
+            let ext = if b.shadow { self.arena.image(self.targets.shadow[0]).extent_2d() } else { self.targets.extent };
+            let mut colors = Vec::with_capacity(targets.len());
+            for (slot_index, &t) in targets.iter().enumerate() {
+                let pair = if b.shadow { self.targets.shadow_color.get(&t) } else { self.targets.color.get(&t) };
+                let img = match pair {
+                    Some(p) => p.images[if b.shadow { self.flips.shadow_read(t) } else { self.flips.read(t) }],
+                    None => {
+                        let class = outputs.get(&(slot_index as u32)).map_or("float", String::as_str);
+                        self.warn(format!("{}: target {t} has no image; its output is discarded", program.name));
+                        self.sink(Self::sink_format(class), slot_index, ext)?
+                    }
+                };
+                colors.push(img);
+            }
+            // Which slots the program's draw buffers write, with their blend.
             let mut states = vec![AttachmentState { write: false, blend: None }; targets.len()];
+            let mut mapped = vec![false; targets.len()];
             for (i, &t) in draw_buffers.iter().enumerate() {
                 let loc = if shared {
                     match program.output_slots.get(i) {
@@ -587,25 +698,19 @@ impl Executor<'_> {
                 if shared && targets.get(loc) != Some(&t) {
                     self.warn(format!("{}: output {i} (target {t}) maps to attachment slot {loc}, which holds another target", program.name));
                 }
-                if let Some(st) = states.get_mut(loc) {
-                    st.write = outputs.contains(&(loc as u32));
+                if let (Some(st), Some(m)) = (states.get_mut(loc), mapped.get_mut(loc)) {
                     st.blend = output_blend(program, t);
+                    *m = true;
                 }
             }
-            let mut colors = Vec::with_capacity(targets.len());
-            for (slot_index, &t) in targets.iter().enumerate() {
-                let pair = if b.shadow { self.targets.shadow_color.get(&t) } else { self.targets.color.get(&t) };
-                let img = match pair {
-                    Some(p) => p.images[if b.shadow { self.flips.shadow_read(t) } else { self.flips.read(t) }],
-                    None => {
-                        let class = self.program(pi).map(|p| p.output_type(slot_index as u32).to_string()).unwrap_or_default();
-                        let ext = if b.shadow { self.arena.image(self.targets.shadow[0]).extent_2d() } else { self.targets.extent };
-                        self.warn(format!("{}: target {t} has no image; its output is discarded", program.name));
-                        self.sink(Self::sink_format(&class), ext)?
-                    }
-                };
-                colors.push(Some(img));
+            // Every slot is checked against the shader's outputs, mapped or not: an output
+            // whose class differs from the slot's format is undefined even when masked.
+            for (loc, img) in colors.iter_mut().enumerate() {
+                let (bound, write) = self.output_attachment(program, &outputs, loc, *img, ext)?;
+                *img = bound;
+                states[loc].write = write && mapped[loc];
             }
+            let colors: Vec<Option<ImageId>> = colors.into_iter().map(Some).collect();
             let dh = b.geometry.group() == GeometryGroup::DistantHorizons;
             let depth = if b.shadow {
                 self.targets.shadow[0]
@@ -615,6 +720,7 @@ impl Executor<'_> {
                 self.targets.depth[0]
             };
             let mut batch = b.clone();
+            batch.mesh = mesh;
             batch.state.alpha_test_ref = program.alpha_test.map_or(0.0, |a| a.reference);
             batch.state.blend_func = match program.blend {
                 Some(m) => [gl_blend_factor(m.src_color), gl_blend_factor(m.dst_color), gl_blend_factor(m.src_alpha), gl_blend_factor(m.dst_alpha)],
@@ -726,8 +832,7 @@ impl Executor<'_> {
         let dim = self.dim;
         for (b, pi, _, states) in items {
             let program = &dim.programs[*pi as usize];
-            let Some(mesh) = self.mesh(b.mesh) else { continue };
-            let (layout, vb, ib, draws) = mesh;
+            let Some(MeshDraws { layout, vertex: vb, index: ib, draws }) = self.mesh(b.mesh) else { continue };
             let cull = if b.shadow {
                 vk::CullModeFlags::NONE
             } else {
@@ -787,6 +892,21 @@ impl Executor<'_> {
             let offsets = self.dynamic_offsets(*pi, &b.state, fs, frame_offset);
             let Some(p) = self.program(*pi) else { continue };
             let (playout, push) = (p.layout, p.push_constants);
+            // Push constants per sub-draw (Sodium regions differ in `u_RegionOffset`).
+            let pushes: Vec<Vec<u8>> = match push {
+                Some((_, size)) => draws
+                    .iter()
+                    .map(|(_, region)| {
+                        let mut st = b.state.clone();
+                        if let Some(r) = region {
+                            st.region_offset = [0, 1, 2].map(|i| (f64::from(r.origin[i]) - fs.camera[i]) as f32);
+                            st.region_id = r.id;
+                        }
+                        push_constant_bytes(&p.push_members, size, fs, &st)
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
             let zero = self.arena.buffer(self.tex.zero).buffer;
             let defaults = self.arena.buffer(self.tex.attribute_defaults).buffer;
             let instances = self.scene.instances.map(|i| self.arena.buffer(i).buffer);
@@ -796,16 +916,18 @@ impl Executor<'_> {
                 if !sets.is_empty() {
                     d.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, playout, 0, &sets, &offsets);
                 }
-                if let Some((stages, size)) = push {
-                    d.cmd_push_constants(cmd, playout, stages, 0, &vec![0u8; size as usize]);
-                }
                 d.cmd_bind_vertex_buffers(cmd, 0, &[vb], &[0]);
                 if layout.bindings.iter().any(|x| x.binding == 1) {
                     d.cmd_bind_vertex_buffers(cmd, 1, &[instances.unwrap_or(zero)], &[0]);
                 }
                 d.cmd_bind_vertex_buffers(cmd, NULL_VERTEX_BINDING, &[defaults], &[0]);
                 d.cmd_bind_index_buffer(cmd, ib, 0, vk::IndexType::UINT32);
-                for sd in &draws {
+                for (k, (sd, _)) in draws.iter().enumerate() {
+                    if let (Some((stages, _)), Some(bytes)) = (push, pushes.get(k))
+                        && (k == 0 || pushes[k - 1] != *bytes)
+                    {
+                        d.cmd_push_constants(cmd, playout, stages, 0, bytes);
+                    }
                     d.cmd_draw_indexed(cmd, sd.index_count, 1, sd.first_index, sd.vertex_offset, sd.first_instance);
                 }
             }
@@ -817,8 +939,15 @@ impl Executor<'_> {
     }
 
     /// Vertex layout, vertex buffer, index buffer and sub-draws of a mesh reference.
-    fn mesh(&self, m: MeshRef) -> Option<(&'static VertexLayout, vk::Buffer, vk::Buffer, Vec<crate::scene::SubDraw>)> {
+    fn mesh(&self, m: MeshRef) -> Option<MeshDraws> {
         let s = &self.scene;
+        if let MeshRef::Sodium(layer) = m {
+            let sodium = s.sodium.as_ref()?;
+            let mesh = sodium.layers.get(layer)?.as_ref()?;
+            let regions = sodium.draw_regions.get(layer)?;
+            let draws = mesh.draws.iter().zip(regions).map(|(d, r)| (*d, sodium.regions.get(*r).copied())).collect();
+            return Some(MeshDraws { layout: mesh.layout, vertex: self.arena.buffer(mesh.vertex).buffer, index: self.arena.buffer(mesh.index).buffer, draws });
+        }
         let (mesh, only) = match m {
             MeshRef::Solid => (s.solid.as_ref()?, None),
             MeshRef::Cutout => (s.cutout.as_ref()?, None),
@@ -829,12 +958,13 @@ impl Executor<'_> {
             MeshRef::Moon(i) => (s.moon.as_ref()?, Some(i)),
             MeshRef::DhOpaque(i) => (s.dh.get(i)?.1.as_ref()?, None),
             MeshRef::DhWater(i) => (s.dh.get(i)?.2.as_ref()?, None),
+            MeshRef::Sodium(_) => return None,
         };
         let draws = match only {
-            Some(i) => vec![*mesh.draws.get(i)?],
-            None => mesh.draws.clone(),
+            Some(i) => vec![(*mesh.draws.get(i)?, None)],
+            None => mesh.draws.iter().map(|d| (*d, None)).collect(),
         };
-        Some((mesh.layout, self.arena.buffer(mesh.vertex).buffer, self.arena.buffer(mesh.index).buffer, draws))
+        Some(MeshDraws { layout: mesh.layout, vertex: self.arena.buffer(mesh.vertex).buffer, index: self.arena.buffer(mesh.index).buffer, draws })
     }
 
     // --------------------------------------------------------------------------------
@@ -853,6 +983,7 @@ impl Executor<'_> {
             self.stats.skip_program(&program.name, "a compute program is used as a fullscreen pass");
             return Ok(false);
         }
+        let outputs = prepared.output_classes();
         let shadow = group == PassGroup::ShadowComp;
         // Mipmaps requested by the program.
         for &t in &program.mipmap_targets {
@@ -865,13 +996,16 @@ impl Executor<'_> {
                 self.generate_mips(cmd, img);
             }
         }
-        // Attachments by location.
+        // Attachments by location. `assigned` catches a target listed twice; `written`
+        // holds the targets that are really written (shadowcolor flips).
         let mut colors: Vec<Option<ImageId>> = Vec::new();
         let mut states = Vec::new();
+        let mut assigned: Vec<u32> = Vec::new();
         let mut written: Vec<u32> = Vec::new();
         if group == PassGroup::Final {
-            colors.push(Some(self.targets.output));
-            states.push(AttachmentState { write: true, blend: program.draw_buffers.first().and_then(|t| output_blend(program, *t)).or(program.blend) });
+            let (output, write) = self.output_attachment(program, &outputs, 0, self.targets.output, self.targets.extent)?;
+            colors.push(Some(output));
+            states.push(AttachmentState { write, blend: program.draw_buffers.first().and_then(|t| output_blend(program, *t)).or(program.blend) });
         } else {
             for (i, &t) in program.draw_buffers.iter().enumerate() {
                 let loc = program.output_slots.get(i).copied().unwrap_or(i as u32) as usize;
@@ -885,18 +1019,22 @@ impl Executor<'_> {
                 }
                 let pair = if shadow { self.targets.shadow_color.get(&t) } else { self.targets.color.get(&t) };
                 let img = match pair {
-                    Some(p) if !written.contains(&t) => {
+                    Some(p) if !assigned.contains(&t) => {
+                        assigned.push(t);
                         p.images[if shadow { self.flips.shadow_write(t) } else { self.flips.write(t) }]
                     }
                     _ => {
-                        let class = self.program(index).map(|p| p.output_type(loc as u32).to_string()).unwrap_or_default();
+                        let class = outputs.get(&(loc as u32)).map_or("float", String::as_str);
                         self.warn(format!("{}: target {t} of output {i} has no image (or is written twice); the output is discarded", program.name));
-                        self.sink(Self::sink_format(&class), self.targets.extent)?
+                        self.sink(Self::sink_format(class), loc, self.targets.extent)?
                     }
                 };
-                written.push(t);
+                let (img, write) = self.output_attachment(program, &outputs, loc, img, self.targets.extent)?;
+                if write {
+                    written.push(t);
+                }
                 colors[loc] = Some(img);
-                states[loc] = AttachmentState { write: true, blend: output_blend(program, t) };
+                states[loc] = AttachmentState { write, blend: output_blend(program, t) };
             }
         }
         if colors.is_empty() {
@@ -909,9 +1047,6 @@ impl Executor<'_> {
         let conflicts: Vec<ImageId> = self.bound_images(index, &ctx)?.into_iter().filter(|i| attachments.contains(i)).collect();
         self.snapshot(cmd, &conflicts)?;
         let (color_formats, depth_format) = self.scope_formats(&scope);
-        if group == PassGroup::Final && self.program(index).is_some_and(|p| p.output_type(0) != "float") {
-            self.warn(format!("{}: final writes integer data to the RGBA8 output", program.name));
-        }
         let key = VariantKey {
             color_formats,
             attachments: states,
@@ -944,6 +1079,7 @@ impl Executor<'_> {
         let offsets = self.dynamic_offsets(index, &DrawState::new(fs), fs, frame_offset);
         let Some(p) = self.program(index) else { return Ok(false) };
         let (playout, push) = (p.layout, p.push_constants);
+        let push_bytes = push.map(|(_, size)| push_constant_bytes(&p.push_members, size, fs, &DrawState::new(fs))).unwrap_or_default();
         let extent = self.render_extent(&scope);
         self.begin_scope(cmd, &scope, extent)?;
         self.set_viewport(cmd, extent, Some(&program.viewport));
@@ -953,8 +1089,8 @@ impl Executor<'_> {
             if !sets.is_empty() {
                 d.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, playout, 0, &sets, &offsets);
             }
-            if let Some((stages, size)) = push {
-                d.cmd_push_constants(cmd, playout, stages, 0, &vec![0u8; size as usize]);
+            if let Some((stages, _)) = push {
+                d.cmd_push_constants(cmd, playout, stages, 0, &push_bytes);
             }
             d.cmd_draw(cmd, 3, 1, 0, 0);
         }

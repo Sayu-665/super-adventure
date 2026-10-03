@@ -74,8 +74,8 @@ pub(crate) struct Targets {
     /// shadowtex0 (attachment) and shadowtex1.
     pub shadow: [ImageId; 2],
     pub output: ImageId,
-    /// Write-only attachments for outputs without a valid target, per format.
-    pub sinks: HashMap<vk::Format, ImageId>,
+    /// Write-only attachments for outputs without a valid target, per format and slot.
+    pub sinks: HashMap<(vk::Format, usize), ImageId>,
     /// Copies of attachments that are also sampled in the same pass.
     pub snapshots: HashMap<ImageId, ImageId>,
     pub extent: vk::Extent2D,
@@ -87,6 +87,15 @@ pub(crate) struct GpuMesh {
     pub index: BufferId,
     pub draws: Vec<SubDraw>,
     pub layout: &'static VertexLayout,
+}
+
+/// The terrain in Sodium's format: per layer (solid, cutout, translucent) one sub-draw
+/// per region.
+pub(crate) struct GpuSodium {
+    pub layers: [Option<GpuMesh>; 3],
+    /// Region of each sub-draw of each layer (index into `regions`).
+    pub draw_regions: [Vec<usize>; 3],
+    pub regions: Vec<crate::scene::terrain::SodiumRegion>,
 }
 
 /// The scene in GPU buffers.
@@ -102,6 +111,8 @@ pub(crate) struct GpuScene {
     pub sun: Option<GpuMesh>,
     pub moon: Option<GpuMesh>,
     pub dh: Vec<([i32; 3], Option<GpuMesh>, Option<GpuMesh>)>,
+    /// Present when a program was translated for the `sodium_terrain` profile.
+    pub sodium: Option<GpuSodium>,
 }
 
 /// Textures and other bound resources.
@@ -502,7 +513,8 @@ impl<'r> Executor<'r> {
         // Scene.
         let dh_enabled = dim.distant_horizons.strategy != DhStrategy::Disabled && req.scene.clamped_dh_distance() > 0;
         let unified = dh_enabled && dim.distant_horizons.unified_projection;
-        let cpu = CpuScene::generate(&req.scene, &req.pack.id_maps, dh_enabled);
+        let with_sodium = dim.programs.iter().any(|p| p.draw_profile.as_deref() == Some(crate::scene::formats::SODIUM_TERRAIN.profile));
+        let cpu = CpuScene::generate(&req.scene, &req.pack.id_maps, dh_enabled, with_sodium);
         let scene = upload_scene(gpu, arena, &cpu)?;
 
         // Programs.
@@ -569,6 +581,17 @@ fn upload_scene(gpu: &mut Gpu, arena: &mut Arena, s: &CpuScene) -> Result<GpuSce
     for (i, r) in s.dh.regions.iter().enumerate() {
         dh.push((r.origin, upload_mesh(gpu, arena, &format!("DH region {i}"), &r.opaque)?, upload_mesh(gpu, arena, &format!("DH water {i}"), &r.water)?));
     }
+    let sodium = match &s.terrain.sodium {
+        Some(m) => {
+            let [a, b, c] = &m.layers;
+            Some(GpuSodium {
+                layers: [upload_mesh(gpu, arena, "Sodium terrain solid", a)?, upload_mesh(gpu, arena, "Sodium terrain cutout", b)?, upload_mesh(gpu, arena, "Sodium terrain translucent", c)?],
+                draw_regions: m.draw_regions.clone(),
+                regions: m.regions.clone(),
+            })
+        }
+        None => None,
+    };
     Ok(GpuScene {
         camera: s.camera,
         solid: upload_mesh(gpu, arena, "terrain solid", &s.terrain.solid)?,
@@ -581,5 +604,6 @@ fn upload_scene(gpu: &mut Gpu, arena: &mut Arena, s: &CpuScene) -> Result<GpuSce
         sun: upload_mesh(gpu, arena, "sun", &s.sky.sun)?,
         moon: upload_mesh(gpu, arena, "moon", &s.sky.moon)?,
         dh,
+        sodium,
     })
 }

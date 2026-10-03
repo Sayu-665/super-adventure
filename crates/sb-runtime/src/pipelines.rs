@@ -99,6 +99,8 @@ pub(crate) struct PreparedProgram {
     pub set_layouts: Vec<vk::DescriptorSetLayout>,
     pub layout: vk::PipelineLayout,
     pub push_constants: Option<(vk::ShaderStageFlags, u32)>,
+    /// Members of the push-constant block (union over the stages).
+    pub push_members: Vec<sb_compile::BufferMember>,
     pub vertex_inputs: Vec<InterfaceVar>,
     pub fragment_outputs: Vec<InterfaceVar>,
     pub patch_control_points: Option<u32>,
@@ -227,6 +229,11 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
         refls.push((sm.stage, refl));
         spirvs.push((sm.stage, words, sm.entry_point.clone()));
     }
+    for (k, (stage, _)) in refls.iter().enumerate() {
+        if refls[..k].iter().any(|(s, _)| s == stage) {
+            return Err(format!("the program has two {stage} stages"));
+        }
+    }
     let compute = refls.iter().any(|(s, _)| *s == ShaderStage::Compute);
     if compute && refls.len() != 1 {
         return Err("a compute program must have exactly one stage".into());
@@ -242,6 +249,9 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
     }
     if has(ShaderStage::TessControl) != has(ShaderStage::TessEval) {
         return Err("tessellation needs both a control and an evaluation stage".into());
+    }
+    if !compute {
+        check_interfaces(&refls)?;
     }
 
     let merged = merge_descriptors(&refls)?;
@@ -295,6 +305,12 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
         return Err(format!("push constants of {size} bytes exceed the device limit {}", limits.max_push_constants_size));
     }
 
+    let mut push_members: Vec<sb_compile::BufferMember> = Vec::new();
+    for m in refls.iter().filter_map(|(_, r)| r.push_constants.as_ref()).flat_map(|b| &b.members) {
+        if !push_members.iter().any(|x| x.name == m.name && x.offset == m.offset) {
+            push_members.push(m.clone());
+        }
+    }
     let vertex_inputs = refls.iter().find(|(s, _)| *s == ShaderStage::Vertex).map(|(_, r)| r.inputs.clone()).unwrap_or_default();
     if vertex_inputs.iter().any(|v| v.base_type != "float" && v.base_type != "int" && v.base_type != "uint") {
         return Err("vertex inputs of 64-bit, 16-bit or struct types are not supported".into());
@@ -363,6 +379,7 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
         set_layouts,
         layout,
         push_constants: push,
+        push_members,
         vertex_inputs,
         fragment_outputs,
         patch_control_points,
@@ -373,6 +390,39 @@ pub(crate) fn prepare(gpu: &Gpu, arena: &mut Arena, dim: &DimensionPipeline, blo
         pipelines_created: 0,
         input_warnings: Vec::new(),
     })
+}
+
+/// Every user input of a graphics stage must be written by the previous stage at the
+/// same location and component, with the same component type and at least as many
+/// components (Vulkan interface matching; violations are validation errors and
+/// undefined values). The translator links stages, so a mismatch is a model
+/// inconsistency (e.g. stages of different programs).
+fn check_interfaces(refls: &[(ShaderStage, Reflection)]) -> Result<(), String> {
+    let order = [ShaderStage::Vertex, ShaderStage::TessControl, ShaderStage::TessEval, ShaderStage::Geometry, ShaderStage::Fragment];
+    let stages: Vec<&(ShaderStage, Reflection)> = order.iter().filter_map(|o| refls.iter().find(|(s, _)| s == o)).collect();
+    for pair in stages.windows(2) {
+        let ((prev, producer), (next, consumer)) = (pair[0], pair[1]);
+        for input in &consumer.inputs {
+            let Some(output) = producer.outputs.iter().find(|o| o.location == input.location && o.component == input.component && o.patch == input.patch) else {
+                return Err(format!("{next} input `{}` (location {}) is not written by the {prev} stage", input.name, input.location));
+            };
+            let compatible = output.base_type == input.base_type
+                && output.columns == input.columns
+                && output.vec_size >= input.vec_size
+                && output.array_len == input.array_len;
+            if !compatible {
+                return Err(format!(
+                    "{next} input `{}` (location {}, {}) does not match the {prev} output `{}` ({})",
+                    input.name,
+                    input.location,
+                    input.glsl_type_name(),
+                    output.name,
+                    output.glsl_type_name()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn blend_factor(f: BlendFactor) -> vk::BlendFactor {
@@ -409,9 +459,17 @@ pub(crate) fn gl_blend_factor(f: BlendFactor) -> i32 {
 }
 
 /// Numeric class of a vertex attribute format.
-fn attribute_class(f: vk::Format) -> &'static str {
+pub(crate) fn attribute_class(f: vk::Format) -> &'static str {
     match f {
-        vk::Format::R8_UINT | vk::Format::R16_UINT | vk::Format::R16G16B16_UINT | vk::Format::R16G16B16A16_UINT | vk::Format::R32G32B32A32_UINT => "uint",
+        vk::Format::R8_UINT
+        | vk::Format::R16_UINT
+        | vk::Format::R32_UINT
+        | vk::Format::R16G16_UINT
+        | vk::Format::R32G32_UINT
+        | vk::Format::R16G16B16_UINT
+        | vk::Format::R8G8B8A8_UINT
+        | vk::Format::R16G16B16A16_UINT
+        | vk::Format::R32G32B32A32_UINT => "uint",
         vk::Format::R16G16_SINT | vk::Format::R8G8B8A8_SINT | vk::Format::R32G32B32_SINT | vk::Format::R32G32B32A32_SINT => "int",
         _ => "float",
     }
@@ -599,9 +657,13 @@ impl PreparedProgram {
         Ok(p)
     }
 
-    /// Output base type at `location` (`float` when unknown).
-    pub fn output_type(&self, location: u32) -> &str {
-        self.fragment_outputs.iter().find(|o| o.location == location).map_or("float", |o| o.base_type.as_str())
+    /// Every fragment output location (arrays and matrices expanded) with its base type
+    /// (`float`, `int`, `uint`).
+    pub fn output_classes(&self) -> HashMap<u32, String> {
+        self.fragment_outputs
+            .iter()
+            .flat_map(|o| (o.location..o.location.saturating_add(o.location_count.max(1))).map(move |l| (l, o.base_type.clone())))
+            .collect()
     }
 }
 
@@ -631,6 +693,16 @@ pub(crate) fn dispatch_size(work: Option<&sb_core::model::WorkGroups>, local: [u
         None => [width.div_ceil(local[0].max(1)), height.div_ceil(local[1].max(1)), 1],
     };
     [size[0].min(max[0]), size[1].min(max[1]), size[2].min(max[2])]
+}
+
+/// Numeric class of a reflected output/input base type (`int`, `uint`, else float).
+pub(crate) fn output_class(base_type: &str) -> crate::texel::NumericClass {
+    use crate::texel::NumericClass as C;
+    match base_type {
+        "int" => C::Int,
+        "uint" => C::Uint,
+        _ => C::Float,
+    }
 }
 
 /// Whether a reflected sampler result type matches a format's class.

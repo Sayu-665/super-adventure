@@ -11,6 +11,9 @@ use sb_expr::{Value, write_value};
 
 /// Near plane of `gbufferProjection` (Minecraft's 0.05).
 pub(crate) const NEAR: f64 = 0.05;
+/// Minecraft's default cloud range (128 chunks) in blocks: a lower bound of the level
+/// projection's far plane.
+pub(crate) const DEFAULT_CLOUD_RANGE_BLOCKS: f64 = 128.0 * 16.0;
 /// Near plane of `dhProjection`.
 pub(crate) const DH_NEAR: f64 = 0.1;
 /// `frameCounter` wraps at this value (as in Iris).
@@ -103,14 +106,19 @@ impl FrameState {
         let rd_blocks = f64::from(s.clamped_render_distance() * 16);
         let dh_chunks = f64::from(s.clamped_dh_distance());
         let dh_far = (dh_chunks * 16.0 + 512.0) * std::f64::consts::SQRT_2;
-        let far = if inp.dh && inp.unified_projection { dh_far } else { rd_blocks };
+        let unified = inp.dh && inp.unified_projection;
+        // `far` is the render distance in blocks (Iris `CameraUniforms`), while the level
+        // projection reaches Minecraft's `Camera.depthFar`; the unified DH projection uses
+        // the DH far plane for both (ARCHITECTURE §9).
+        let far = if unified { dh_far } else { rd_blocks };
+        let projection_far = if unified { dh_far } else { mc_depth_far(rd_blocks) };
         let fov = if s.fov.is_finite() { s.fov.clamp(10.0, 170.0) } else { 70.0 };
         let yaw = if s.yaw.is_finite() { s.yaw } else { 0.0 };
         let pitch = if s.pitch.is_finite() { s.pitch.clamp(-90.0, 90.0) } else { 0.0 };
         let model_view = math::mc_view_rotation(yaw, pitch);
         let aspect = width / height;
-        let projection = math::perspective_gl(fov, aspect, NEAR, far);
-        let (dh_near, dh_projection) = if inp.unified_projection { (NEAR, projection) } else { (DH_NEAR, math::perspective_gl(fov, aspect, DH_NEAR, dh_far)) };
+        let projection = math::perspective_gl(fov, aspect, NEAR, projection_far);
+        let (dh_near, dh_projection) = if unified { (NEAR, projection) } else { (DH_NEAR, math::perspective_gl(fov, aspect, DH_NEAR, dh_far)) };
 
         let world_time = s.world_time.rem_euclid(24000);
         let world_day = s.world_time.div_euclid(24000);
@@ -128,7 +136,7 @@ impl FrameState {
         let shadow_projection = match sh.fov {
             Some(fov) if fov.is_finite() && fov > 0.0 => shadow::perspective(f64::from(fov)),
             _ => {
-                let (n, f) = shadow_planes(sh, dh_chunks);
+                let (n, f) = shadow_planes(sh, shadow_plane_distance(inp.dh, dh_chunks, rd_blocks));
                 shadow::ortho(f64::from(sh.distance), n, f)
             }
         };
@@ -161,7 +169,7 @@ impl FrameState {
             near: NEAR,
             far,
             dh_near,
-            dh_far: if inp.unified_projection { far } else { dh_far },
+            dh_far: if unified { far } else { dh_far },
             dh_render_distance: (dh_chunks * 16.0) as i32,
             sky_angle,
             sun_angle,
@@ -188,15 +196,31 @@ impl FrameState {
     }
 }
 
+/// Minecraft 26.3's level projection far plane (`Camera.depthFar`): four times the
+/// render distance, at least the cloud range (default 128 chunks).
+pub(crate) fn mc_depth_far(render_distance_blocks: f64) -> f64 {
+    (render_distance_blocks * 4.0).max(DEFAULT_CLOUD_RANGE_BLOCKS)
+}
+
+/// The distance a `-1` shadow plane stands for, as Iris 26.3's `ShadowRenderer` and
+/// `MatrixUniforms` compute it: `DHCompat.getRenderDistance() * 16`, where
+/// `getRenderDistance()` is the vanilla render distance in *chunks* without DH but the DH
+/// distance already in *blocks* while DH renders, so Iris scales the DH distance by 16
+/// twice. Packs tuned on Iris see that range; it is reproduced here.
+pub(crate) fn shadow_plane_distance(dh: bool, dh_chunks: f64, render_distance_blocks: f64) -> f64 {
+    if dh { dh_chunks * 16.0 * 16.0 } else { render_distance_blocks }
+}
+
 /// The shadow ortho near/far planes: Iris 26.3 defaults (`-100.05` / `156`) when the
 /// model carries the documented OptiFine defaults `0.05` / `256` (which assumed the old
-/// light placement 100 blocks away), `-1` = DH render distance.
-pub(crate) fn shadow_planes(sh: &ShadowSettings, dh_chunks: f64) -> (f64, f64) {
+/// light placement 100 blocks away), `-1` = `-distance` / `+distance` (see
+/// [`shadow_plane_distance`]).
+pub(crate) fn shadow_planes(sh: &ShadowSettings, distance: f64) -> (f64, f64) {
     let (n, f) = (f64::from(sh.near_plane), f64::from(sh.far_plane));
     if (n - 0.05).abs() < 1e-6 && (f - 256.0).abs() < 1e-6 {
         return (shadow::NEAR, shadow::FAR);
     }
-    shadow::planes(n, f, dh_chunks)
+    shadow::planes_for_distance(n, f, distance)
 }
 
 /// Per-draw state.
@@ -219,6 +243,10 @@ pub(crate) struct DrawState {
     pub render_stage: i32,
     /// `vertUniqueUniformBlock.uModelOffset` (DH buffer minimum corner).
     pub dh_model_offset: [f32; 3],
+    /// Sodium `u_RegionOffset`: the region's minimum corner relative to the camera.
+    pub region_offset: [f32; 3],
+    /// Sodium `u_RegionID`.
+    pub region_id: u32,
     /// Shadow pass draw.
     pub shadow: bool,
 }
@@ -242,6 +270,8 @@ impl DrawState {
             texture_id: 0,
             render_stage: 0,
             dh_model_offset: [0.0; 3],
+            region_offset: [0.0; 3],
+            region_id: 0,
             shadow: false,
         }
     }
@@ -449,12 +479,49 @@ pub(crate) fn host_member_value(block: &str, member: &str, f: &FrameState, d: &D
         ("vertUniformBlock", "uCameraPosSubChunk") => v3(f.camera.map(|c| c - (c / 16.0).floor() * 16.0)),
         ("vertUniformBlock", "uOffsetChunk" | "uOffsetSubChunk") => v3([0.0; 3]),
         ("vertUniformBlock", "uNorthShading" | "uSouthShading" | "uEastShading" | "uWestShading" | "uTopShading" | "uBottomShading") => Value::Float(1.0),
+        // Sodium's terrain UBO (`sodium_terrain` profile).
+        ("u_Globals", "u_ProjectionMatrix") => m4(&d.projection),
+        ("u_Globals", "u_ModelViewMatrix") => m4(&d.model_view),
+        ("u_Globals", "u_FogColor") => Value::Vec4([f.fog_color[0], f.fog_color[1], f.fog_color[2], 1.0]),
+        ("u_Globals", "u_EnvironmentFog" | "u_RenderFog") => Value::Vec2([f.fog_start, f.fog_end]),
+        ("u_Globals", "u_TexelSize") => Value::Vec2(d.texture_size.map(|s| 1.0 / s.max(1) as f32)),
+        // A 1/64-texel nudge of each corner towards its quad centre (against bleeding).
+        ("u_Globals", "u_TexCoordShrink") => Value::Vec2(d.texture_size.map(|s| 1.0 / (64.0 * s.max(1) as f32))),
+        ("u_Globals", "u_FadePeriodInv") => Value::Float(1.0 / 0.75),
+        ("u_Globals", "u_UseRGSS") => b(false),
         _ => return None,
     })
 }
 
+/// The value of a push-constant member (Sodium's per-region `u_RegionOffset`,
+/// `u_CurrentTime`, `u_RegionID`). `None` = unknown (zero-filled).
+pub(crate) fn push_member_value(member: &str, f: &FrameState, d: &DrawState) -> Option<Value> {
+    Some(match member {
+        "u_RegionOffset" => Value::Vec3(d.region_offset),
+        "u_CurrentTime" => Value::Int(f.frame_counter as i32),
+        "u_RegionID" => Value::Int(d.region_id as i32),
+        _ => return None,
+    })
+}
+
+/// Push-constant bytes (`size` long) for reflected `members`: known members get their
+/// values, everything else stays zero.
+pub(crate) fn push_constant_bytes(members: &[sb_compile::BufferMember], size: u32, f: &FrameState, d: &DrawState) -> Vec<u8> {
+    let mut bytes = vec![0u8; size as usize];
+    for m in members {
+        let (Some(ty), Some(dst)) = (m.glsl_type, bytes.get_mut(m.offset as usize..)) else { continue };
+        if ty.array.is_some() {
+            continue;
+        }
+        if let Some(v) = push_member_value(&m.name, f, d) {
+            let _ = write_value(ty, v, dst);
+        }
+    }
+    bytes
+}
+
 /// Names of the host blocks [`host_member_value`] knows.
-pub(crate) const HOST_BLOCKS: [&str; 9] = [
+pub(crate) const HOST_BLOCKS: [&str; 10] = [
     "Globals",
     "TerrainUniform",
     "DynamicTransforms",
@@ -464,6 +531,7 @@ pub(crate) const HOST_BLOCKS: [&str; 9] = [
     "vertSharedUniformBlock",
     "fragUniformBlock",
     "vertUniformBlock",
+    "u_Globals",
 ];
 
 /// Write `values` (GLSL constructor order) into std140 memory of type `ty`.
@@ -636,9 +704,52 @@ mod tests {
     #[test]
     fn shadow_planes_use_iris_defaults() {
         let s = ShadowSettings::default();
-        assert_eq!(shadow_planes(&s, 16.0), (shadow::NEAR, shadow::FAR));
+        assert_eq!(shadow_planes(&s, 256.0), (shadow::NEAR, shadow::FAR));
         let s = ShadowSettings { near_plane: -1.0, far_plane: -1.0, ..Default::default() };
-        assert_eq!(shadow_planes(&s, 16.0), (-256.0, 256.0));
+        // Without DH, -1 is the vanilla render distance in blocks (Iris: chunks * 16)...
+        assert_eq!(shadow_planes(&s, shadow_plane_distance(false, 16.0, 64.0)), (-64.0, 64.0));
+        // ...while DH renders, Iris scales the DH distance in blocks by 16 again.
+        assert_eq!(shadow_planes(&s, shadow_plane_distance(true, 16.0, 64.0)), (-4096.0, 4096.0));
+        let s = ShadowSettings { near_plane: -1.0, far_plane: 300.0, ..Default::default() };
+        assert_eq!(shadow_planes(&s, 64.0), (-64.0, 300.0));
+    }
+
+    /// The `-1` shadow planes of a frame without Distant Horizons follow the vanilla
+    /// render distance (the planes used to collapse to 0 and fall back to the defaults).
+    #[test]
+    fn shadow_projection_without_dh_uses_render_distance() {
+        let scene = SceneParams { render_distance: 4, dh_render_distance: 0, ..Default::default() };
+        let settings = PackSettings::default();
+        let shadow = ShadowSettings { near_plane: -1.0, far_plane: -1.0, distance: 32.0, ..Default::default() };
+        let f = FrameState::new(&FrameInputs {
+            scene: &scene,
+            camera: [0.0, 80.0, 0.0],
+            width: 64,
+            height: 64,
+            frame: 0,
+            settings: &settings,
+            shadow: &shadow,
+            dh: false,
+            unified_projection: false,
+            center_depth: 1.0,
+        });
+        assert!(f.shadow_projection.approx_eq(&shadow::ortho(32.0, -64.0, 64.0), 1e-12), "{:?}", f.shadow_projection);
+    }
+
+    /// `gbufferProjection` is Minecraft's level projection: near 0.05, far `depthFar`
+    /// (4x the render distance, at least the 2048-block default cloud range), while
+    /// `far` reports the render distance; the unified DH projection uses the DH far
+    /// plane for both.
+    #[test]
+    fn projection_far_plane_is_minecraft_depth_far() {
+        assert_eq!(mc_depth_far(64.0), 2048.0);
+        assert_eq!(mc_depth_far(32.0 * 16.0), 2048.0);
+        assert_eq!(mc_depth_far(48.0 * 16.0), 3072.0);
+        let f = state();
+        assert!((f.projection.project_point([0.0, 0.0, -2048.0])[2] - 1.0).abs() < 1e-9);
+        assert!((f.projection.project_point([0.0, 0.0, -NEAR])[2] + 1.0).abs() < 1e-9);
+        let d = DrawState::new(&f);
+        assert_eq!(builtin_value("far", &f, &d), Some(Value::Float(64.0)));
     }
 
     #[test]

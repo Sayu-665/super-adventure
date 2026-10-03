@@ -3,7 +3,7 @@
 
 use crate::error::RuntimeError;
 use crate::executor::Executor;
-use crate::resources::{ImageId, full_barrier};
+use crate::resources::{ImageId, full_barrier, host_read_barrier};
 use crate::texel;
 use ash::vk;
 use gpu_allocator::MemoryLocation;
@@ -63,6 +63,7 @@ impl Executor<'_> {
             full_barrier(d, cmd);
             unsafe { d.cmd_copy_image_to_buffer(cmd, image, vk::ImageLayout::GENERAL, vkbuf, &[region]) };
             full_barrier(d, cmd);
+            host_read_barrier(d, cmd);
         })?;
         let depth = self.depth;
         let bytes = self.arena.buffer(buf).mapped_ref().map(<[u8]>::to_vec).unwrap_or_default();

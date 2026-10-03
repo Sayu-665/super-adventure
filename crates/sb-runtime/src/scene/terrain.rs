@@ -1,7 +1,7 @@
 //! Vanilla terrain: chunk sections of a voxel heightmap world in the `vanilla_terrain`
 //! vertex layout, split into solid, cutout (leaves) and translucent (water) buffers.
 
-use super::formats::{CHUNK_INSTANCE_STRIDE, TERRAIN_STRIDE, VANILLA_TERRAIN, VertexWriter};
+use super::formats::{CHUNK_INSTANCE_STRIDE, SODIUM_STRIDE, SODIUM_TERRAIN, TERRAIN_STRIDE, VANILLA_TERRAIN, VertexWriter};
 use super::world::World;
 use super::{Block, BlockIds, CpuMesh};
 use crate::textures::Tile;
@@ -21,6 +21,105 @@ pub(crate) struct TerrainMeshes {
     pub instances: Vec<u8>,
     /// Section origins in blocks, in instance order.
     pub sections: Vec<[i32; 3]>,
+    /// The same terrain in Sodium's format, when requested.
+    pub sodium: Option<SodiumMeshes>,
+}
+
+/// Sections per Sodium render region along x, y and z.
+pub(crate) const SODIUM_REGION_SECTIONS: [i32; 3] = [8, 4, 8];
+
+/// A Sodium render region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SodiumRegion {
+    /// Minimum corner in blocks.
+    pub origin: [i32; 3],
+    /// `u_RegionID`.
+    pub id: u32,
+}
+
+/// The terrain in the `sodium_terrain` layout: per layer (solid, cutout, translucent)
+/// one sub-draw per region, positions relative to their section, sections indexed in
+/// their region.
+#[derive(Debug, Clone)]
+pub(crate) struct SodiumMeshes {
+    pub layers: [CpuMesh; 3],
+    /// Region (index into `regions`) of each sub-draw of each layer.
+    pub draw_regions: [Vec<usize>; 3],
+    pub regions: Vec<SodiumRegion>,
+}
+
+/// One vertex in Sodium's compact format plus the extension attributes (see
+/// [`SODIUM_TERRAIN`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SodiumVertex {
+    /// Section-local position (`-8..24` representable).
+    pub pos: [f32; 3],
+    pub color: [f32; 4],
+    pub uv: [f32; 2],
+    /// Centre of the quad's UVs (the sign bit nudges towards it).
+    pub uv_centre: [f32; 2],
+    /// Block and sky light, `16 L` (0..240).
+    pub light: [u8; 2],
+    pub material: u8,
+    /// Section index in its region: `x << 5 | z << 2 | y`.
+    pub section: u8,
+    /// `block.properties` id, `-1` when unmapped.
+    pub block_id: i32,
+    pub fluid: bool,
+    pub normal: [f32; 3],
+    pub mid_uv: [f32; 2],
+    /// (block centre − vertex) × 64.
+    pub mid_block: [i8; 3],
+    pub emission: u8,
+}
+
+/// Sodium's 20-bit position quantization: `(p + 8) / 32 * 2^20`.
+fn sodium_quantize(p: f32) -> u32 {
+    ((f64::from(p) + 8.0) / 32.0 * f64::from(1u32 << 20)).round().clamp(0.0, f64::from(0xF_FFFF)) as u32
+}
+
+/// A 15-bit texture coordinate with the centre-nudge sign in bit 15.
+fn sodium_uv(c: f32, centre: f32) -> u16 {
+    let v = (f64::from(c) * 32768.0).round().clamp(0.0, 32767.0) as u16;
+    v | (u16::from(c < centre) << 15)
+}
+
+/// Pack one vertex in the [`SODIUM_TERRAIN`] layout.
+pub(crate) fn pack_sodium_vertex(w: &mut VertexWriter, v: &SodiumVertex) {
+    let q = v.pos.map(sodium_quantize);
+    let hi = (q[0] >> 10 & 0x3FF) | (q[1] >> 10 & 0x3FF) << 10 | (q[2] >> 10 & 0x3FF) << 20;
+    let lo = (q[0] & 0x3FF) | (q[1] & 0x3FF) << 10 | (q[2] & 0x3FF) << 20;
+    let light = v.light.map(|l| l.saturating_add(8).clamp(8, 248));
+    let entity = ((v.block_id.max(-1) + 1) as u32) << 1 | u32::from(v.fluid);
+    let mid = v.mid_uv.map(|c| (f64::from(c) * 32768.0).round().clamp(0.0, 65535.0) as u16);
+    w.u32(hi)
+        .u32(lo)
+        .unorm4(v.color)
+        .u16(sodium_uv(v.uv[0], v.uv_centre[0]))
+        .u16(sodium_uv(v.uv[1], v.uv_centre[1]))
+        .u8s([light[0], light[1], v.material, v.section])
+        .u32(entity)
+        .snorm4([v.normal[0], v.normal[1], v.normal[2], 0.0])
+        .u16(mid[0])
+        .u16(mid[1])
+        .u8s([v.mid_block[0] as u8, v.mid_block[1] as u8, v.mid_block[2] as u8, v.emission]);
+}
+
+/// Sodium material bits of a layer: bit 0 = mipmapped, bits 1-2 = alpha cutoff index into
+/// `{0, 0.1, 0.5, 1.0}`.
+fn sodium_material(layer: Layer) -> u8 {
+    match layer {
+        Layer::Solid => 1,
+        Layer::Cutout => 1 | 2 << 1,
+        Layer::Translucent => 1 | 1 << 1,
+    }
+}
+
+/// Region (in region units) and section index of a section.
+fn sodium_region_of(sec: [i32; 3]) -> ([i32; 3], u8) {
+    let r = [0, 1, 2].map(|i| sec[i].div_euclid(SODIUM_REGION_SECTIONS[i]));
+    let l = [0, 1, 2].map(|i| sec[i] - r[i] * SODIUM_REGION_SECTIONS[i]);
+    (r, ((l[0] << 5) | (l[2] << 2) | l[1]) as u8)
 }
 
 /// Cube faces in DH direction order.
@@ -142,6 +241,8 @@ struct FaceDesc {
 struct Builder<'a> {
     ids: &'a BlockIds,
     sections: BTreeMap<[i32; 3], [Vec<u8>; 3]>,
+    /// Sodium vertices per region (region units) and layer, when requested.
+    sodium: Option<BTreeMap<[i32; 3], [Vec<u8>; 3]>>,
 }
 
 impl Builder<'_> {
@@ -154,28 +255,57 @@ impl Builder<'_> {
         let tint = face_tint(f.block, f.face);
         let normal = f.face.normal();
         let block_id = self.ids.get(f.block);
-        let render_type: i16 = if f.block == Block::Water { 1 } else { 0 };
+        // Iris' Sodium path: `mc_Entity.y` is 1 for fluids and 0 for other blocks.
+        let fluid = f.block == Block::Water;
+        let (region, section) = sodium_region_of(sec);
         let mut w = VertexWriter::default();
+        let mut sw = VertexWriter::default();
         for (i, c) in f.face.corners().into_iter().enumerate() {
             let c = [c[0], c[1] * f.top, c[2]];
             let p = [local[0] + c[0], local[1] + c[1], local[2] + c[2]];
             let [s, t] = f.face.sprite_uv(c);
             let ao = f.ao[i];
-            let mid_block = [(0.5 - c[0]) * 64.0, (0.5 - c[1]) * 64.0, (0.5 - c[2]) * 64.0].map(|v| v.round() as i8 as u8);
+            let uv = [u0 + (u1 - u0) * s, v0 + (v1 - v0) * t];
+            let color = [tint[0] * ao, tint[1] * ao, tint[2] * ao, 1.0];
+            let mid_block = [(0.5 - c[0]) * 64.0, (0.5 - c[1]) * 64.0, (0.5 - c[2]) * 64.0].map(|v| v.round() as i8);
             w.f32s(&p)
-                .unorm4([tint[0] * ao, tint[1] * ao, tint[2] * ao, 1.0])
-                .f32s(&[u0 + (u1 - u0) * s, v0 + (v1 - v0) * t])
+                .unorm4(color)
+                .f32s(&uv)
                 .i16(0)
                 .i16(240)
                 .snorm4([normal[0], normal[1], normal[2], 0.0])
                 .i16(block_id.clamp(i16::MIN.into(), i16::MAX.into()) as i16)
-                .i16(render_type)
+                .i16(i16::from(fluid))
                 .f32s(&mid)
                 .snorm4(f.face.tangent())
-                .u8s([mid_block[0], mid_block[1], mid_block[2], f.block.emission()]);
+                .u8s([mid_block[0] as u8, mid_block[1] as u8, mid_block[2] as u8, f.block.emission()]);
+            if self.sodium.is_some() {
+                pack_sodium_vertex(
+                    &mut sw,
+                    &SodiumVertex {
+                        pos: p,
+                        color,
+                        uv,
+                        uv_centre: mid,
+                        light: [0, 240],
+                        material: sodium_material(layer),
+                        section,
+                        block_id,
+                        fluid,
+                        normal,
+                        mid_uv: mid,
+                        mid_block,
+                        emission: f.block.emission(),
+                    },
+                );
+            }
         }
         debug_assert_eq!(w.bytes.len(), 4 * TERRAIN_STRIDE as usize);
         self.sections.entry(sec).or_default()[layer as usize].extend_from_slice(&w.bytes);
+        if let Some(regions) = self.sodium.as_mut() {
+            debug_assert_eq!(sw.bytes.len(), 4 * SODIUM_STRIDE as usize);
+            regions.entry(region).or_default()[layer as usize].extend_from_slice(&sw.bytes);
+        }
     }
 }
 
@@ -209,9 +339,10 @@ fn top_ao(world: &World, x: i32, z: i32, h: i32) -> [f32; 4] {
     [f(level(-1, -1)), f(level(-1, 1)), f(level(1, 1)), f(level(1, -1))]
 }
 
-/// Generate the terrain within `rd` chunks of `cam_chunk`.
-pub(crate) fn build(world: &World, ids: &BlockIds, cam_chunk: [i32; 2], rd: i32) -> TerrainMeshes {
-    let mut b = Builder { ids, sections: BTreeMap::new() };
+/// Generate the terrain within `rd` chunks of `cam_chunk` (also in Sodium's format with
+/// `sodium`).
+pub(crate) fn build(world: &World, ids: &BlockIds, cam_chunk: [i32; 2], rd: i32, sodium: bool) -> TerrainMeshes {
+    let mut b = Builder { ids, sections: BTreeMap::new(), sodium: sodium.then(BTreeMap::new) };
     let sea = world.sea_level();
     let x0 = (cam_chunk[0] - rd) * 16;
     let x1 = (cam_chunk[0] + rd + 1) * 16;
@@ -240,12 +371,33 @@ pub(crate) fn build(world: &World, ids: &BlockIds, cam_chunk: [i32; 2], rd: i32)
             }
         }
     }
+    let sodium = b.sodium.take().map(|regions| {
+        let mut out = SodiumMeshes {
+            layers: [CpuMesh::new(&SODIUM_TERRAIN), CpuMesh::new(&SODIUM_TERRAIN), CpuMesh::new(&SODIUM_TERRAIN)],
+            draw_regions: Default::default(),
+            regions: Vec::new(),
+        };
+        for (region, layers) in regions {
+            let index = out.regions.len();
+            let origin = [0, 1, 2].map(|i| region[i] * SODIUM_REGION_SECTIONS[i] * 16);
+            out.regions.push(SodiumRegion { origin, id: index as u32 });
+            for (k, bytes) in layers.iter().enumerate() {
+                let before = out.layers[k].draws.len();
+                out.layers[k].push_draw(bytes, 0);
+                if out.layers[k].draws.len() > before {
+                    out.draw_regions[k].push(index);
+                }
+            }
+        }
+        out
+    });
     let mut meshes = TerrainMeshes {
         solid: CpuMesh::new(&VANILLA_TERRAIN),
         cutout: CpuMesh::new(&VANILLA_TERRAIN),
         water: CpuMesh::new(&VANILLA_TERRAIN),
         instances: Vec::new(),
         sections: Vec::new(),
+        sodium,
     };
     for (sec, layers) in b.sections {
         let instance = meshes.sections.len() as u32;
@@ -318,6 +470,55 @@ mod tests {
         assert_eq!(Face::North.dh_index(), 2);
     }
 
+    /// Byte-exact Sodium compact vertex + extension attributes (`sodium_terrain`).
+    #[test]
+    fn sodium_vertex_byte_layout() {
+        let mut w = VertexWriter::default();
+        let v = SodiumVertex {
+            pos: [1.0, 16.0, 0.5],
+            color: [1.0, 0.5, 0.0, 1.0],
+            uv: [0.25, 0.75],
+            uv_centre: [0.5, 0.5],
+            light: [32, 240],
+            material: 5,
+            section: (3 << 5) | (6 << 2) | 2,
+            block_id: 41,
+            fluid: true,
+            normal: [0.0, -1.0, 0.0],
+            mid_uv: [0.5, 0.125],
+            mid_block: [32, -32, 0],
+            emission: 7,
+        };
+        pack_sodium_vertex(&mut w, &v);
+        assert_eq!(w.bytes.len(), SODIUM_STRIDE as usize);
+        let u32_at = |o: usize| u32::from_le_bytes(w.bytes[o..o + 4].try_into().unwrap());
+        let u16_at = |o: usize| u16::from_le_bytes([w.bytes[o], w.bytes[o + 1]]);
+        // 20-bit quantization (p + 8) * 32768, interleaved hi/lo 10-bit halves.
+        let q = [9.0f64, 24.0, 8.5].map(|p| (p * 32768.0) as u32);
+        let hi = (q[0] >> 10) | (q[1] >> 10) << 10 | (q[2] >> 10) << 20;
+        let lo = (q[0] & 0x3FF) | (q[1] & 0x3FF) << 10 | (q[2] & 0x3FF) << 20;
+        assert_eq!((u32_at(0), u32_at(4)), (hi, lo));
+        // Decoding as the profile does: ((hi << 10) | lo) * 32 / 2^20 - 8.
+        let dec = |shift: u32| f64::from(((u32_at(0) >> shift & 0x3FF) << 10) | (u32_at(4) >> shift & 0x3FF)) * 32.0 / f64::from(1u32 << 20) - 8.0;
+        assert_eq!([dec(0), dec(10), dec(20)], [1.0, 16.0, 0.5]);
+        assert_eq!(&w.bytes[8..12], &[255, 128, 0, 255]);
+        // UV: 15 bits + sign bit set when below the centre.
+        assert_eq!(u16_at(12), 8192 | 0x8000);
+        assert_eq!(u16_at(14), 24576);
+        // Light 16 L + 8, material, section.
+        assert_eq!(&w.bytes[16..20], &[40, 248, 5, (3 << 5) | (6 << 2) | 2]);
+        assert_eq!(u32_at(20), (42 << 1) | 1);
+        assert_eq!(&w.bytes[24..28], &[0, 0x81, 0, 0]);
+        assert_eq!((u16_at(28), u16_at(30)), (16384, 4096));
+        assert_eq!(&w.bytes[32..36], &[32, (-32i8) as u8, 0, 7]);
+        // Unmapped blocks encode id -1 as 0.
+        let mut w2 = VertexWriter::default();
+        pack_sodium_vertex(&mut w2, &SodiumVertex { block_id: -1, fluid: false, ..v });
+        assert_eq!(u32::from_le_bytes(w2.bytes[20..24].try_into().unwrap()), 0);
+        // Region of a section: 8x4x8 sections, index x << 5 | z << 2 | y.
+        assert_eq!(sodium_region_of([-1, 5, 17]), ([-1, 1, 2], ((7 << 5) | (1 << 2) | 1) as u8));
+    }
+
     #[test]
     fn terrain_vertex_packing() {
         let mut maps = IdMaps::default();
@@ -325,7 +526,7 @@ mod tests {
         maps.blocks.insert(8, vec!["minecraft:water".into()]);
         let ids = BlockIds::from_id_maps(&maps);
         let world = World::new(3);
-        let m = build(&world, &ids, [0, 0], 0);
+        let m = build(&world, &ids, [0, 0], 0, false);
         assert!(!m.solid.is_empty());
         assert_eq!(m.solid.vertices.len() % TERRAIN_STRIDE as usize, 0);
         assert_eq!(m.instances.len(), m.sections.len() * CHUNK_INSTANCE_STRIDE as usize);

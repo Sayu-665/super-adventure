@@ -172,6 +172,16 @@ pub(crate) fn full_barrier(device: &ash::Device, cmd: vk::CommandBuffer) {
     }
 }
 
+/// Make every device write visible to host reads after the submission's fence wait
+/// (the device → host domain operation readbacks need; `ALL_COMMANDS` does not cover
+/// the host stage).
+pub(crate) fn host_read_barrier(device: &ash::Device, cmd: vk::CommandBuffer) {
+    let mb = [vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::MEMORY_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ)];
+    unsafe {
+        device.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::HOST, vk::DependencyFlags::empty(), &mb, &[], &[]);
+    }
+}
+
 impl Arena {
     pub fn image(&self, id: ImageId) -> &GpuImage {
         &self.images[id.0]

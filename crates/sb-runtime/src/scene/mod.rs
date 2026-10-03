@@ -256,14 +256,14 @@ pub(crate) struct CpuScene {
 }
 
 impl CpuScene {
-    /// Generate the whole scene.
-    pub fn generate(params: &SceneParams, ids: &IdMaps, with_dh: bool) -> Self {
+    /// Generate the whole scene (`with_sodium`: the terrain in Sodium's format too).
+    pub fn generate(params: &SceneParams, ids: &IdMaps, with_dh: bool, with_sodium: bool) -> Self {
         let world = world::World::new(params.seed);
         let camera = params.camera_position();
         let block_ids = BlockIds::from_id_maps(ids);
         let rd = params.clamped_render_distance() as i32;
         let cam_chunk = [(camera[0].floor() as i32).div_euclid(16), (camera[2].floor() as i32).div_euclid(16)];
-        let terrain = terrain::build(&world, &block_ids, cam_chunk, rd);
+        let terrain = terrain::build(&world, &block_ids, cam_chunk, rd, with_sodium);
         let (entities, entity_mesh) = if params.entities {
             entity::build(&world, ids, camera, math::mc_look_vector(params.yaw, 0.0))
         } else {
@@ -330,13 +330,18 @@ mod tests {
     #[test]
     fn scene_is_deterministic() {
         let p = SceneParams { render_distance: 1, dh_render_distance: 3, ..Default::default() };
-        let a = CpuScene::generate(&p, &IdMaps::default(), true);
-        let b = CpuScene::generate(&p, &IdMaps::default(), true);
+        let a = CpuScene::generate(&p, &IdMaps::default(), true, true);
+        let b = CpuScene::generate(&p, &IdMaps::default(), true, true);
         assert_eq!(a.terrain.solid.vertices, b.terrain.solid.vertices);
         assert_eq!(a.dh.regions.len(), b.dh.regions.len());
         assert!(!a.terrain.solid.is_empty());
         assert!(!a.dh.regions.is_empty());
-        let c = CpuScene::generate(&SceneParams { seed: 2, ..p }, &IdMaps::default(), true);
+        let c = CpuScene::generate(&SceneParams { seed: 2, ..p }, &IdMaps::default(), true, false);
+        assert!(c.terrain.sodium.is_none());
+        let sa = a.terrain.sodium.as_ref().expect("sodium meshes");
+        assert_eq!(sa.layers[0].vertices, b.terrain.sodium.as_ref().expect("sodium meshes").layers[0].vertices);
+        // Same quads in both formats.
+        assert_eq!(sa.layers[0].indices.len(), a.terrain.solid.indices.len());
         assert_ne!(a.terrain.solid.vertices, c.terrain.solid.vertices);
     }
 }

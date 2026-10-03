@@ -113,8 +113,11 @@ impl Executor<'_> {
                 let mip = pair.mipped && ctx.mip_targets.contains(i);
                 (img, mip, SamplerKey { linear: self.linear_ok(img), mipmapped: mip, mip_linear: true, repeat: false, compare: None })
             }
-            ResourceRef::DepthTex(i) => (self.targets.depth[(*i as usize).min(2)], false, nearest),
-            ResourceRef::DhDepthTex(i) => (self.targets.dh_depth[(*i as usize).min(1)], false, nearest),
+            // A depth texture declared as a shadow sampler (`sampler2DShadow depthtex1`)
+            // needs a comparison sampler too: a Dref lookup through a plain sampler is
+            // undefined.
+            ResourceRef::DepthTex(i) => (self.targets.depth[(*i as usize).min(2)], false, SamplerKey { compare: shadow_compare.then_some(self.depth.compare), ..nearest }),
+            ResourceRef::DhDepthTex(i) => (self.targets.dh_depth[(*i as usize).min(1)], false, SamplerKey { compare: shadow_compare.then_some(self.depth.compare), ..nearest }),
             ResourceRef::ShadowTex(i) | ResourceRef::ShadowTexHw(i) => {
                 let k = (*i as usize).min(1);
                 let img = self.targets.shadow[k];
@@ -261,6 +264,8 @@ impl Executor<'_> {
                 (img, false, SamplerKey { compare, ..SamplerKey::NEAREST_CLAMP })
             }
         };
+        // Comparison exactly for shadow samplers, whatever the resource.
+        let key = SamplerKey { compare: shadow.then_some(self.depth.compare), ..key };
         let image = self.substitute(image, ctx)?;
         Ok(ImageBinding { image, view: ViewKey { ty, all_levels }, sampler: with_sampler.then_some(key) })
     }

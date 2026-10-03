@@ -12,17 +12,22 @@
 //!
 //! * frame order follows Iris: clears → `setup` (first frame) → `begin` → shadow pass
 //!   (opaque casters, shadowtex1 copy, translucent casters) → `shadowcomp` → `prepare` →
-//!   opaque gbuffers (sky, DH LODs, terrain, entities) → depthtex1 copy → `deferred` →
-//!   translucent gbuffers (water, DH water) → `composite` → `final` → end-of-frame
-//!   alt → main copies; composite-style programs read the current image of each colortex
-//!   and write the other, as in Iris' `BufferFlipper`, with the model's `flip_state` as
-//!   the authority;
+//!   opaque gbuffers (sky, DH LODs, terrain, entities) → centre depth sample and depthtex2
+//!   copy (`beginHand`), depthtex1 copy (`beginTranslucents`) → `deferred` → translucent
+//!   gbuffers (water, DH water) → `composite` → `final` → end-of-frame alt → main copies;
+//!   composite-style programs read the current image of each colortex and write the
+//!   other, as in Iris' `BufferFlipper`, with the model's `flip_state` as the authority;
+//! * every attachment is written only where the fragment shader declares an output of
+//!   the attachment's numeric class (otherwise it is masked or bound to a sink), shadow
+//!   samplers always get comparison samplers, and stage interfaces are checked before a
+//!   program is used;
 //! * every builtin uniform of the sb-uniforms registry has a provider, `sb_Frame` is
 //!   filled once per frame and custom uniforms are evaluated with `sb-expr`;
 //! * the draw-profile host blocks (`Globals`, `TerrainUniform`, `DynamicTransforms`, DH's
 //!   `vertUniqueUniformBlock`/`vertSharedUniformBlock`, ...) are filled per draw;
-//! * the scene's vertex buffers are byte-exact Minecraft 26.3 / DH 3.3 layouts
-//!   ([`scene::formats`]);
+//! * the scene's vertex buffers are byte-exact Minecraft 26.3 / DH 3.3 layouts, plus
+//!   Sodium 0.9's compact terrain format for programs translated with the
+//!   `sodium_terrain` profile ([`scene::formats`]);
 //! * matrices are GL-style ([`math`]), including Iris' shadow and celestial math.
 //!
 //! The runtime never translates anything: it only consumes the model. Model
@@ -270,6 +275,61 @@ pub fn render_to_png(pack: &CompiledPack, blobs: &BlobTable, textures: &dyn Text
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+
+    fn validating_runtime() -> Option<Runtime> {
+        match Runtime::new(&RuntimeOptions { validation: true, prefer_cpu_device: true, device_name_filter: None }) {
+            Ok(rt) if rt.device_info().validation => Some(rt),
+            Ok(_) => {
+                eprintln!("skipping: the validation layer is not installed");
+                None
+            }
+            Err(e) => {
+                eprintln!("skipping: {e}");
+                None
+            }
+        }
+    }
+
+    /// Every render releases all of its GPU memory, and no Vulkan object outlives the
+    /// device: the validation layer reports objects still alive at `vkDestroyDevice`
+    /// into the message sink, which is checked after the runtime is dropped.
+    #[test]
+    fn renders_release_every_object_and_allocation() {
+        let (pack, blobs) = crate::testutil::mini_pack();
+        for round in 0..3 {
+            let Some(mut rt) = validating_runtime() else { return };
+            let sink = rt.gpu.message_sink();
+            let baseline = rt.gpu.live_allocations();
+            for frames in [1, 2] {
+                let out = rt
+                    .render(&RenderRequest {
+                        pack: &pack,
+                        blobs: &blobs,
+                        dimension: "world0",
+                        width: 32,
+                        height: 24,
+                        frames,
+                        scene: SceneParams { render_distance: 1, dh_render_distance: 0, ..Default::default() },
+                        depth_mode: DepthMode::ForwardZeroToOne,
+                        textures: &NoTextures,
+                        capture_targets: true,
+                    })
+                    .expect("render");
+                assert!(out.validation_messages.is_empty(), "{:#?}", out.validation_messages);
+                assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
+                assert!(out.stats.pipelines_created >= 3 && out.stats.dispatches == 1, "{:?}", out.stats);
+                assert_eq!(rt.gpu.live_allocations(), baseline, "round {round}: a render leaked GPU memory");
+            }
+            drop(rt);
+            let leaks = sink.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
+            assert!(leaks.is_empty(), "round {round}: objects alive at vkDestroyDevice: {leaks:#?}");
+        }
+    }
 }
 
 #[cfg(test)]

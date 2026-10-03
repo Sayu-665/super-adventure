@@ -7,7 +7,7 @@ mod common;
 use common::{GPU_LOCK, Variant, runtime, small_scene, test_pack};
 use sb_core::model::*;
 use sb_core::program::GeometryProgram;
-use sb_core::{GlslType, PassGroup, TextureFormat};
+use sb_core::{GlslType, PassGroup, ShaderStage, TextureFormat};
 use sb_runtime::{NoTextures, RenderRequest};
 
 type Mutation = (&'static str, fn(&mut CompiledPack, &mut BlobTable));
@@ -111,6 +111,16 @@ const MUTATIONS: &[Mutation] = &[
         f.size = 16;
         dim(p).uniforms.draw.size = 0;
     }),
+    ("uniform block sizes absurd", |p, _| {
+        // Shaders only read their declared ranges; a corrupt size or member offset must
+        // neither allocate gigabytes per draw nor fail the frame.
+        let f = &mut dim(p).uniforms.frame;
+        f.size = u32::MAX;
+        f.members.push(BlockMember { name: "far_away".into(), ty: GlslType::VEC4, offset: u32::MAX - 15, source: UniformSource::Builtin("fogColor".into()), default: None });
+        let d = &mut dim(p).uniforms.draw;
+        d.size = u32::MAX;
+        d.members.push(BlockMember { name: "far_away".into(), ty: GlslType::MAT4, offset: 0x7fff_0000, source: UniformSource::Builtin("projectionMatrix".into()), default: None });
+    }),
     ("dh native without dh programs", |p, _| {
         dim(p).distant_horizons = DhPipeline { strategy: DhStrategy::Native, unified_projection: false, shadow_enabled: true };
         dim(p).geometry.shift_remove(&GeometryProgram::DhTerrain);
@@ -127,6 +137,21 @@ const MUTATIONS: &[Mutation] = &[
         let _ = b;
     }),
     ("empty program", |p, _| dim(p).programs[5].stages.clear()),
+    ("duplicate stages", |p, _| {
+        let d = dim(p);
+        let vs = d.programs[6].stages[0].clone();
+        d.programs[6].stages.push(vs);
+    }),
+    ("stage interfaces that do not match", |p, b| {
+        // `final` gets a fragment stage reading an input its vertex stage never writes,
+        // `composite` one whose input type differs from the vertex output.
+        let compile = |src: &str| sb_compile::compile_glsl(src, ShaderStage::Fragment, "robustness", &Default::default(), None).expect("compiles");
+        let unproduced = b.push_spirv(&compile("#version 460\nlayout(location = 0) in vec2 texcoord;\nlayout(location = 3) in vec4 missing;\nlayout(location = 0) out vec4 o;\nvoid main() { o = vec4(texcoord, 0.0, 1.0) + missing; }\n"));
+        let mismatched = b.push_spirv(&compile("#version 460\nlayout(location = 0) flat in ivec2 texcoord;\nlayout(location = 0) out vec4 o;\nvoid main() { o = vec4(vec2(texcoord), 0.0, 1.0); }\n"));
+        let d = dim(p);
+        d.programs[8].stages[1].spirv = Some(unproduced);
+        d.programs[6].stages[1].spirv = Some(mismatched);
+    }),
     ("custom textures and images that cannot load", |p, _| {
         let t = &mut dim(p).targets;
         t.custom_textures.push(CustomTexture { sampler: "a".into(), stage: "composite".into(), source: sb_core::model::TextureSource::PackImage { path: "../../etc/passwd".into() }, blur: true, clamp: false });

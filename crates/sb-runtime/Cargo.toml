@@ -26,3 +26,7 @@ thiserror.workspace = true
 log.workspace = true
 sb-pipeline = { workspace = true, optional = true }
 sb-pack = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Reads crates/sb-transform/profiles/*.toml to cross-check the scene's vertex layouts.
+toml.workspace = true

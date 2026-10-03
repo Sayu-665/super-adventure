@@ -289,11 +289,20 @@ pub mod shadow {
         }
     }
 
-    /// The near/far planes Iris uses for the ortho projection: `-1` means "DH render
-    /// distance" (`-dh * 16` / `dh * 16`, with `dh_render_distance_chunks`).
+    /// The near/far planes of the ortho projection with `-1` meaning a render distance
+    /// given in chunks (`-chunks * 16` / `chunks * 16`); see [`planes_for_distance`].
     pub fn planes(near: f64, far: f64, dh_render_distance_chunks: f64) -> (f64, f64) {
-        let near = if (near + 1.0).abs() < 1e-6 { -dh_render_distance_chunks * 16.0 } else { near };
-        let far = if (far + 1.0).abs() < 1e-6 { dh_render_distance_chunks * 16.0 } else { far };
+        planes_for_distance(near, far, dh_render_distance_chunks * 16.0)
+    }
+
+    /// The near/far planes Iris uses for the ortho projection: a `-1` plane stands for
+    /// `-distance` (near) / `+distance` (far). Iris passes
+    /// `DHCompat.getRenderDistance() * 16`, which is the vanilla render distance in blocks
+    /// without Distant Horizons, but 16 times the DH distance in blocks while DH renders
+    /// (its `getRenderDistance()` already returns blocks then).
+    pub fn planes_for_distance(near: f64, far: f64, distance: f64) -> (f64, f64) {
+        let near = if (near + 1.0).abs() < 1e-6 { -distance } else { near };
+        let far = if (far + 1.0).abs() < 1e-6 { distance } else { far };
         (near, far)
     }
 }
