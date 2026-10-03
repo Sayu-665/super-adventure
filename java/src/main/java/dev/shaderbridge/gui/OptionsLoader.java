@@ -14,8 +14,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Loads a pack's options for the GUI: from the active pack when it is the one asked for,
- * otherwise by opening the pack natively on a background thread.
+ * Loads a pack's options for the GUI on a background thread, with the lang strings of the
+ * player's language: through the active pack's native session when it is the pack asked for,
+ * otherwise by opening the pack natively.
  */
 final class OptionsLoader {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(runnable -> {
@@ -41,16 +42,26 @@ final class OptionsLoader {
             return CompletableFuture.failedFuture(e);
         }
         LoadedPack active = bridge.activePack().filter(p -> p.name().equals(pack.name())).orElse(null);
-        if (active != null) {
-            return CompletableFuture.completedFuture(new OptionsEditor(active.model().options(), saved));
+        return CompletableFuture.supplyAsync(() -> new OptionsEditor(active != null ? activeOptions(active, language) : options(pack, language), saved), WORKER);
+    }
+
+    /**
+     * The active pack's options in the requested language; the compiled model (whose lang strings
+     * are {@code en_us}) if the session was closed in the meantime.
+     */
+    private static OptionsModel activeOptions(LoadedPack active, String language) {
+        try {
+            return active.session().options(language);
+        } catch (PackException e) {
+            return active.model().options();
         }
-        return CompletableFuture.supplyAsync(() -> {
-            try (PackSession session = PackSession.open(pack.file())) {
-                OptionsModel model = session.options(language);
-                return new OptionsEditor(model, saved);
-            } catch (PackException e) {
-                throw new CompletionException(e);
-            }
-        }, WORKER);
+    }
+
+    private static OptionsModel options(PackEntry pack, String language) {
+        try (PackSession session = PackSession.open(pack.file())) {
+            return session.options(language);
+        } catch (PackException e) {
+            throw new CompletionException(e);
+        }
     }
 }

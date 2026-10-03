@@ -4,6 +4,7 @@ import dev.shaderbridge.model.Blobs;
 import dev.shaderbridge.model.CompileEnvironment;
 import dev.shaderbridge.model.CompiledPack;
 import dev.shaderbridge.model.ModelJson;
+import dev.shaderbridge.model.ModelValidation;
 import dev.shaderbridge.model.OptionsModel;
 import dev.shaderbridge.model.json.ModelParseException;
 import dev.shaderbridge.natives.NativeLibrary;
@@ -11,6 +12,7 @@ import dev.shaderbridge.natives.ShaderBridgeNative;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * An open pack in the native library. Calls are serialized per session; long-running calls
@@ -117,6 +119,10 @@ public final class PackSession implements AutoCloseable {
         if (model.formatVersion() != CompiledPack.FORMAT_VERSION) {
             throw new PackException("The native library produced model version " + model.formatVersion()
                 + ", this mod understands version " + CompiledPack.FORMAT_VERSION);
+        }
+        List<String> problems = ModelValidation.problems(model);
+        if (!problems.isEmpty()) {
+            throw new PackException("The native library returned an inconsistent model: " + String.join("; ", problems));
         }
         long size = ShaderBridgeNative.blobSize(session);
         if (size < 0 || size > Integer.MAX_VALUE) {

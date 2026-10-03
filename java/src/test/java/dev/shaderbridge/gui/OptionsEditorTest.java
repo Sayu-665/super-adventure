@@ -82,6 +82,24 @@ class OptionsEditorTest {
     }
 
     @Test
+    void profileMatchingPrefersProfilesWithMoreSettings() {
+        Map<String, Map<String, String>> profiles = new LinkedHashMap<>();
+        profiles.put("BASE", Map.of("SHADOWS", "true"));
+        profiles.put("EXTENDED", Map.of("SHADOWS", "true", "QUALITY", "2", "NOT_AN_OPTION", "x"));
+        OptionsModel base = model();
+        OptionsModel model = new OptionsModel(base.options(), base.mainScreen(), base.mainScreenColumns(), base.screens(), base.sliders(),
+            profiles, null, Map.of(), base.lang());
+        assertEquals(Optional.of("EXTENDED"), new OptionsEditor(model, PackOptionValues.empty()).currentProfile(),
+            "both match: Iris scans profiles with more settings first; unknown options are ignored");
+        OptionsEditor editor = new OptionsEditor(model, PackOptionValues.empty().with("QUALITY", "3").with("DISTANCE", "32"));
+        assertEquals(Optional.of("BASE"), editor.currentProfile());
+        editor.cycleProfile(1);
+        assertEquals(Optional.of("EXTENDED"), editor.currentProfile(), "cycling wraps around the scan order");
+        assertEquals("2", editor.value("QUALITY"));
+        assertEquals("32", editor.value("DISTANCE"), "a profile leaves options it does not mention alone");
+    }
+
+    @Test
     void restExpandsToUnplacedOptions() {
         OptionsEditor editor = new OptionsEditor(model(), PackOptionValues.empty());
         List<ScreenEntry> expanded = editor.expand(editor.model().mainScreen());

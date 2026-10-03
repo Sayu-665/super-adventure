@@ -61,6 +61,7 @@ public final class BuiltinUniforms {
         rendering(r);
         matrices(r);
         coreProfile(r);
+        shaderBridge(r);
         return Collections.unmodifiableMap(r.entries);
     }
 
@@ -229,8 +230,6 @@ public final class BuiltinUniforms {
         // OptiFine documents both as unused; packs only test them for zero.
         r.frame("terrainTextureSize", IVEC2, (f, d, o) -> o.putIvec2(0, 0));
         r.frame("terrainIconSize", INT, (f, d, o) -> o.putInt(0));
-        r.frame("sb_FogColor", VEC4, (f, d, o) -> o.putVec4(f.fogColor.x, f.fogColor.y, f.fogColor.z, f.fogAlpha));
-        r.frame("fogScale", FLOAT, (f, d, o) -> o.putFloat(f.fogEnd != f.fogStart ? 1.0f / (f.fogEnd - f.fogStart) : 0.0f));
     }
 
     private static void matrices(Registry r) {
@@ -262,6 +261,12 @@ public final class BuiltinUniforms {
         r.draw("colorModulator", VEC4, (f, d, o) -> o.putVec4(d.colorModulator));
         r.draw("chunkOffset", VEC3, (f, d, o) -> o.putVec3(d.modelOffset));
         r.draw("modelOffset", VEC3, (f, d, o) -> o.putVec3(d.modelOffset));
+    }
+
+    /** ShaderBridge's replacements of fixed-function state ({@code gl_Fog}). */
+    private static void shaderBridge(Registry r) {
+        r.frame("sb_FogColor", VEC4, (f, d, o) -> o.putVec4(f.fogColor.x, f.fogColor.y, f.fogColor.z, f.fogAlpha));
+        r.frame("fogScale", FLOAT, (f, d, o) -> o.putFloat(f.fogEnd != f.fogStart ? 1.0f / (f.fogEnd - f.fogStart) : 0.0f));
     }
 
     private static void putFloor(UniformWriter out, Vector3dc v) {

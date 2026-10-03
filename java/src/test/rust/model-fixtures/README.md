@@ -21,3 +21,19 @@ cargo run --manifest-path java/src/test/rust/model-fixtures/Cargo.toml --target-
 
 `--parse <file>` checks that any CompiledPack JSON file, such as the hand-written
 `compiled_pack_sample.json`, is accepted by serde.
+
+Regenerate the builtin-uniform registry listing used by `dev.shaderbridge.uniforms.BuiltinUniformsTest`
+after changing `crates/sb-uniforms/src/registry.rs`:
+
+```sh
+cargo run --manifest-path java/src/test/rust/model-fixtures/Cargo.toml --target-dir target/model-fixtures \
+  -- --registry java/src/test/resources/dev/shaderbridge/uniforms/builtin_registry.tsv
+```
+
+and the std140 layout table used by `dev.shaderbridge.uniforms.Std140WriterTest` after changing
+`crates/sb-core/src/glsl_type.rs`:
+
+```sh
+cargo run --manifest-path java/src/test/rust/model-fixtures/Cargo.toml --target-dir target/model-fixtures \
+  -- --std140 java/src/test/resources/dev/shaderbridge/uniforms/std140_layout.tsv
+```

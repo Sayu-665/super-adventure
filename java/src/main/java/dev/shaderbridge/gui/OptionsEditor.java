@@ -6,6 +6,7 @@ import dev.shaderbridge.model.OptionsModel;
 import dev.shaderbridge.model.PackOption;
 import dev.shaderbridge.model.ScreenEntry;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -26,14 +27,16 @@ public final class OptionsEditor {
 
     /**
      * @param model the pack's options model
-     * @param saved the user's stored values; options without one start at the model's value
+     * @param saved the user's stored values, the source of truth as in Iris: options without a
+     *              stored value start at the pack default (the model's {@code value} may stem from
+     *              an older compile)
      */
     public OptionsEditor(OptionsModel model, PackOptionValues saved) {
         this.model = model;
         this.lang = new PackLang(model.lang());
         for (PackOption option : model.options()) {
             options.put(option.name(), option);
-            pending.put(option.name(), saved.get(option.name()).orElse(option.value()));
+            pending.put(option.name(), saved.get(option.name()).orElse(option.defaultValue()));
         }
     }
 
@@ -136,24 +139,39 @@ public final class OptionsEditor {
         return values;
     }
 
-    /** @return the first profile whose settings all equal the pending values ("custom" if none) */
+    /**
+     * The profiles in Iris' scan order: profiles with more settings first, ties in declaration
+     * order, so that a profile that extends another one wins when both match.
+     */
+    private List<String> profilesByPrecedence() {
+        List<String> names = new ArrayList<>(model.profiles().keySet());
+        names.sort(Comparator.comparingInt((String name) -> model.profiles().get(name).size()).reversed());
+        return names;
+    }
+
+    /**
+     * @return the first profile, in {@linkplain #profilesByPrecedence Iris' scan order}, whose
+     *     settings of options this pack declares all equal the pending values ("custom" if none)
+     */
     public Optional<String> currentProfile() {
-        for (Map.Entry<String, Map<String, String>> profile : model.profiles().entrySet()) {
-            boolean matches = profile.getValue().entrySet().stream().allMatch(s -> s.getValue().equals(pending.get(s.getKey())));
+        for (String name : profilesByPrecedence()) {
+            boolean matches = model.profiles().get(name).entrySet().stream()
+                .allMatch(s -> !options.containsKey(s.getKey()) || s.getValue().equals(pending.get(s.getKey())));
             if (matches) {
-                return Optional.of(profile.getKey());
+                return Optional.of(name);
             }
         }
         return Optional.empty();
     }
 
     /**
-     * Applies the next or previous profile in declaration order (from "custom", the first or last).
+     * Applies the next or previous profile in Iris' scan order; from "custom", the first or the
+     * last one. Options the profile does not mention keep their values, as in Iris.
      *
      * @param steps +1 for the next profile, -1 for the previous one
      */
     public void cycleProfile(int steps) {
-        List<String> names = List.copyOf(model.profiles().keySet());
+        List<String> names = profilesByPrecedence();
         if (names.isEmpty()) {
             return;
         }

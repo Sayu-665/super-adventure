@@ -360,9 +360,9 @@ public final class FrameState {
         if (settings.shadowFov() != null) {
             ShadowMatrices.perspective(settings.shadowFov(), shadowProjection);
         } else {
-            float near = settings.shadowNearPlane() == -1.0f ? -dhRenderDistance : settings.shadowNearPlane();
-            float far = settings.shadowFarPlane() == -1.0f ? dhRenderDistance : settings.shadowFarPlane();
-            ShadowMatrices.orthographic(settings.shadowDistance(), near, far, shadowProjection);
+            float distance = ShadowMatrices.minusOneDistance(dhActive, dhRenderDistance, renderDistanceBlocks);
+            ShadowMatrices.Planes planes = ShadowMatrices.planes(settings.shadowNearPlane(), settings.shadowFarPlane(), distance);
+            ShadowMatrices.orthographic(settings.shadowDistance(), planes, shadowProjection);
         }
         shadowProjection.invert(shadowProjectionInverse);
     }

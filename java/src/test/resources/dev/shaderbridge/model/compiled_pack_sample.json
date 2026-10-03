@@ -305,8 +305,8 @@
           "draw_profile": "vanilla_terrain",
           "requires_raw_vulkan": false,
           "stages": [
-            {"stage": "vertex", "entry_point": "main", "spirv": 0, "glsl_vulkan": 1, "glsl_renderpearl": 2, "source_file": "world0/gbuffers_terrain.vsh"},
-            {"stage": "fragment", "entry_point": "main", "spirv": null, "glsl_vulkan": null, "glsl_renderpearl": 2, "source_file": "world0/gbuffers_terrain.fsh"}
+            {"stage": "vertex", "entry_point": "main", "spirv": 0, "glsl_vulkan": 1, "glsl_renderpearl": 1, "source_file": "world0/gbuffers_terrain.vsh"},
+            {"stage": "fragment", "entry_point": "main", "spirv": null, "glsl_vulkan": null, "glsl_renderpearl": 1, "source_file": "world0/gbuffers_terrain.fsh"}
           ],
           "draw_buffers": [0, 1, 2],
           "output_slots": [0, 1, 2],

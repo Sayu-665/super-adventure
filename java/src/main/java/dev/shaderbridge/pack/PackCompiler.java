@@ -113,7 +113,9 @@ public final class PackCompiler implements AutoCloseable {
             LOGGER.error("Shader pack {} failed to compile: {}", entry.name(), e.getMessage());
             deliver(ticket, () -> listener.onFailed(entry, e.getMessage()), () -> { });
             return;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | LinkageError | OutOfMemoryError e) {
+            // A native library that lacks a JNI symbol, or a blob buffer larger than the direct
+            // memory limit, must not kill the worker silently and leave the pack "compiling".
             LOGGER.error("Unexpected error while compiling shader pack {}", entry.name(), e);
             deliver(ticket, () -> listener.onFailed(entry, "Unexpected error: " + e), () -> { });
             return;

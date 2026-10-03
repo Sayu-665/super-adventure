@@ -1,14 +1,17 @@
 package dev.shaderbridge.uniforms;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import dev.shaderbridge.model.GlslType;
 import dev.shaderbridge.model.ScalarKind;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -22,11 +25,32 @@ import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
 
 class BuiltinUniformsTest {
-    /** Name, type and frequency of every builtin in crates/sb-uniforms/src/registry.rs. */
+    /** Name, type and frequency of a builtin of the sb-uniforms registry. */
     private record RegistryEntry(String name, String type, boolean perDraw) {
     }
 
-    private static List<RegistryEntry> rustRegistry() throws IOException {
+    /**
+     * The registry as {@code sb_uniforms::registry::all()} lists it, generated into
+     * {@code builtin_registry.tsv} by {@code java/src/test/rust/model-fixtures --registry}.
+     */
+    private static List<RegistryEntry> generatedRegistry() throws IOException {
+        try (InputStream in = BuiltinUniformsTest.class.getResourceAsStream("builtin_registry.tsv")) {
+            assertNotNull(in, "builtin_registry.tsv");
+            List<RegistryEntry> out = new ArrayList<>();
+            for (String line : new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\n")) {
+                if (line.isBlank() || line.startsWith("#")) {
+                    continue;
+                }
+                String[] fields = line.split("\t");
+                assertEquals(3, fields.length, line);
+                out.add(new RegistryEntry(fields[0], fields[1], fields[2].equals("draw")));
+            }
+            return out;
+        }
+    }
+
+    /** Names and frequencies in the current Rust source, to detect a stale generated listing. */
+    private static List<RegistryEntry> rustSourceRegistry() throws IOException {
         String configured = System.getProperty("shaderbridge.repoRoot");
         Path file = (configured != null ? Path.of(configured) : Path.of("..")).resolve("crates/sb-uniforms/src/registry.rs");
         assumeTrue(Files.isRegularFile(file), "sb-uniforms sources not available");
@@ -35,27 +59,29 @@ class BuiltinUniformsTest {
         Matcher m = Pattern.compile("(frame|draw)\\(\\s*\"(\\w+)\",\\s*T::(\\w+),").matcher(table);
         List<RegistryEntry> out = new ArrayList<>();
         while (m.find()) {
-            out.add(new RegistryEntry(m.group(2), m.group(3), m.group(1).equals("draw")));
+            out.add(new RegistryEntry(m.group(2), m.group(3).toLowerCase(Locale.ROOT), m.group(1).equals("draw")));
         }
         return out;
     }
 
-    private static String rustTypeName(GlslType type) {
-        return type.glslName().toUpperCase(Locale.ROOT);
-    }
-
     @Test
     void everyRegistryBuiltinHasAProviderWithTheSameTypeAndBlock() throws IOException {
-        List<RegistryEntry> registry = rustRegistry();
+        List<RegistryEntry> registry = generatedRegistry();
         assertTrue(registry.size() > 150, "parsed " + registry.size());
         Map<String, BuiltinUniform> java = new LinkedHashMap<>();
         BuiltinUniforms.all().forEach(u -> java.put(u.name(), u));
-        assertEquals(registry.stream().map(RegistryEntry::name).sorted().toList(), java.keySet().stream().sorted().toList(), "same names");
+        assertEquals(registry.stream().map(RegistryEntry::name).toList(), List.copyOf(java.keySet()), "same names, in registry order");
         for (RegistryEntry entry : registry) {
             BuiltinUniform uniform = java.get(entry.name());
-            assertEquals(entry.type(), rustTypeName(uniform.type()), entry.name());
+            assertEquals(entry.type(), uniform.type().toString(), entry.name());
             assertEquals(entry.perDraw(), uniform.perDraw(), entry.name());
         }
+    }
+
+    @Test
+    void generatedRegistryListingIsUpToDate() throws IOException {
+        assertEquals(rustSourceRegistry(), generatedRegistry(),
+            "regenerate builtin_registry.tsv with java/src/test/rust/model-fixtures --registry");
     }
 
     @Test

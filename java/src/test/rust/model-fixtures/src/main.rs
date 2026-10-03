@@ -6,6 +6,11 @@
 //!   model-fixture-roundtrip.json`) with serde and checks it equals the fixture pack.
 //! * `--parse <file>`: checks that a CompiledPack JSON file (e.g. the hand-written sample) is
 //!   accepted by serde.
+//! * `--registry <file>`: writes every builtin of `sb_uniforms::registry::all()` as
+//!   `name<TAB>glsl type<TAB>frame|draw` lines (`dev.shaderbridge.uniforms.BuiltinUniformsTest`).
+//! * `--std140 <file>`: writes the `sb_core::GlslType` std140 layout of every scalar, vector and
+//!   matrix shape, plain and as arrays, as `scalar<TAB>rows<TAB>cols<TAB>array<TAB>align<TAB>size<TAB>stride`
+//!   lines (`dev.shaderbridge.uniforms.Std140WriterTest`).
 use indexmap::IndexMap;
 use sb_core::model::*;
 use sb_core::program::{AlphaFunc, BlendFactor, BlendMode, GeometryProgram, PassGroup};
@@ -804,6 +809,55 @@ fn pack() -> CompiledPack {
     }
 }
 
+/// std140 layouts computed by `sb_core::GlslType` for every shape (array `-` = not an array).
+fn std140() -> String {
+    let mut out = String::from("# Generated from sb_core::GlslType by java/src/test/rust/model-fixtures (--std140).\n");
+    let mut shapes = Vec::new();
+    for scalar in [ScalarKind::Float, ScalarKind::Int, ScalarKind::Uint, ScalarKind::Bool, ScalarKind::Double] {
+        for rows in 1..=4u8 {
+            shapes.push(GlslType { scalar, rows, cols: 1, array: None });
+        }
+    }
+    for scalar in [ScalarKind::Float, ScalarKind::Double] {
+        for cols in 2..=4u8 {
+            for rows in 2..=4u8 {
+                shapes.push(GlslType { scalar, rows, cols, array: None });
+            }
+        }
+    }
+    for shape in shapes {
+        for array in [None, Some(0), Some(1), Some(3), Some(7)] {
+            let ty = GlslType { array, ..shape };
+            let scalar = serde_json::to_value(ty.scalar).unwrap();
+            let array = array.map_or("-".to_string(), |n| n.to_string());
+            out.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                scalar.as_str().unwrap(),
+                ty.rows,
+                ty.cols,
+                array,
+                ty.std140_align(),
+                ty.std140_size(),
+                ty.std140_array_stride()
+            ));
+        }
+    }
+    out
+}
+
+/// The builtin-uniform registry as `name<TAB>type<TAB>frequency` lines, in registry order.
+fn registry() -> String {
+    let mut out = String::from("# Generated from sb_uniforms::registry::all() by java/src/test/rust/model-fixtures (--registry).\n");
+    for b in sb_uniforms::registry::all() {
+        let frequency = match b.frequency {
+            sb_uniforms::registry::Frequency::Frame => "frame",
+            sb_uniforms::registry::Frequency::Draw => "draw",
+        };
+        out.push_str(&format!("{}\t{}\t{}\n", b.name, b.ty, frequency));
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "--check" {
@@ -827,8 +881,16 @@ fn main() {
         }
         return;
     }
+    if args.len() == 3 && args[1] == "--std140" {
+        std::fs::write(&args[2], std140()).unwrap();
+        return;
+    }
+    if args.len() == 3 && args[1] == "--registry" {
+        std::fs::write(&args[2], registry()).unwrap();
+        return;
+    }
     let Some(out) = args.get(1).map(std::path::Path::new) else {
-        eprintln!("usage: sb-java-model-fixtures <out_dir> | --check <file> | --parse <file>");
+        eprintln!("usage: sb-java-model-fixtures <out_dir> | --check <file> | --parse <file> | --registry <file> | --std140 <file>");
         std::process::exit(2);
     };
     let pack = pack();

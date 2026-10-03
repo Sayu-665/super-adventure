@@ -50,7 +50,9 @@ public final class PackOptionsScreen extends Screen {
         this.parent = parent;
         this.pack = pack;
         this.editor = editor;
-        this.entries = editor.expand(entries.isEmpty() ? List.of(new ScreenEntry.Rest()) : entries);
+        // A pack without a main screen definition shows every option there (Iris and OptiFine);
+        // an empty sub-screen stays empty.
+        this.entries = editor.expand(root && entries.isEmpty() ? List.of(new ScreenEntry.Rest()) : entries);
         this.columns = columns == null || columns < 1 ? DEFAULT_COLUMNS : columns;
         this.root = root;
     }

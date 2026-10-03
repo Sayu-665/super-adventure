@@ -42,10 +42,15 @@ public final class Std140Writer {
 
     /**
      * @param type a GLSL type
-     * @return its std140 size in bytes (stride times length for arrays)
+     * @return its std140 size in bytes (stride times length for arrays), saturating at
+     *     {@link Integer#MAX_VALUE} for absurd array lengths, as {@code sb_core} saturates
      */
     public static int size(GlslType type) {
-        return type.array() != null ? arrayStride(type) * Math.max(1, type.array()) : elementSize(type);
+        if (type.array() == null) {
+            return elementSize(type);
+        }
+        long size = (long) arrayStride(type) * Math.max(1, type.array());
+        return (int) Math.min(Integer.MAX_VALUE, size);
     }
 
     /**
@@ -175,23 +180,14 @@ public final class Std140Writer {
         int stride = type.array() != null ? arrayStride(type) : 0;
         int columnStride = element.isMatrix() ? columnStride(element) : 0;
         int scalar = element.scalar().byteSize();
-        for (int i = 0; i < values.size() && i < perElement * type.arrayLength(); i++) {
+        long components = Math.min(values.size(), (long) perElement * type.arrayLength());
+        for (int i = 0; i < components; i++) {
             int e = i / perElement;
             int column = (i % perElement) / element.rows();
             int row = (i % perElement) % element.rows();
-            putComponent(offset + e * stride + column * columnStride + row * scalar, element.scalar(), values.get(i).doubleValue());
-        }
-    }
-
-    /**
-     * Zeroes a byte range.
-     *
-     * @param offset first byte
-     * @param length number of bytes
-     */
-    public void clear(int offset, int length) {
-        for (int i = 0; i < length; i++) {
-            buffer.put(offset + i, (byte) 0);
+            // serde writes a non-finite f32 as null.
+            Float value = values.get(i);
+            putComponent(offset + e * stride + column * columnStride + row * scalar, element.scalar(), value == null ? Double.NaN : value);
         }
     }
 }

@@ -57,7 +57,7 @@ public final class FrameUniforms implements AutoCloseable {
     static List<Binding> bind(BlockLayout layout, Std140Writer writer) {
         List<Binding> bindings = new ArrayList<>();
         for (BlockMember member : layout.members()) {
-            if (member.offset() < 0 || member.offset() + Std140Writer.size(member.ty()) > Math.max(16, layout.size())) {
+            if (member.offset() < 0 || (long) member.offset() + Std140Writer.size(member.ty()) > Math.max(16, layout.size())) {
                 LOGGER.warn("Ignoring {} member {} at {}: outside the {}-byte block", layout.name(), member.name(), member.offset(), layout.size());
                 continue;
             }

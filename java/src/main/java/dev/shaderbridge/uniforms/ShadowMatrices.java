@@ -9,23 +9,86 @@ import org.joml.Matrix4f;
  * All projections are GL style (NDC z in [-1,1]).
  */
 public final class ShadowMatrices {
-    /** Near plane of the legacy perspective shadow projection ({@code shadowMapFov}). */
-    private static final float PERSPECTIVE_NEAR = -100.05f;
-    /** Far plane of the legacy perspective shadow projection. */
-    private static final float PERSPECTIVE_FAR = 156.0f;
+    /**
+     * Iris' default {@code shadowNearPlane} (and the near plane of the legacy perspective
+     * projection). Negative because the shadow model-view keeps the light at the camera instead
+     * of moving it 100 blocks towards the sun, as older Iris versions and OptiFine did.
+     */
+    public static final float DEFAULT_NEAR = -100.05f;
+    /** Iris' default {@code shadowFarPlane} (and the far plane of the legacy perspective projection). */
+    public static final float DEFAULT_FAR = 156.0f;
+    /** The OptiFine-documented defaults that {@code sb_core::model::ShadowSettings} carries. */
+    private static final float MODEL_DEFAULT_NEAR = 0.05f;
+    private static final float MODEL_DEFAULT_FAR = 256.0f;
+    /** Plane value meaning "the Distant Horizons render distance" ({@code -1}). */
+    private static final float DH_DISTANCE = -1.0f;
 
     private ShadowMatrices() {
     }
 
     /**
+     * The near and far planes of the orthographic shadow projection.
+     *
+     * @param near near plane
+     * @param far  far plane
+     */
+    public record Planes(float near, float far) {
+    }
+
+    /**
+     * Resolves the pipeline's shadow planes as Iris 26.3 (and {@code sb-runtime}) do:
+     * <ul>
+     *   <li>the model's OptiFine defaults {@code 0.05}/{@code 256}, which assumed a light placed 100
+     *       blocks away, become Iris' {@link #DEFAULT_NEAR}/{@link #DEFAULT_FAR} for the model-view of
+     *       {@link #celestialModelView}, which covers the same depth range;</li>
+     *   <li>{@code -1} means minus / plus {@code minusOneDistance} (see {@link #minusOneDistance});</li>
+     *   <li>non-finite or coinciding planes fall back to the defaults instead of producing a
+     *       singular matrix.</li>
+     * </ul>
+     *
+     * @param near             {@code shadowNearPlane} of the pipeline
+     * @param far              {@code shadowFarPlane} of the pipeline
+     * @param minusOneDistance the distance a {@code -1} plane stands for
+     * @return the planes to build the projection with
+     */
+    public static Planes planes(float near, float far, float minusOneDistance) {
+        if (near == MODEL_DEFAULT_NEAR && far == MODEL_DEFAULT_FAR) {
+            return new Planes(DEFAULT_NEAR, DEFAULT_FAR);
+        }
+        float n = near == DH_DISTANCE ? -minusOneDistance : near;
+        float f = far == DH_DISTANCE ? minusOneDistance : far;
+        if (!Float.isFinite(n) || !Float.isFinite(f) || n == f) {
+            return new Planes(DEFAULT_NEAR, DEFAULT_FAR);
+        }
+        return new Planes(n, f);
+    }
+
+    /**
+     * The distance a {@code -1} shadow plane stands for, as Iris 26.3 computes it
+     * ({@code DHCompat.getRenderDistance() * 16}): the vanilla render distance in blocks without
+     * Distant Horizons, but 16 times the DH distance in blocks while DH renders, because Iris'
+     * DH render distance is already in blocks. Packs tuned on Iris see that range, and
+     * {@code sb-runtime} reproduces it too.
+     *
+     * @param dhRendering            Distant Horizons renders
+     * @param dhRenderDistanceBlocks the DH render distance in blocks
+     * @param renderDistanceBlocks   the vanilla render distance in blocks
+     * @return the distance in blocks
+     */
+    public static float minusOneDistance(boolean dhRendering, float dhRenderDistanceBlocks, float renderDistanceBlocks) {
+        return dhRendering ? dhRenderDistanceBlocks * 16 : renderDistanceBlocks;
+    }
+
+    /**
      * @param halfPlaneLength {@code shadowDistance}: half the width and height of the covered area
-     * @param near            near plane
-     * @param far             far plane
+     *                        (a non-positive or non-finite value covers one block)
+     * @param planes          near and far plane, see {@link #planes}
      * @param dest            receives the matrix
      * @return {@code dest}
      */
-    public static Matrix4f orthographic(float halfPlaneLength, float near, float far, Matrix4f dest) {
-        return dest.setOrthoSymmetric(halfPlaneLength * 2, halfPlaneLength * 2, near, far, false);
+    public static Matrix4f orthographic(float halfPlaneLength, Planes planes, Matrix4f dest) {
+        float half = Float.isFinite(halfPlaneLength) && halfPlaneLength > 0 ? halfPlaneLength : 1.0f;
+        return dest.setOrthoSymmetric(half * 2, half * 2, planes.near(), planes.far(), false);
     }
 
     /**
@@ -38,8 +101,8 @@ public final class ShadowMatrices {
      */
     public static Matrix4f perspective(float fovDegrees, Matrix4f dest) {
         float yScale = (float) (1.0 / Math.tan(Math.toRadians(fovDegrees) * 0.5));
-        float near = PERSPECTIVE_NEAR;
-        float far = PERSPECTIVE_FAR;
+        float near = DEFAULT_NEAR;
+        float far = DEFAULT_FAR;
         return dest.set(
             yScale, 0, 0, 0,
             0, yScale, 0, 0,

@@ -35,6 +35,7 @@ import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.BlockItemStateProperties;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
@@ -398,17 +399,30 @@ public final class GameStateCapture {
         }
     }
 
+    /**
+     * Iris' held item id: the item model when the stack has one, else the item; an empty hand is
+     * looked up as {@code minecraft:air}, so packs can map it.
+     */
     private int itemId(ItemStack stack) {
-        if (stack.isEmpty()) {
-            return -1;
-        }
-        Identifier model = stack.get(DataComponents.ITEM_MODEL);
+        Identifier model = stack.isEmpty() ? null : stack.get(DataComponents.ITEM_MODEL);
         Identifier id = model != null ? model : BuiltInRegistries.ITEM.getKey(stack.getItem());
         return ids.item(id.toString());
     }
 
+    /**
+     * Light emitted by a held block item, with the stack's block state properties applied (a light
+     * block item of level 7 emits 7), as Iris' default {@code IrisItemLightProvider} computes it.
+     */
     private static int lightEmission(ItemStack stack) {
-        return stack.getItem() instanceof BlockItem block ? block.getBlock().defaultBlockState().getLightEmission() : 0;
+        if (!(stack.getItem() instanceof BlockItem block)) {
+            return 0;
+        }
+        BlockState state = block.getBlock().defaultBlockState();
+        BlockItemStateProperties properties = stack.get(DataComponents.BLOCK_STATE);
+        if (properties != null) {
+            state = properties.apply(state);
+        }
+        return state.getLightEmission();
     }
 
     private int blockId(BlockState state) {

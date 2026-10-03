@@ -28,6 +28,27 @@ class PackOptionValuesTest {
         assertEquals("AO_STRENGTH=1.25\nSHADOW=false\nsunPathRotation=-30.0\n", values.toSettingsText());
     }
 
+    /** Iris saves with {@code Properties.store(out, null)}: a date comment, escapes, ISO-8859-1. */
+    @Test
+    void readsWhatIrisWrites() throws IOException {
+        Properties iris = new Properties();
+        iris.setProperty("SHADOW_RES", "2048");
+        iris.setProperty("NAME", "a=b: c #d é");
+        iris.setProperty("FLAG", "false");
+        Path file = dir.resolve("pack.zip.txt");
+        try (var out = Files.newOutputStream(file)) {
+            iris.store(out, null);
+        }
+        PackOptionValues values = PackOptionValues.read(file);
+        assertEquals(Map.of("SHADOW_RES", "2048", "NAME", "a=b: c #d é", "FLAG", "false"), values.asMap());
+        values.write(file);
+        Properties back = new Properties();
+        try (var in = Files.newInputStream(file)) {
+            back.load(in);
+        }
+        assertEquals(iris, back, "Iris reads the file ShaderBridge writes back");
+    }
+
     @Test
     void missingFileIsEmpty() throws IOException {
         assertTrue(PackOptionValues.read(dir.resolve("none.txt")).isEmpty());

@@ -93,29 +93,32 @@ public final class NativeLibrary {
                 if (!Files.isRegularFile(library)) {
                     return new Status.Failed("The native library override " + library + " does not exist");
                 }
+                System.load(library.toString());
             } else {
                 Optional<NativePlatform> platform = NativePlatform.current();
                 if (platform.isEmpty()) {
                     return new Status.Failed("Unsupported platform " + System.getProperty("os.name") + " / " + System.getProperty("os.arch"));
                 }
-                Optional<Path> extracted = extractBundled(platform.get(), gameDir.resolve("shaderbridge").resolve("natives"));
-                if (extracted.isEmpty()) {
+                Optional<byte[]> bundled = bundled(platform.get());
+                if (bundled.isEmpty()) {
                     return new Status.Failed("This build of ShaderBridge has no native library for " + platform.get());
                 }
-                library = extracted.get();
+                Path root = gameDir.resolve("shaderbridge").resolve("natives");
+                library = NativeExtractor.extractAndLoad(bundled.get(), root, platform.get().libraryFileName(), path -> System.load(path.toString()));
             }
         } catch (IOException e) {
             return new Status.Failed("Cannot extract the native library: " + e.getMessage());
+        } catch (UnsatisfiedLinkError | SecurityException e) {
+            return new Status.Failed("Cannot load the native library: " + e.getMessage());
         }
         try {
-            System.load(library.toString());
             String version = ShaderBridgeNative.version();
             if (version == null) {
                 return new Status.Failed("The native library at " + library + " did not report a version");
             }
             return new Status.Loaded(library, version);
-        } catch (UnsatisfiedLinkError | SecurityException e) {
-            return new Status.Failed("Cannot load the native library " + library + ": " + e.getMessage());
+        } catch (UnsatisfiedLinkError e) {
+            return new Status.Failed("The native library at " + library + " does not implement the ShaderBridge JNI contract: " + e.getMessage());
         }
     }
 
@@ -127,12 +130,9 @@ public final class NativeLibrary {
         return path == null || path.isBlank() ? Optional.empty() : Optional.of(Path.of(path));
     }
 
-    private static Optional<Path> extractBundled(NativePlatform platform, Path root) throws IOException {
+    private static Optional<byte[]> bundled(NativePlatform platform) throws IOException {
         try (InputStream in = NativeLibrary.class.getResourceAsStream(platform.resourcePath())) {
-            if (in == null) {
-                return Optional.empty();
-            }
-            return Optional.of(NativeExtractor.extract(in.readAllBytes(), root, platform.libraryFileName()));
+            return in == null ? Optional.empty() : Optional.of(in.readAllBytes());
         }
     }
 }

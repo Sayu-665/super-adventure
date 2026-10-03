@@ -13,8 +13,8 @@ import dev.shaderbridge.model.ShadowSettings;
  * @param eyeBrightnessHalfLife {@code eyeBrightnessHalflife}, tenths of a second
  * @param centerDepthHalfLife   {@code centerDepthHalflife}, tenths of a second
  * @param shadowDistance        {@code shadowDistance}: half extent of the orthographic shadow projection
- * @param shadowNearPlane       shadow near plane ({@code -1} = minus the Distant Horizons render distance)
- * @param shadowFarPlane        shadow far plane ({@code -1} = the Distant Horizons render distance)
+ * @param shadowNearPlane       shadow near plane ({@code -1}: see {@link ShadowMatrices#planes})
+ * @param shadowFarPlane        shadow far plane ({@code -1}: see {@link ShadowMatrices#planes})
  * @param shadowIntervalSize    {@code shadowIntervalSize}
  * @param shadowFov             {@code shadowMapFov} for a legacy perspective shadow projection, or null
  * @param endFlashShadows       End flashes cast shadows (the shadow light follows the flash in the End)

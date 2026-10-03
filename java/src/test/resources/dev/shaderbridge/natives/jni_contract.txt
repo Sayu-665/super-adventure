@@ -1,0 +1,57 @@
+package dev.shaderbridge.natives;
+
+public final class ShaderBridgeNative {
+    /** ShaderBridge version string, e.g. "0.1.0". */
+    public static native String version();
+    /** Last error message on this thread (or null). */
+    public static native String lastError();
+
+    /** Lists shader packs in a directory (dirs + .zip) as JSON:
+     *  [{"name":..., "path":..., "kind":"dir"|"zip", "valid":bool, "error":...}] */
+    public static native String listPacks(String shaderpacksDir);
+
+    /** Opens a pack (dir or zip path). Returns a session handle, or 0 on failure. */
+    public static native long openPack(String packPath);
+    public static native void closePack(long session);
+
+    /** Options model JSON (sb_core::model::OptionsModel) for the given language code. */
+    public static native String getOptions(long session, String language);
+
+    /** Compiles the pack.
+     *  - envJson: sb_core::model::CompileEnvironment JSON.
+     *  - optionValues: Iris-format settings text ("NAME=value" lines), may be "".
+     *  - settingsJson: {"dimensions":[...]|null, "validate":bool, "cacheDir":String|null}.
+     *  Returns CompiledPack JSON (its "blobs" index filled), or null on failure.
+     *  The binary payloads are fetched with blobData() afterwards. */
+    public static native String compile(long session, String envJson, String optionValues, String settingsJson);
+
+    /** Total size in bytes of the concatenated blob buffer of the last successful compile. */
+    public static native long blobSize(long session);
+    /** Copies the concatenated blob buffer of the last compile into dst (a direct ByteBuffer
+     *  with remaining() >= blobSize). Returns false on error. */
+    public static native boolean blobData(long session, java.nio.ByteBuffer dst);
+
+    /** Compiles one extra (geometry program, profile) variant for a folder after compile().
+     *  Returns {"program": Program JSON, "blobs": [BlobInfo...]} where blob offsets index a
+     *  separate buffer fetched with variantBlobData(session); null on failure. */
+    public static native String compileVariant(long session, String folder, String geometryProgram, String profile);
+    public static native boolean variantBlobData(long session, java.nio.ByteBuffer dst);
+    public static native long variantBlobSize(long session);
+
+    /** Registers an extra draw profile (TOML text, see sb-transform profiles/README.md).
+     *  Returns null on success or an error message. Affects subsequent compiles of all sessions. */
+    public static native String registerProfile(String toml);
+
+    /** Creates a custom-uniform evaluator for a compiled dimension folder of the session.
+     *  Returns a handle, or 0 if the folder is unknown or has no custom uniforms. */
+    public static native long createUniformEvaluator(long session, String folder);
+    /** Evaluates custom uniforms in place on the sb_Frame std140 block. Builtin-sourced members
+     *  must already be written by Java. Custom-sourced members are written by Rust.
+     *  frameBlock is a direct ByteBuffer of at least frame.size bytes. */
+    public static native boolean evaluateUniforms(long evaluator, java.nio.ByteBuffer frameBlock, float frameDeltaSeconds);
+    public static native void destroyUniformEvaluator(long evaluator);
+
+    /** Iris-format settings text helpers: parse/validate user option values against the pack
+     *  options. Returns normalized settings text (unknown options dropped) or null. */
+    public static native String normalizeOptionValues(long session, String optionValues);
+}

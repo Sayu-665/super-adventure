@@ -3,6 +3,9 @@ package dev.shaderbridge.uniforms;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import dev.shaderbridge.model.BlockLayout;
+import dev.shaderbridge.model.BlockMember;
+import dev.shaderbridge.model.GlslType;
+import dev.shaderbridge.model.UniformSource;
 import dev.shaderbridge.model.CompiledPack;
 import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.model.ModelJson;
@@ -10,6 +13,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +48,26 @@ class FrameUniformsTest {
             assertEquals(0.25f, block.getFloat(88), "packTint keeps its initializer");
             assertEquals(0.75f, block.getFloat(92));
             assertEquals(0.0f, block.getFloat(96), "weights is unset");
+        }
+    }
+
+    @Test
+    void drawBlocksKeepConstantInitializers() {
+        BlockLayout layout = new BlockLayout("sb_Draw", 0, 1, 32, List.of(
+            new BlockMember("entityId", GlslType.INT, 0, new UniformSource.Builtin("entityId"), null),
+            new BlockMember("tint", GlslType.VEC4, 16, new UniformSource.Unset(), List.of(0.5f, 0.25f, 1f, 1f))));
+        FrameState frame = new FrameState();
+        frame.update();
+        DrawState draw = new DrawState();
+        draw.reset(frame);
+        draw.entityId = 3;
+        try (DrawUniforms uniforms = new DrawUniforms(layout, 64)) {
+            ByteBuffer block = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
+            block.putFloat(16, 9f);
+            uniforms.fill(frame, draw, block);
+            assertEquals(3, block.getInt(0));
+            assertEquals(0.5f, block.getFloat(16), "every draw starts from the initializers, not from zero or stale data");
+            assertEquals(0.25f, block.getFloat(20));
         }
     }
 

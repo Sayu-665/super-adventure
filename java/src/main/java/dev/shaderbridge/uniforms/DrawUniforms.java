@@ -21,6 +21,8 @@ public final class DrawUniforms implements AutoCloseable {
     private static final int SLOTS_PER_PAGE = 256;
 
     private final List<FrameUniforms.Binding> builtins;
+    /** The block with every constant initializer applied; each draw starts from a copy. */
+    private final ByteBuffer template;
     private final int blockSize;
     private final int stride;
     private final UniformWriter out = new UniformWriter();
@@ -48,7 +50,8 @@ public final class DrawUniforms implements AutoCloseable {
     public DrawUniforms(BlockLayout layout, int alignment) {
         this.blockSize = Math.max(16, layout.size());
         this.stride = alignUp(blockSize, Math.max(16, alignment));
-        this.builtins = FrameUniforms.bind(layout, new Std140Writer(ByteBuffer.allocate(blockSize)));
+        this.template = ByteBuffer.allocate(blockSize).order(ByteOrder.LITTLE_ENDIAN);
+        this.builtins = FrameUniforms.bind(layout, new Std140Writer(template));
         for (int i = 0; i < GpuBufferRing.FRAMES_IN_FLIGHT; i++) {
             frames.add(new ArrayList<>());
         }
@@ -105,7 +108,7 @@ public final class DrawUniforms implements AutoCloseable {
      */
     void fill(FrameState frameState, DrawState draw, ByteBuffer dst) {
         Std140Writer writer = new Std140Writer(dst);
-        writer.clear(0, blockSize);
+        writer.buffer().put(0, template, 0, blockSize);
         draw.update();
         for (FrameUniforms.Binding binding : builtins) {
             binding.builtin().provider().write(frameState, draw, out.bind(writer, binding.offset(), binding.member().ty()));
