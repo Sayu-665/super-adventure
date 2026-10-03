@@ -65,9 +65,14 @@ fn clamp_indices(e: &mut Expr, shared: &HashMap<String, usize>, is_local: &dyn F
         return;
     }
     // Length of dimension `depth`: `a.length()`, `a[0].length()`, ...
-    let length = format!("{name}{}.length()", "[0]".repeat(depth));
+    let mut array = Expr::ident(name);
+    for _ in 0..depth {
+        array = Expr::Index(Box::new(array), Box::new(Expr::Int(0)));
+    }
+    let length = Expr::Call(Callee::Method(Box::new(array), "length".into()), Vec::new());
+    let last = Expr::Binary(BinaryOp::Sub, Box::new(length), Box::new(Expr::Int(1)));
     let index = std::mem::replace(idx.as_mut(), Expr::Int(0));
-    **idx = Expr::call("clamp", vec![Expr::call("int", vec![index]), Expr::Int(0), Expr::raw(format!("{length} - 1"))]);
+    **idx = Expr::call("clamp", vec![Expr::call("int", vec![index]), Expr::Int(0), last]);
     *count += 1;
 }
 

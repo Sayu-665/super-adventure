@@ -325,7 +325,12 @@ impl Executor<'_> {
         let Some(p) = self.program(index) else { return Ok(()) };
         let (layout, push, local) = (p.layout, p.push_constants, p.local_size);
         let push_bytes = push.map(|(_, size)| push_constant_bytes(&p.push_members, size, fs, &DrawState::new(fs))).unwrap_or_default();
-        let ext = self.targets.extent;
+        // Iris dispatches `shadowcomp` and the shadow pass's computes (`shadow.csh`,
+        // `shadow_a.csh`, ...) over the shadow map resolution; every other compute over
+        // the screen.
+        let shadow_compute = matches!(model.kind, ProgramKind::Compute { group: PassGroup::ShadowComp, .. })
+            || matches!(model.kind, ProgramKind::GeometryCompute { program, .. } if program.group() == GeometryGroup::Shadow);
+        let ext = if shadow_compute { self.arena.image(self.targets.shadow[0]).extent_2d() } else { self.targets.extent };
         let lim = self.gpu.limits().max_compute_work_group_count;
         let size = dispatch_size(model.compute.as_ref().map(|c| &c.work_groups), local, ext.width, ext.height, lim);
         let indirect = model.compute.as_ref().and_then(|c| c.indirect);
