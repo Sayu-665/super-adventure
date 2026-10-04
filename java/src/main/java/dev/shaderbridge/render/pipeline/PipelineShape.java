@@ -65,6 +65,15 @@ public record PipelineShape(
     }
 
     /**
+     * @param enabled default back-face culling
+     * @return this shape with another default culling (the shadow pass draws without culling, as
+     *     Iris and the headless executor do)
+     */
+    public PipelineShape withCull(boolean enabled) {
+        return new PipelineShape(id, vertexBindings, topology, depth, enabled, polygonMode, pushConstantSize, hostUniforms);
+    }
+
+    /**
      * The shape of geometry ShaderBridge draws from a draw profile's vertex buffers rather than in
      * place of a vanilla pipeline: shadow-pass re-renders, Distant Horizons LODs, Sodium terrain.
      *

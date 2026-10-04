@@ -148,7 +148,7 @@ class FrameSequencerTraceTest {
                 }
             }
             out.add("draw " + program.name() + " writes=" + String.join(",", writes) + " reads=" + String.join(",", reads));
-            List<Integer> written = PassAttachments.targets(slots);
+            List<Integer> written = targets(slots);
             if (shadow && !written.isEmpty()) {
                 out.add("shadow-flip " + list(written));
             }
@@ -205,5 +205,9 @@ class FrameSequencerTraceTest {
             assertNotNull(in, path);
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    static List<Integer> targets(List<AttachmentSlot> slots) {
+        return slots.stream().filter(s -> s instanceof AttachmentSlot.Target).map(s -> ((AttachmentSlot.Target) s).target()).toList();
     }
 }

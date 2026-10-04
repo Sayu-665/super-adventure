@@ -82,14 +82,6 @@ public final class PassAttachments {
         return slots;
     }
 
-    /**
-     * @param slots a pass's slots
-     * @return the pack targets they hold, in slot order
-     */
-    public static List<Integer> targets(List<AttachmentSlot> slots) {
-        return slots.stream().filter(s -> s instanceof AttachmentSlot.Target).map(s -> ((AttachmentSlot.Target) s).target()).toList();
-    }
-
     private static AttachmentSlot missing(int slot) {
         return slot == 0 ? new AttachmentSlot.Sink() : new AttachmentSlot.Unused();
     }

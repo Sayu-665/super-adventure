@@ -7,7 +7,7 @@ import dev.shaderbridge.render.targets.HostTextures;
 import dev.shaderbridge.render.targets.TextureBinding;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.data.AtlasIds;
 
 /**
  * The game's textures for pack programs that sample them by pack name: the block atlas (or the
@@ -24,7 +24,7 @@ final class MinecraftHost implements HostTextures {
 
     /** @return the host textures with the block atlas as albedo */
     static MinecraftHost blockAtlas() {
-        GpuTextureView atlas = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
+        GpuTextureView atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.BLOCKS).getTextureView();
         return new MinecraftHost(new TextureBinding(atlas, RenderSystem.getSamplerCache().getRepeat(FilterMode.NEAREST)));
     }
 

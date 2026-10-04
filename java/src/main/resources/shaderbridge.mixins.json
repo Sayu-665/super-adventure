@@ -2,6 +2,14 @@
   "required": true,
   "package": "dev.shaderbridge.mixin",
   "compatibilityLevel": "JAVA_25",
-  "client": ["GlslCompilerMixin"],
+  "client": [
+    "FrontendRenderPassMixin",
+    "GameRendererMixin",
+    "GlslCompilerMixin",
+    "LevelRendererAccess",
+    "LevelRendererMixin",
+    "RenderSystemMixin",
+    "SkyRendererMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }

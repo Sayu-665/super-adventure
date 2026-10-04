@@ -17,7 +17,7 @@ import java.util.function.Function;
  * Decides which pack program draws a vanilla pipeline's geometry: the vanilla pipeline location is
  * routed to a geometry slot and draw profile ({@code PipelineRouter}), the slot's program for that
  * profile is resolved along its fallback chain ({@link ProgramResolver#geometry}), and the draw
- * uses the pack pipeline when it is compiled. Draws whose pipeline is not mapped, whose program is
+ * uses the pack pipeline when it is compiled. Shadow-pass pipelines cull no faces by default. Draws whose pipeline is not mapped, whose program is
  * missing or cannot run, or whose pipeline is still compiling fall back to vanilla. Final decisions
  * (compiled, or never possible) are cached per vanilla pipeline and pass; pending ones are asked
  * again on every draw. Render thread only.
@@ -97,7 +97,8 @@ public final class DrawSubstitution {
         if (slot.isEmpty()) {
             return Optional.of(new Decision.Vanilla());
         }
-        ProgramResolver.GeometryResolution r = programs.geometry(slot.get(), mapped.profile(), PipelineShape.of(vanilla), shadow);
+        PipelineShape shape = shadow ? PipelineShape.of(vanilla).withCull(false) : PipelineShape.of(vanilla);
+        ProgramResolver.GeometryResolution r = programs.geometry(slot.get(), mapped.profile(), shape, shadow);
         return switch (r.resolution()) {
             case ProgramResolution.Renderpearl rp -> dim.programFor(r.program())
                 .<Decision>map(p -> new Decision.Pack(mapped.gbuffers(), p, rp))

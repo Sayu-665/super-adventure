@@ -4,6 +4,7 @@ import dev.shaderbridge.config.ConfigStore;
 import dev.shaderbridge.gui.ShaderBridgeKeys;
 import dev.shaderbridge.gui.VideoSettingsButton;
 import dev.shaderbridge.natives.NativeLibrary;
+import dev.shaderbridge.render.frame.RenderBridge;
 import java.nio.file.Path;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -18,7 +19,10 @@ import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 /**
  * Client entrypoint: loads the configuration and the native library, registers key mappings,
  * the Video Settings button and the lifecycle hooks, and compiles the selected pack when a world
- * is joined.
+ * is joined. Rendering follows the active pack by itself ({@link RenderBridge}: a new, recompiled
+ * or unloaded pack, a dimension change and a window resize are picked up at the next frame); the
+ * hooks here release its GPU resources when the world is left or the client stops, and rebuild
+ * them after a resource reload.
  */
 public final class ShaderBridgeClient implements ClientModInitializer {
     @Override
@@ -36,9 +40,16 @@ public final class ShaderBridgeClient implements ClientModInitializer {
             bridge.gameState().tick(minecraft);
         });
         ClientPlayConnectionEvents.JOIN.register((listener, sender, minecraft) -> bridge.onWorldJoin());
-        ClientLifecycleEvents.CLIENT_STOPPING.register(minecraft -> bridge.shutdown());
+        ClientPlayConnectionEvents.DISCONNECT.register((listener, minecraft) -> RenderBridge.release());
+        ClientLifecycleEvents.CLIENT_STOPPING.register(minecraft -> {
+            RenderBridge.release();
+            bridge.shutdown();
+        });
         ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             Identifier.fromNamespaceAndPath("shaderbridge", "reload_counter"),
-            (ResourceManagerReloadListener) resourceManager -> bridge.gameState().onResourceReload());
+            (ResourceManagerReloadListener) resourceManager -> {
+                bridge.gameState().onResourceReload();
+                RenderBridge.onResourceReload();
+            });
     }
 }

@@ -37,8 +37,11 @@ pub struct SceneParams {
     pub fov: f64,
     /// Vanilla render distance in chunks (terrain is generated within it).
     pub render_distance: u32,
-    /// Distant Horizons LOD distance in chunks (LODs cover the ring between the vanilla
-    /// render distance and this distance; `0` disables LODs).
+    /// Distant Horizons LOD distance in chunks; `0` disables LODs. For packs with native DH
+    /// programs LODs cover the whole square out to this distance, under the vanilla
+    /// chunks too (as DH does while a shader pack is active), with the DH near plane at
+    /// 20 % of the vanilla render distance; for synthesized DH programs, which share the
+    /// vanilla depth buffer, only the ring beyond the vanilla render distance.
     pub dh_render_distance: u32,
     /// Seconds per frame (`frameTime`), also advancing `frameTimeCounter`.
     pub frame_time: f32,

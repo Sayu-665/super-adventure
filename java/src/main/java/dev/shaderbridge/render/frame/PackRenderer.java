@@ -7,8 +7,6 @@ import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
-import dev.shaderbridge.model.Program;
-import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
 import dev.shaderbridge.render.shadow.ShadowPlan;
 import dev.shaderbridge.render.shadow.ShadowRenderer;
@@ -58,11 +56,6 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         ShadowPlan plan = ShadowPlan.of(resources.dim.targets().shadow());
         plan.notes().forEach(n -> resources.diagnostics.report(resources.dim.folder() + ": " + n));
         this.shadows = new ShadowRenderer(plan, ShadowSections.CAMERA_VISIBLE);
-    }
-
-    /** @return the pack's resources */
-    PackResources resources() {
-        return r;
     }
 
     /**
@@ -157,18 +150,11 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         boolean ready = true;
         for (FramePlan.Step step : r.sequencer.plan().steps()) {
             if (step instanceof FramePlan.Step.Fullscreen f
-                && r.programs.program(f.program(), fullscreenLayout(f.program(), f.group())) instanceof ProgramResolution.Pending) {
+                && r.programs.program(f.program(), fullscreen.layout(f.program(), f.group())) instanceof ProgramResolution.Pending) {
                 ready = false;
             }
         }
         return ready;
-    }
-
-    private AttachmentLayout fullscreenLayout(int index, PassGroup group) {
-        Program program = r.dim.programs().get(index);
-        return group == PassGroup.FINAL
-            ? AttachmentLayout.single("final", 0, Minecraft.getInstance().gameRenderer.mainRenderTarget().getColorTexture().getFormat())
-            : AttachmentLayout.fullscreen(r.dim, program);
     }
 
     @Override

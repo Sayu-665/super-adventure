@@ -189,7 +189,11 @@ fn broken_programs_are_skipped_not_fatal() {
     assert!(out.stats.programs_skipped.iter().any(|s| s.name == "gbuffers_water"), "{:?}", out.stats.programs_skipped);
     assert!(out.stats.warnings.iter().any(|w| w.contains("99")), "{:?}", out.stats.warnings);
     assert!(out.stats.warnings.iter().any(|w| w.contains("1234")), "{:?}", out.stats.warnings);
-    assert!(out.stats.warnings.iter().any(|w| w.contains("flip_state")), "{:?}", out.stats.warnings);
+    // `final` is the first pass of its group, whose flip state may legitimately differ from
+    // the previous passes' flips (`flip.<group>_pre`), so the bogus state is adopted
+    // silently there; the binding check still reports that `final`'s `use_alt` read of
+    // colortex0 disagrees with it.
+    assert!(out.stats.warnings.iter().any(|w| w.contains("disagrees with the pass flip state")), "{:?}", out.stats.warnings);
 }
 
 #[test]

@@ -53,14 +53,13 @@ final class FullscreenPasses {
         Program program = r.dim.programs().get(index);
         boolean shadow = group == PassGroup.SHADOW_COMP;
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        int[] size = shadow ? shadowSize() : new int[] {main.width, main.height};
+        int[] size = group == PassGroup.FINAL ? new int[] {main.width, main.height} : passSize(program, shadow);
         int maxAttachments = r.device.getDeviceInfo().limits().maxColorAttachments();
         List<AttachmentSlot> slots = PassAttachments.fullscreen(program, group, flips, t -> sized(pair(t, shadow), size), maxAttachments);
         if (slots.isEmpty()) {
             return FrameSteps.Drawn.NOTHING;
         }
-        AttachmentLayout layout = group == PassGroup.FINAL ? AttachmentLayout.single("final", 0, main.getColorTexture().getFormat())
-            : AttachmentLayout.fullscreen(r.dim, program);
+        AttachmentLayout layout = layout(index, group);
         if (!(r.programs.program(index, layout) instanceof ProgramResolution.Renderpearl pipeline)) {
             return FrameSteps.Drawn.NOTHING;
         }
@@ -86,6 +85,18 @@ final class FullscreenPasses {
             pass.draw(VERTICES, 1, 0, 0);
         }
         return new FrameSteps.Drawn(true, shadow ? written(slots, pipeline.pipeline().attachments()) : List.of());
+    }
+
+    /**
+     * @param index a composite-style program
+     * @param group its pass group
+     * @return the attachments its pipeline is built for: its draw buffers, or Minecraft's main
+     *     color target for {@code final}
+     */
+    AttachmentLayout layout(int index, PassGroup group) {
+        return group == PassGroup.FINAL
+            ? AttachmentLayout.single("final", 0, Minecraft.getInstance().gameRenderer.mainRenderTarget().getColorTexture().getFormat())
+            : AttachmentLayout.fullscreen(r.dim, r.dim.programs().get(index));
     }
 
     /**
@@ -128,9 +139,24 @@ final class FullscreenPasses {
         }
     }
 
-    private int[] shadowSize() {
-        GpuTextureView depth = r.targets.shadowDepthView(0);
-        return new int[] {depth.getWidth(0), depth.getHeight(0)};
+    /**
+     * The size of a composite-style pass: that of the program's first existing output target
+     * (targets scaled with {@code size.buffer} are drawn at their own size, as in Iris), else the
+     * screen or the shadow map. Outputs of another size get no texture.
+     */
+    private int[] passSize(Program program, boolean shadow) {
+        for (int t : program.drawBuffers()) {
+            Optional<ColorPair> pair = pair(t, shadow);
+            if (pair.isPresent()) {
+                return new int[] {pair.get().spec().width(), pair.get().spec().height()};
+            }
+        }
+        if (shadow) {
+            GpuTextureView depth = r.targets.shadowDepthView(0);
+            return new int[] {depth.getWidth(0), depth.getHeight(0)};
+        }
+        RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        return new int[] {main.width, main.height};
     }
 
     private Optional<ColorPair> pair(int target, boolean shadow) {
