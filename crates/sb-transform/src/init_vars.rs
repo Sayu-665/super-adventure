@@ -1,7 +1,8 @@
-//! Zero-initialization of `out` parameters and of local variables declared without an
-//! initializer.
+//! Zero-initialization of `out` parameters and of local and plain global variables
+//! declared without an initializer.
 //!
-//! GLSL leaves both undefined until they are written. Packs that read them first
+//! GLSL leaves all of them undefined until they are written (a global "enters main()
+//! with an undefined value"). Packs that read them first
 //! (`void f(out vec3 c) { c += x; }`, `vec3 sum; sum += x;`) work on GL drivers, which in
 //! practice start such variables at zero, but a SPIR-V compiler may fold the undefined read
 //! and the whole expression that depends on it: voyager-shader-2.0's
@@ -28,19 +29,22 @@ const MAX_ARRAY_LEN: i64 = 64;
 /// Struct definitions of the unit by name (global `struct S {...};` declarations).
 type Structs = HashMap<String, StructDef>;
 
-/// Zero-initialize the `out` parameters and uninitialized locals of every function of
-/// `unit`. Returns (out parameters, locals) initialized.
+/// Zero-initialize the uninitialized plain globals, `out` parameters and uninitialized
+/// locals of `unit`. Returns (out parameters, locals and globals) initialized.
 pub(crate) fn apply(unit: &mut TranslationUnit) -> (usize, usize) {
     let mut structs: Structs = HashMap::new();
-    for item in &unit.items {
-        if let ItemKind::Decl(d) = &item.kind
-            && let TypeBase::Struct(s) = &d.ty.ty.base
+    let (mut params, mut locals) = (0, 0);
+    for item in &mut unit.items {
+        let ItemKind::Decl(d) = &mut item.kind else { continue };
+        if let TypeBase::Struct(s) = &d.ty.ty.base
             && let Some(n) = &s.name
         {
             structs.insert(n.clone(), (**s).clone());
         }
+        // Plain globals only: `const`, `uniform`, `in`/`out`, `buffer` and `shared`
+        // (which cannot have an initializer) carry a storage qualifier.
+        locals += init_declarators(d, &structs, |n| !n.starts_with("gl_"));
     }
-    let (mut params, mut locals) = (0, 0);
     for f in unit.functions_mut() {
         let mut prologue = Vec::new();
         for p in &f.proto.params {
@@ -58,21 +62,8 @@ pub(crate) fn apply(unit: &mut TranslationUnit) -> (usize, usize) {
         }
         for s in &mut f.body {
             s.walk_stmts_mut(&mut |s| {
-                let StmtKind::Decl(d) = &mut s.kind else { return };
-                if d.ty.quals.iter().any(|q| matches!(q, Qualifier::Storage(_))) {
-                    // `const` (always initialized) or a qualifier a local cannot carry.
-                    return;
-                }
-                for v in &mut d.vars {
-                    if v.init.is_some() {
-                        continue;
-                    }
-                    let mut dims = d.ty.ty.array.clone();
-                    dims.extend(v.array.iter().cloned());
-                    if let Some(z) = zero_of(&d.ty.ty.base, &dims, &structs, 0) {
-                        v.init = Some(Init::Expr(Expr::raw(z)));
-                        locals += 1;
-                    }
+                if let StmtKind::Decl(d) = &mut s.kind {
+                    locals += init_declarators(d, &structs, |_| true);
                 }
             });
         }
@@ -82,6 +73,28 @@ pub(crate) fn apply(unit: &mut TranslationUnit) -> (usize, usize) {
         }
     }
     (params, locals)
+}
+
+/// Give every declarator of `d` without an initializer (and accepted by `wanted`) a zero
+/// initializer, unless `d` carries a storage qualifier (`const` is always initialized;
+/// the others cannot be, or are not plain variables). Returns the number initialized.
+fn init_declarators(d: &mut Declaration, structs: &Structs, wanted: impl Fn(&str) -> bool) -> usize {
+    if d.ty.quals.iter().any(|q| matches!(q, Qualifier::Storage(_))) {
+        return 0;
+    }
+    let mut n = 0;
+    for v in &mut d.vars {
+        if v.init.is_some() || !wanted(&v.name) {
+            continue;
+        }
+        let mut dims = d.ty.ty.array.clone();
+        dims.extend(v.array.iter().cloned());
+        if let Some(z) = zero_of(&d.ty.ty.base, &dims, structs, 0) {
+            v.init = Some(Init::Expr(Expr::raw(z)));
+            n += 1;
+        }
+    }
+    n
 }
 
 /// GLSL text of the zero value of `base` with array dimensions `dims`.
@@ -167,11 +180,23 @@ mod tests {
         assert_eq!(n.1, 4, "{out}");
     }
 
-    /// Arrays whose length is not a literal, and globals, are left alone.
+    /// Arrays whose length is not a literal, and qualified globals, are left alone.
     #[test]
-    fn non_literal_arrays_and_globals_are_left_alone() {
-        let (out, n) = run("const int N = 4;\nuniform sampler2D t;\nfloat g0;\nvoid g(out float u[N]) {}\nvoid main() { float v[N]; }\n");
+    fn non_literal_arrays_and_qualified_globals_are_left_alone() {
+        let (out, n) = run("const int N = 4;\nuniform sampler2D t;\nuniform float u0;\nin vec2 uv;\nshared float s[4];\nfloat g[N];\nvoid g2(out float u[N]) {}\nvoid main() { float v[N]; }\n");
         assert_eq!(n, (0, 0), "{out}");
-        assert!(out.contains("float g0;"), "{out}");
+        assert!(out.contains("uniform float u0;") && out.contains("in vec2 uv;") && out.contains("shared float s[4];"), "{out}");
+    }
+
+    /// Plain globals are undefined at the start of `main` too: a pack accumulating into
+    /// one before writing it reads zero, as on GL drivers.
+    #[test]
+    fn uninitialized_plain_globals_start_at_zero() {
+        let (out, n) = run("struct L { vec3 c; };\nvec3 total;\nfloat w = 1.0, acc;\nL light;\nprecise vec2 p;\nvoid main() { total += vec3(w); acc += 1.0; }\n");
+        assert!(out.contains("vec3 total = (vec3(0));"), "{out}");
+        assert!(out.contains("float w = 1.0, acc = (float(0));"), "{out}");
+        assert!(out.contains("L light = (L(vec3(0)));"), "{out}");
+        assert!(out.contains("precise vec2 p = (vec2(0));"), "{out}");
+        assert_eq!(n, (0, 4), "{out}");
     }
 }

@@ -53,7 +53,7 @@ fn dynamic_frag_data_index_uses_an_array() {
     let out = T::fullscreen().vs(VS).fs(fs).run();
     contains_all(
         out.fs(),
-        &["vec4 sb_FragDataArr[8];", "sb_FragDataArr[i] = vec4(float(i));", "layout(location = 7) out vec4 sb_FragData7;", "sb_FragData7 = sb_FragDataArr[7];"],
+        &["vec4 sb_FragDataArr[8] = vec4[8](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));", "sb_FragDataArr[i] = vec4(float(i));", "layout(location = 7) out vec4 sb_FragData7;", "sb_FragData7 = sb_FragDataArr[7];"],
     );
     assert_eq!(out.prog.fragment_outputs.len(), 8);
     // With an attachment list, only the entries with an attachment are copied out; the
@@ -62,7 +62,7 @@ fn dynamic_frag_data_index_uses_an_array() {
     let out = T::fullscreen().vs(VS).fs(fs).with(|o| o.output_locations = Some(vec![4, 1, 2])).run();
     contains_all(
         out.fs(),
-        &["vec4 sb_FragDataArr[8];", "layout(location = 4) out vec4 sb_FragData0;", "layout(location = 1) out vec4 sb_FragData1;", "sb_FragData0 = sb_FragDataArr[0];"],
+        &["vec4 sb_FragDataArr[8] = vec4[8](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));", "layout(location = 4) out vec4 sb_FragData0;", "layout(location = 1) out vec4 sb_FragData1;", "sb_FragData0 = sb_FragDataArr[0];"],
     );
     contains_none(out.fs(), &["sb_FragData3 ="]);
     assert_eq!(outputs(&out), [(1, "float"), (2, "float"), (4, "float")]);
@@ -144,7 +144,7 @@ fn output_locations_remap_and_remove_outputs() {
     let out = T::fullscreen().vs(VS).fs(fs).with(|o| o.output_locations = Some(vec![5, 2])).run();
     contains_all(
         out.fs(),
-        &["layout(location = 5) out vec4 sb_FragData0;", "layout(location = 2) out vec4 sb_FragData1;", "\nvec4 outColor2;", "outColor2 = vec4(0.5);"],
+        &["layout(location = 5) out vec4 sb_FragData0;", "layout(location = 2) out vec4 sb_FragData1;", "\nvec4 outColor2 = (vec4(0));", "outColor2 = vec4(0.5);"],
     );
     contains_none(out.fs(), &["out vec4 outColor2"]);
     assert!(out.has_diag("xf.output-removed"));
@@ -161,7 +161,7 @@ fn remapped_output_arrays_are_split_when_not_consecutive() {
     contains_all(
         out.fs(),
         &[
-            "\nvec4 outColor0[3];",
+            "\nvec4 outColor0[3] = (vec4[3](vec4(0), vec4(0), vec4(0)));",
             "layout(location = 3) out vec4 sb_Out_outColor0_0;",
             "layout(location = 1) out vec4 sb_Out_outColor0_1;",
             "sb_Out_outColor0_0 = outColor0[0];",

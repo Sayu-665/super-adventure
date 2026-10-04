@@ -8,6 +8,7 @@ import dev.shaderbridge.model.Program;
 import dev.shaderbridge.model.ProgramKind;
 import dev.shaderbridge.model.TextureFormat;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * The color attachments of the render pass a pipeline draws in. Mojang's render passes fix their
@@ -47,13 +48,25 @@ public record AttachmentLayout(String id, List<Attachment> attachments, boolean 
      * @return the layout
      */
     public static AttachmentLayout geometry(DimensionPipeline dim, Program program, boolean shadow) {
+        return shared(dim, shadow).orElseGet(() -> new AttachmentLayout((shadow ? "shadow" : "gbuffers") + "_own",
+            attachments(program.drawBuffers(), shadow ? dim.targets().shadowcolor() : dim.targets().colortex()), false));
+    }
+
+    /**
+     * The shared pass all world geometry (or all shadow geometry) is drawn in.
+     *
+     * @param dim    the dimension pipeline
+     * @param shadow the shadow pass
+     * @return the {@code gbuffer_attachments} (or {@code shadow_attachments}) layout, or empty if
+     *     the pack's geometry writes more targets than one pass can hold
+     */
+    public static Optional<AttachmentLayout> shared(DimensionPipeline dim, boolean shadow) {
         List<Integer> sharedList = shadow ? dim.shadowAttachments() : dim.gbufferAttachments();
-        List<ColorTarget> targets = shadow ? dim.targets().shadowcolor() : dim.targets().colortex();
-        String kind = shadow ? "shadow" : "gbuffers";
-        if (!sharedList.isEmpty()) {
-            return new AttachmentLayout(kind, attachments(sharedList, targets), true);
+        if (sharedList.isEmpty()) {
+            return Optional.empty();
         }
-        return new AttachmentLayout(kind + "_own", attachments(program.drawBuffers(), targets), false);
+        List<ColorTarget> targets = shadow ? dim.targets().shadowcolor() : dim.targets().colortex();
+        return Optional.of(new AttachmentLayout(shadow ? "shadow" : "gbuffers", attachments(sharedList, targets), true));
     }
 
     /**

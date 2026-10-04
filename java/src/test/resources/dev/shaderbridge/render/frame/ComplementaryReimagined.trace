@@ -1,0 +1,78 @@
+frame 0
+pass shadow 0
+geometry shadow attachments=0:main,1:main
+copy shadowtex0->shadowtex1
+pass gbuffers_opaque 0
+geometry gbuffers_opaque attachments=0:main,3:main,4:main,6:main,12:main,13:main
+copy depthtex0->depthtex2,depthtex1 dhDepthTex0->dhDepthTex1
+pass deferred 1
+draw world0/deferred1 writes=0=0:alt,1=5:alt,2=4:alt reads=colortex0=0:main,colortex4=4:main,colortex5=5:main,colortex6=6:main
+flip 0,4,5
+pass gbuffers_translucent 0
+geometry gbuffers_translucent attachments=0:alt,3:main,4:alt,6:main,12:main,13:main
+pass composite 0
+draw world0/composite writes=0=7:alt,1=1:alt reads=colortex0=0:alt,colortex1=1:main,colortex4=4:alt,colortex5=5:alt,colortex6=6:main,colortex7=7:main
+flip 1,7
+pass composite 1
+draw world0/composite1 writes=0=0:main,1=5:main reads=colortex0=0:alt,colortex1=1:alt,colortex12=12:main,colortex13=13:main,colortex3=3:main,colortex4=4:alt,colortex5=5:alt,colortex6=6:main,colortex7=7:alt,shadowcolor1=shadowcolor1:main
+flip 0,5
+pass composite 3
+draw world0/composite3 writes=0=0:alt reads=colortex0=0:main
+flip 0
+pass composite 4
+draw world0/composite4 writes=0=3:alt reads=colortex0=0:alt
+flip 3
+pass composite 5
+draw world0/composite5 writes=0=3:main reads=colortex0=0:alt,colortex3=3:alt
+flip 3
+pass composite 6
+draw world0/composite6 writes=0=3:alt,1=2:alt reads=colortex2=2:main,colortex3=3:main,colortex6=6:main
+flip 2,3
+pass composite 7
+draw world0/composite7 writes=0=3:main reads=colortex2=2:alt,colortex3=3:alt
+flip 3
+pass final 0
+draw world0/final writes=output reads=colortex3=3:main
+eof colortex1
+eof colortex2
+eof colortex4
+eof colortex7
+frame 1
+pass shadow 0
+geometry shadow attachments=0:main,1:main
+copy shadowtex0->shadowtex1
+pass gbuffers_opaque 0
+geometry gbuffers_opaque attachments=0:main,3:main,4:main,6:main,12:main,13:main
+copy depthtex0->depthtex2,depthtex1 dhDepthTex0->dhDepthTex1
+pass deferred 1
+draw world0/deferred1 writes=0=0:alt,1=5:alt,2=4:alt reads=colortex0=0:main,colortex4=4:main,colortex5=5:main,colortex6=6:main
+flip 0,4,5
+pass gbuffers_translucent 0
+geometry gbuffers_translucent attachments=0:alt,3:main,4:alt,6:main,12:main,13:main
+pass composite 0
+draw world0/composite writes=0=7:alt,1=1:alt reads=colortex0=0:alt,colortex1=1:main,colortex4=4:alt,colortex5=5:alt,colortex6=6:main,colortex7=7:main
+flip 1,7
+pass composite 1
+draw world0/composite1 writes=0=0:main,1=5:main reads=colortex0=0:alt,colortex1=1:alt,colortex12=12:main,colortex13=13:main,colortex3=3:main,colortex4=4:alt,colortex5=5:alt,colortex6=6:main,colortex7=7:alt,shadowcolor1=shadowcolor1:main
+flip 0,5
+pass composite 3
+draw world0/composite3 writes=0=0:alt reads=colortex0=0:main
+flip 0
+pass composite 4
+draw world0/composite4 writes=0=3:alt reads=colortex0=0:alt
+flip 3
+pass composite 5
+draw world0/composite5 writes=0=3:main reads=colortex0=0:alt,colortex3=3:alt
+flip 3
+pass composite 6
+draw world0/composite6 writes=0=3:alt,1=2:alt reads=colortex2=2:main,colortex3=3:main,colortex6=6:main
+flip 2,3
+pass composite 7
+draw world0/composite7 writes=0=3:main reads=colortex2=2:alt,colortex3=3:alt
+flip 3
+pass final 0
+draw world0/final writes=output reads=colortex3=3:main
+eof colortex1
+eof colortex2
+eof colortex4
+eof colortex7

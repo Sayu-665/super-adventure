@@ -94,6 +94,28 @@ fn global_consts_with_non_constant_initializers_are_demoted() {
 }
 
 #[test]
+fn const_demotion_keeps_the_constants_array_sizes_need() {
+    // A declarator may use an earlier declarator of the same declaration (`B = A * 2`),
+    // and one non-constant declarator must not demote its constant neighbours (`k`,
+    // `e`): `B` and `k` size arrays, which a demoted (non-constant) global cannot.
+    let out = fs("#version 330\nuniform float viewWidth;\nconst int A = 4, B = A * 2;\nconst float k = 3.0, d = viewWidth * 2.0, e = k + 1.0;\n\
+                  const float w[B] = float[B](1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0);\nconst float v[int(k)] = float[3](1.0, 2.0, 3.0);\n\
+                  out vec4 c;\nvoid main() { c = vec4(w[B - 1] + v[2] + d + e); }\n");
+    contains_all(out.fs(), &["const int A = 4;", "const int B = A * 2;", "const float k = 3.0;", "\nfloat d = viewWidth * 2.0;", "const float e = k + 1.0;", "const float w[B]", "const float v[int(k)]"]);
+}
+
+#[test]
+fn global_consts_using_builtins_glslang_does_not_fold_are_demoted() {
+    // GLSL calls every built-in with constant arguments a constant expression, but
+    // glslang folds neither the packing functions nor `matrixCompMult` (nor
+    // `transpose`/`inverse`/`determinant`): such global `const`s must be demoted.
+    let out = fs("#version 330\nconst uint h = packHalf2x16(vec2(1.0, 0.5));\nconst vec2 u2 = unpackUnorm2x16(65535u);\nconst uint p = packUnorm2x16(vec2(0.5)) + packSnorm2x16(vec2(0.5));\n\
+                  const vec2 q = unpackHalf2x16(1u) + unpackSnorm2x16(1u);\nconst mat2 m = matrixCompMult(mat2(1.0), mat2(2.0));\nconst float s = sin(1.0) + pow(2.0, 3.0) + dot(vec2(1.0), vec2(2.0));\n\
+                  const int n = int(s);\nfloat arr[n];\nout vec4 c;\nvoid main() { c = vec4(float(h + p) + u2.x + q.y + m[0].x + s + arr[0]); }\n");
+    contains_all(out.fs(), &["\nuint h = packHalf2x16(", "\nvec2 u2 = unpackUnorm2x16(", "\nuint p = ", "\nvec2 q = ", "\nmat2 m = matrixCompMult(", "const float s =", "const int n = int(s);"]);
+}
+
+#[test]
 fn pack_functions_named_like_builtins_are_renamed() {
     let out = fs("#version 130\nfloat fma(float a, float b, float c) { return a * b + c; }\nvec4 textureGather(vec2 uv) { return vec4(uv, 0.0, 1.0); }\nfloat min3(float a, float b, float c) { return min(a, min(b, c)); }\n\
                   float saturate(float x) { return clamp(x, 0.0, 1.0); }\n\
@@ -153,6 +175,42 @@ fn reserved_words_and_vulkan_type_keywords_are_escaped() {
         out.fs(),
         &["struct S { float sb_kw_filter; vec3 sb_kw_input; };", "return s.sb_kw_filter + s.sb_kw_input.x;", "float sb_kw_output = sb_kw_sample(s);"],
     );
+}
+
+#[test]
+fn keywords_of_later_versions_used_as_names_are_escaped_on_both_sides_of_an_interface() {
+    // GLSL 1.20 code may name things `sample`, `patch`, `precise`, `subroutine` (4.00
+    // keywords), `buffer` or `shared` (4.30): the escape must agree between the vertex
+    // output and the fragment input of the same varying.
+    let out = T::gbuffers()
+        .vs("#version 120\nvarying float sample;\nvarying vec2 patch;\nvarying float shared;\nvoid main() { float precise = 1.0; float buffer = 2.0; sample = precise + buffer; patch = gl_MultiTexCoord0.st; shared = 0.5; gl_Position = ftransform(); }\n")
+        .fs("#version 120\nvarying float sample;\nvarying vec2 patch;\nvarying float shared;\nfloat subroutine(float x) { return x * 2.0; }\nvoid main() { float s = subroutine(sample); gl_FragData[0] = vec4(patch, s, shared); }\n")
+        .run();
+    contains_all(out.vs(), &["out float sb_kw_sample;", "out vec2 sb_kw_patch;", "sb_kw_sample = sb_kw_precise + sb_kw_buffer;"]);
+    contains_all(out.fs(), &["in float sb_kw_sample;", "in vec2 sb_kw_patch;", "float sb_kw_subroutine(float x)", "float s = sb_kw_subroutine(sb_kw_sample);"]);
+    // The linked interface matches by location: same names, same locations.
+    let vs_out = &out.refl(ShaderStage::Vertex).outputs;
+    let fs_in = &out.refl(ShaderStage::Fragment).inputs;
+    for name in ["sb_kw_sample", "sb_kw_patch", "sb_kw_shared"] {
+        let o = vs_out.iter().find(|v| v.name == name).unwrap_or_else(|| panic!("{name} not a VS output: {vs_out:?}"));
+        let i = fs_in.iter().find(|v| v.name == name).unwrap_or_else(|| panic!("{name} not an FS input: {fs_in:?}"));
+        assert_eq!(o.location, i.location, "{name}");
+    }
+}
+
+#[test]
+fn uninitialized_plain_globals_start_at_zero() {
+    // GLSL leaves globals without an initializer undefined; GL drivers start them at
+    // zero, and packs accumulate into them (a SPIR-V compiler may fold the undefined
+    // read away). Attributes, varyings and outputs are not plain globals.
+    let out = T::gbuffers()
+        .vs("#version 120\nvarying vec4 col;\nvec4 acc;\nattribute vec4 mc_Entity;\nvoid add(vec4 x) { acc += x; }\nvoid main() { add(gl_Color); col = acc + mc_Entity; gl_Position = ftransform(); }\n")
+        .fs("#version 120\nvarying vec4 col;\nvec3 tint;\nvoid main() { tint += col.rgb; gl_FragData[0] = vec4(tint, 1.0); }\n")
+        .run();
+    contains_all(out.vs(), &["vec4 acc = (vec4(0));"]);
+    contains_all(out.fs(), &["vec3 tint = (vec3(0));"]);
+    contains_none(out.vs(), &["mc_Entity = (vec4(0))", "col = (vec4(0))"]);
+    contains_none(out.fs(), &["col = (vec4(0))", "sb_FragData0 = (vec4(0))"]);
 }
 
 #[test]

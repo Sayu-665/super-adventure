@@ -995,7 +995,10 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
             }
             Walk::Children
         });
-        w.piece(Section::Late, &["sb_FragDataArr"], format!("vec4 sb_FragDataArr[{n}];"));
+        // Elements the pack never writes are copied out too: start them at zero (an
+        // uninitialized private array is undefined in SPIR-V).
+        let zeros = vec!["vec4(0.0)"; n as usize].join(", ");
+        w.piece(Section::Late, &["sb_FragDataArr"], format!("vec4 sb_FragDataArr[{n}] = vec4[{n}]({zeros});"));
         for i in 0..n {
             if user_logical.contains(&i) {
                 continue;
@@ -1028,7 +1031,7 @@ fn frag_outputs(w: &mut StageWork, ctx: &Ctx) {
                 }
                 None => {
                     let name = format!("sb_FragData{i}");
-                    w.piece(Section::Late, &[&name], format!("vec4 {name};"));
+                    w.piece(Section::Late, &[&name], format!("vec4 {name} = vec4(0.0);"));
                 }
             }
         }

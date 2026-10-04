@@ -104,3 +104,27 @@ fn compile_errors_map_through_the_line_map() {
     let text = err.to_string();
     assert!(text.contains("p.fsh:3"), "{text}");
 }
+
+#[test]
+fn line_map_survives_comments_literal_rewrites_and_split_declarations() {
+    // Multi-line block comments (blanked before parsing), wrapped integer literals, a
+    // global `const` declaration split by demotion and an include all keep their lines;
+    // a glslang error inside an included function maps to the include's own line.
+    let prog = T::fullscreen()
+        .file("lib/b.glsl", "/* helper\n   functions **/\nfloat g(float x) {\n  float y = x * 2.0;\n  return y + undeclaredB;\n}\n")
+        .vs("#version 130\nvoid main() { gl_Position = ftransform(); }\n")
+        .fs("#version 130\n/* multi\n line\n comment **/\nuniform float viewWidth;\nconst float k = 2.0, w = viewWidth;\n#include \"/lib/b.glsl\"\nvoid main() {\n  int big = 0xFFFFFFFF;\n  gl_FragData[0] = vec4(g(w * k) + float(big));\n}\n")
+        .translate_ok();
+    let fs = prog.stages.iter().find(|s| s.stage == ShaderStage::Fragment).unwrap();
+    let find = |needle: &str| {
+        let i = fs.glsl.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle} not in\n{}", fs.glsl));
+        fs.line_map[i].as_ref().map(|l| (l.file.clone(), l.line))
+    };
+    assert_eq!(find("int big = int(4294967295u);"), Some(("p.fsh".to_string(), 9)));
+    assert_eq!(find("const float k = 2.0;"), Some(("p.fsh".to_string(), 6)));
+    assert_eq!(find("float w = viewWidth;"), Some(("p.fsh".to_string(), 6)));
+    assert_eq!(find("float y = x * 2.0;"), Some(("lib/b.glsl".to_string(), 4)));
+    let err = sb_compile::compile_glsl(&fs.glsl, fs.stage, "p.fsh", &sb_compile::CompileOptions::default(), Some(&fs.line_map)).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("lib/b.glsl:5") && text.contains("undeclaredB"), "{text}");
+}

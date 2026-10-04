@@ -9,7 +9,7 @@ use crate::descriptors::BindContext;
 use crate::error::{RuntimeError, VkResultExt};
 use crate::executor::{ColorPair, Executor, ProgramState, default_clear};
 use crate::math::celestial;
-use crate::pipelines::{AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, gl_blend_factor, output_blend, output_class};
+use crate::pipelines::{AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, dispatches_over_shadow_map, gl_blend_factor, output_blend, output_class};
 use crate::resources::{ImageDesc, ImageId, clear_color_value, full_barrier, host_read_barrier};
 use crate::scene::formats::{SODIUM_TERRAIN, VertexLayout};
 use crate::scene::sky;
@@ -328,9 +328,7 @@ impl Executor<'_> {
         // Iris dispatches `shadowcomp` and the shadow pass's computes (`shadow.csh`,
         // `shadow_a.csh`, ...) over the shadow map resolution; every other compute over
         // the screen.
-        let shadow_compute = matches!(model.kind, ProgramKind::Compute { group: PassGroup::ShadowComp, .. })
-            || matches!(model.kind, ProgramKind::GeometryCompute { program, .. } if program.group() == GeometryGroup::Shadow);
-        let ext = if shadow_compute { self.arena.image(self.targets.shadow[0]).extent_2d() } else { self.targets.extent };
+        let ext = if dispatches_over_shadow_map(&model.kind) { self.arena.image(self.targets.shadow[0]).extent_2d() } else { self.targets.extent };
         let lim = self.gpu.limits().max_compute_work_group_count;
         let size = dispatch_size(model.compute.as_ref().map(|c| &c.work_groups), local, ext.width, ext.height, lim);
         let indirect = model.compute.as_ref().and_then(|c| c.indirect);

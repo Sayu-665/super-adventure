@@ -26,6 +26,21 @@ public interface RawPath {
      */
     Admission admit(DimensionPipeline dim, ProgramVariant program, List<String> renderpearlProblems);
 
+    /**
+     * Dispatches an admitted compute program between two of Minecraft's render passes, with full
+     * memory barriers around it. Called by the frame orchestration on the render thread, outside
+     * any render pass, for programs this path {@linkplain #admit admitted} and reports
+     * {@linkplain RawProgram.State.Ready ready}. A raw path that admits compute programs must
+     * override this; the default refuses, which the caller reports and skips.
+     *
+     * @param program  the prepared program
+     * @param dispatch what to dispatch and the frame state it sees
+     * @throws UnsupportedOperationException if this raw path does not dispatch compute programs
+     */
+    default void dispatch(RawProgram program, RawDispatch dispatch) {
+        throw new UnsupportedOperationException("the raw Vulkan path does not dispatch compute programs");
+    }
+
     /** Outcome of {@link #admit}. */
     sealed interface Admission {
         /** @param program the program being prepared; the caller owns it */

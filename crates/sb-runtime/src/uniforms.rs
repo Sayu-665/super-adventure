@@ -14,8 +14,18 @@ pub(crate) const NEAR: f64 = 0.05;
 /// Minecraft's default cloud range (128 chunks) in blocks: a lower bound of the level
 /// projection's far plane.
 pub(crate) const DEFAULT_CLOUD_RANGE_BLOCKS: f64 = 128.0 * 16.0;
-/// Near plane of `dhProjection`.
-pub(crate) const DH_NEAR: f64 = 0.1;
+/// Near plane of `dhProjection` and value of `dhNearPlane` for a vanilla render distance of
+/// `rd_blocks` and a viewport `aspect` ratio: Distant Horizons' near clip plane while a
+/// shader pack is active (`RenderUtil.getNearClipPlaneInBlocks`, which Iris reports through
+/// `getNearClipPlaneDistanceInBlocks`): overdraw prevention 0.2, i.e. 20 % of the render
+/// distance (at least one block), moved to the distance of the frustum corner of DH's
+/// fixed 70° field of view.
+pub(crate) fn dh_near_plane(rd_blocks: f64, aspect: f64) -> f64 {
+    let near = (rd_blocks * 0.2).max(1.0);
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let tan = 35f64.to_radians().tan();
+    near / (1.0 + tan * tan * (aspect * aspect + 1.0)).sqrt()
+}
 /// `frameCounter` wraps at this value (as in Iris).
 const FRAME_COUNTER_WRAP: u32 = 720_720;
 /// The world's sea level as Minecraft reports it.
@@ -163,7 +173,12 @@ impl FrameState {
         let model_view = math::mc_view_rotation(yaw, pitch);
         let aspect = width / height;
         let projection = math::perspective_gl(fov, aspect, NEAR, projection_far);
-        let (dh_near, dh_projection) = if unified { (NEAR, projection) } else { (DH_NEAR, math::perspective_gl(fov, aspect, DH_NEAR, dh_far)) };
+        let (dh_near, dh_projection) = if unified {
+            (NEAR, projection)
+        } else {
+            let near = dh_near_plane(rd_blocks, aspect);
+            (near, math::perspective_gl(fov, aspect, near, dh_far))
+        };
 
         let world_time = s.world_time.rem_euclid(24000);
         let world_day = s.world_time.div_euclid(24000);
@@ -765,6 +780,23 @@ mod tests {
         });
         assert!((u.far - expected_dh_far).abs() < 1e-9);
         assert_eq!(u.dh_projection, u.projection);
+    }
+
+    /// `dhNearPlane` and the `dhProjection` near plane follow Distant Horizons' near clip
+    /// plane with a shader pack (overdraw prevention 0.2, 70° frustum-corner distance).
+    #[test]
+    fn dh_near_plane_follows_distant_horizons() {
+        // 4 chunks at 16:9: 12.8 / sqrt(1 + tan²(35°) * (aspect² + 1)) ≈ 7.341.
+        let n = dh_near_plane(64.0, 640.0 / 360.0);
+        let tan2 = 35f64.to_radians().tan().powi(2);
+        assert!((n - 12.8 / (1.0 + tan2 * ((16.0f64 / 9.0).powi(2) + 1.0)).sqrt()).abs() < 1e-12);
+        assert!((n - 7.341).abs() < 1e-3, "{n}");
+        // At least one block before the frustum-corner scaling; nonsense aspects are safe.
+        assert!((dh_near_plane(4.0, 1.0) - 1.0 / (1.0 + tan2 * 2.0).sqrt()).abs() < 1e-12);
+        assert!(dh_near_plane(64.0, f64::NAN).is_finite() && dh_near_plane(64.0, 0.0) > 0.0);
+        let f = state();
+        assert!((f.dh_near - n).abs() < 1e-12);
+        assert!((f.dh_projection.project_point([0.0, 0.0, -n])[2] + 1.0).abs() < 1e-9);
     }
 
     #[test]

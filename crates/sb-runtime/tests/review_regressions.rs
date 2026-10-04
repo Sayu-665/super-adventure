@@ -12,7 +12,10 @@
 //!   preserve them and the validation layer does not flag it, so this test documents
 //!   the contract rather than reproducing a failure);
 //! * the runtime can be created, used and dropped repeatedly (a smoke test; object and
-//!   memory leaks are checked precisely by the `lifetime_tests` unit test).
+//!   memory leaks are checked precisely by the `lifetime_tests` unit test);
+//! * tessellated geometry keeps GL's triangle winding (Vulkan's default upper-left
+//!   tessellation domain origin reversed it, so back-face culling removed the front
+//!   faces of shrimple's tessellated terrain).
 //!
 //! The depth-copy, comparison-sampler and culling tests fail on the code before their
 //! fixes.
@@ -218,4 +221,101 @@ fn runtime_can_be_recreated_repeatedly() {
         }
         drop(rt);
     }
+}
+
+/// Pass-through tessellation control stage for the test pack's terrain varyings (as
+/// shrimple's `gbuffers_terrain.tcs` with tessellation level 1).
+const TERRAIN_TCS: &str = r#"#version 460
+layout(vertices = 3) out;
+layout(location = 0) in vec2 texcoord[];
+layout(location = 1) in vec4 color[];
+layout(location = 2) in vec2 lmcoord[];
+layout(location = 3) in vec3 normal[];
+layout(location = 4) in int blockId[];
+layout(location = 0) out vec2 tcTexcoord[];
+layout(location = 1) out vec4 tcColor[];
+layout(location = 2) out vec2 tcLmcoord[];
+layout(location = 3) out vec3 tcNormal[];
+layout(location = 4) out int tcBlockId[];
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    tcTexcoord[gl_InvocationID] = texcoord[gl_InvocationID];
+    tcColor[gl_InvocationID] = color[gl_InvocationID];
+    tcLmcoord[gl_InvocationID] = lmcoord[gl_InvocationID];
+    tcNormal[gl_InvocationID] = normal[gl_InvocationID];
+    tcBlockId[gl_InvocationID] = blockId[gl_InvocationID];
+    if (gl_InvocationID == 0) {
+        gl_TessLevelOuter[0] = 1.0;
+        gl_TessLevelOuter[1] = 1.0;
+        gl_TessLevelOuter[2] = 1.0;
+        gl_TessLevelInner[0] = 1.0;
+    }
+}
+"#;
+
+/// Pass-through evaluation stage with GL's default `ccw` vertex order.
+const TERRAIN_TES: &str = r#"#version 460
+layout(triangles, equal_spacing, ccw) in;
+layout(location = 0) in vec2 tcTexcoord[];
+layout(location = 1) in vec4 tcColor[];
+layout(location = 2) in vec2 tcLmcoord[];
+layout(location = 3) in vec3 tcNormal[];
+layout(location = 4) in int tcBlockId[];
+layout(location = 0) out vec2 texcoord;
+layout(location = 1) out vec4 color;
+layout(location = 2) out vec2 lmcoord;
+layout(location = 3) out vec3 normal;
+layout(location = 4) flat out int blockId;
+#define LERP(a) (gl_TessCoord.x * a[0] + gl_TessCoord.y * a[1] + gl_TessCoord.z * a[2])
+void main() {
+    gl_Position = gl_TessCoord.x * gl_in[0].gl_Position + gl_TessCoord.y * gl_in[1].gl_Position + gl_TessCoord.z * gl_in[2].gl_Position;
+    texcoord = LERP(tcTexcoord);
+    color = LERP(tcColor);
+    lmcoord = LERP(tcLmcoord);
+    normal = LERP(tcNormal);
+    blockId = tcBlockId[0];
+}
+"#;
+
+/// Terrain drawn through pass-through tessellation stages renders like terrain without
+/// them: the tessellator keeps GL's winding, so back-face culling keeps the front faces.
+/// (With Vulkan's default upper-left domain origin every generated triangle was wound
+/// the other way and the terrain's visible faces were culled.)
+#[test]
+fn tessellated_terrain_keeps_gl_winding() {
+    let _g = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut rt) = runtime() else { return };
+    if !rt.device_info().caps.tessellation_shader {
+        eprintln!("skipping: no tessellation support");
+        return;
+    }
+    let (pack, blobs) = test_pack(Variant::default());
+    let mut tess = pack.clone();
+    let mut tess_blobs = blobs.clone();
+    let terrain = dim(&mut tess).programs.iter().position(|p| p.name == "gbuffers_terrain").expect("gbuffers_terrain");
+    for (stage, src) in [(ShaderStage::TessControl, TERRAIN_TCS), (ShaderStage::TessEval, TERRAIN_TES)] {
+        let id = tess_blobs.push_spirv(&compile(src, stage));
+        dim(&mut tess).programs[terrain].stages.push(StageModule {
+            stage,
+            entry_point: "main".into(),
+            spirv: Some(id),
+            glsl_vulkan: None,
+            glsl_renderpearl: None,
+            source_file: format!("gbuffers_terrain.{}", if stage == ShaderStage::TessControl { "tcs" } else { "tes" }),
+        });
+    }
+    let scene = SceneParams { entities: false, dh_render_distance: 0, ..small_scene() };
+    let a = render(&mut rt, &pack, &blobs, scene.clone(), (160, 90), 1, false);
+    let b = render(&mut rt, &tess, &tess_blobs, scene, (160, 90), 1, false);
+    assert_no_validation_messages(&a);
+    assert_no_validation_messages(&b);
+    assert!(b.stats.programs_skipped.is_empty(), "{:?}", b.stats.programs_skipped);
+    a.image.save(render_dir().join("review_terrain_plain.png")).ok();
+    b.image.save(render_dir().join("review_terrain_tessellated.png")).ok();
+    // Pixels that differ visibly (the fog keeps the mean difference small even when the
+    // terrain is missing, so count them instead).
+    let differing = a.image.pixels().zip(b.image.pixels()).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > 12)).count();
+    let fraction = differing as f64 / f64::from(a.image.width() * a.image.height());
+    assert!(fraction < 0.01, "tessellated terrain differs from plain terrain in {:.1} % of the pixels (culled front faces?)", fraction * 100.0);
+    assert!(mean_abs_diff(&a.image, &b.image) < 0.002);
 }

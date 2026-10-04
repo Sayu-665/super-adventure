@@ -256,8 +256,9 @@ pub(crate) struct CpuScene {
 }
 
 impl CpuScene {
-    /// Generate the whole scene (`with_sodium`: the terrain in Sodium's format too).
-    pub fn generate(params: &SceneParams, ids: &IdMaps, with_dh: bool, with_sodium: bool) -> Self {
+    /// Generate the whole scene: Distant Horizons LODs with coverage `dh` (`None`: no
+    /// LODs), and with `with_sodium` the terrain in Sodium's format too.
+    pub fn generate(params: &SceneParams, ids: &IdMaps, dh: Option<dh::LodCoverage>, with_sodium: bool) -> Self {
         let world = world::World::new(params.seed);
         let camera = params.camera_position();
         let block_ids = BlockIds::from_id_maps(ids);
@@ -271,10 +272,9 @@ impl CpuScene {
         };
         let sky = sky::build(rd as u32);
         let dh_distance = params.clamped_dh_distance() as i32;
-        let dh = if with_dh && dh_distance > rd {
-            dh::build(&world, cam_chunk, rd, dh_distance)
-        } else {
-            dh::DhMeshes::default()
+        let dh = match dh {
+            Some(coverage) if dh_distance > rd => dh::build(&world, cam_chunk, rd, dh_distance, coverage),
+            _ => dh::DhMeshes::default(),
         };
         Self { camera, terrain, entities, entity_mesh, sky, dh }
     }
@@ -330,13 +330,13 @@ mod tests {
     #[test]
     fn scene_is_deterministic() {
         let p = SceneParams { render_distance: 1, dh_render_distance: 3, ..Default::default() };
-        let a = CpuScene::generate(&p, &IdMaps::default(), true, true);
-        let b = CpuScene::generate(&p, &IdMaps::default(), true, true);
+        let a = CpuScene::generate(&p, &IdMaps::default(), Some(dh::LodCoverage::Full), true);
+        let b = CpuScene::generate(&p, &IdMaps::default(), Some(dh::LodCoverage::Full), true);
         assert_eq!(a.terrain.solid.vertices, b.terrain.solid.vertices);
         assert_eq!(a.dh.regions.len(), b.dh.regions.len());
         assert!(!a.terrain.solid.is_empty());
         assert!(!a.dh.regions.is_empty());
-        let c = CpuScene::generate(&SceneParams { seed: 2, ..p }, &IdMaps::default(), true, false);
+        let c = CpuScene::generate(&SceneParams { seed: 2, ..p }, &IdMaps::default(), Some(dh::LodCoverage::Full), false);
         assert!(c.terrain.sodium.is_none());
         let sa = a.terrain.sodium.as_ref().expect("sodium meshes");
         assert_eq!(sa.layers[0].vertices, b.terrain.sodium.as_ref().expect("sodium meshes").layers[0].vertices);

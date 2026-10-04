@@ -1,0 +1,28 @@
+frame 0
+pass shadow 0
+geometry shadow attachments=0:main,1:main
+copy shadowtex0->shadowtex1
+pass gbuffers_opaque 0
+geometry gbuffers_opaque attachments=0:main,1:main,2:main
+copy depthtex0->depthtex2,depthtex1 dhDepthTex0->dhDepthTex1
+pass gbuffers_translucent 0
+geometry gbuffers_translucent attachments=0:main,1:main,2:main
+pass composite 0
+draw composite writes=0=0:alt reads=colortex0=0:main,colortex1=1:main,colortex2=2:main,shadowcolor0=shadowcolor0:main
+flip 0
+pass final 0
+draw final writes=output reads=colortex0=0:alt
+frame 1
+pass shadow 0
+geometry shadow attachments=0:main,1:main
+copy shadowtex0->shadowtex1
+pass gbuffers_opaque 0
+geometry gbuffers_opaque attachments=0:main,1:main,2:main
+copy depthtex0->depthtex2,depthtex1 dhDepthTex0->dhDepthTex1
+pass gbuffers_translucent 0
+geometry gbuffers_translucent attachments=0:main,1:main,2:main
+pass composite 0
+draw composite writes=0=0:alt reads=colortex0=0:main,colortex1=1:main,colortex2=2:main,shadowcolor0=shadowcolor0:main
+flip 0
+pass final 0
+draw final writes=output reads=colortex0=0:alt

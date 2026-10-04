@@ -576,7 +576,12 @@ impl PreparedProgram {
         };
         let vi = vk::PipelineVertexInputStateCreateInfo::default().vertex_binding_descriptions(&bindings).vertex_attribute_descriptions(&attrs);
         let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(self.topology);
-        let tess = vk::PipelineTessellationStateCreateInfo::default().patch_control_points(self.patch_control_points.unwrap_or(3));
+        // GL generates tessellated primitives with a lower-left domain origin. Vulkan's
+        // default upper-left origin reverses the winding of every generated triangle, so
+        // the CLOCKWISE front face (GL's CCW after the framebuffer Y flip) would cull the
+        // front faces of tessellated geometry (shrimple's terrain lost its top faces).
+        let mut domain_origin = vk::PipelineTessellationDomainOriginStateCreateInfo::default().domain_origin(TESSELLATION_DOMAIN_ORIGIN);
+        let tess = vk::PipelineTessellationStateCreateInfo::default().patch_control_points(self.patch_control_points.unwrap_or(3)).push_next(&mut domain_origin);
         let mut clip = vk::PipelineViewportDepthClipControlCreateInfoEXT::default().negative_one_to_one(true);
         let mut vp = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
         if key.neg_one_to_one {
@@ -745,6 +750,24 @@ pub(crate) fn workgroup_memory_bytes(words: &[u32]) -> u64 {
     total
 }
 
+/// Tessellation domain origin of every tessellation pipeline: OpenGL's lower-left origin
+/// (Vulkan 1.1 core), so `cw` / `ccw` in a pack's evaluation shader produce GL's triangle
+/// winding.
+pub(crate) const TESSELLATION_DOMAIN_ORIGIN: vk::TessellationDomainOrigin = vk::TessellationDomainOrigin::LOWER_LEFT;
+
+/// Whether Iris dispatches compute program `kind` over the shadow map resolution instead
+/// of the screen: `shadowcomp` computes (`ShadowCompositeRenderer`) and the shadow pass's
+/// own computes (`shadow.csh`, `shadow_a.csh`, ...; `IrisRenderingPipeline` dispatches
+/// them with `shadowMapResolution`). Every other compute uses the screen size.
+pub(crate) fn dispatches_over_shadow_map(kind: &sb_core::model::ProgramKind) -> bool {
+    use sb_core::model::ProgramKind;
+    match kind {
+        ProgramKind::Compute { group, .. } => *group == sb_core::PassGroup::ShadowComp,
+        ProgramKind::GeometryCompute { program, .. } => program.group() == sb_core::program::GeometryGroup::Shadow,
+        _ => false,
+    }
+}
+
 /// Iris' dispatch size for a compute program: absolute `workGroups`, or
 /// `ceil(ceil(width * x) / local_x), ceil(ceil(height * y) / local_y), 1` for
 /// `workGroupsRender` (default `1, 1`). Clamped to `max` per axis.
@@ -813,6 +836,23 @@ mod tests {
         assert_eq!(dispatch_size(Some(&WorkGroups::Absolute { x: 1 << 30, y: 1, z: 1 }), [1, 1, 1], 1, 1, max), [65535, 1, 1]);
         assert_eq!(dispatch_size(Some(&WorkGroups::Relative { x: f32::NAN, y: -1.0 }), [1, 1, 1], 10, 10, max), [0, 0, 1]);
         assert_eq!(dispatch_size(Some(&WorkGroups::Relative { x: 1e30, y: 1.0 }), [1, 0, 1], 10, 10, max), [65535, 10, 1]);
+    }
+
+    /// `shadowcomp` and shadow-pass computes run over the shadow map; composite-style and
+    /// gbuffers computes over the screen.
+    #[test]
+    fn shadow_computes_dispatch_over_the_shadow_map() {
+        use sb_core::PassGroup;
+        use sb_core::model::ProgramKind;
+        use sb_core::program::GeometryProgram;
+        assert!(dispatches_over_shadow_map(&ProgramKind::Compute { group: PassGroup::ShadowComp, index: 0, letter: None }));
+        assert!(dispatches_over_shadow_map(&ProgramKind::Compute { group: PassGroup::ShadowComp, index: 3, letter: Some('b') }));
+        assert!(dispatches_over_shadow_map(&ProgramKind::GeometryCompute { program: GeometryProgram::Shadow, letter: Some('a') }));
+        for group in [PassGroup::Setup, PassGroup::Begin, PassGroup::Prepare, PassGroup::Deferred, PassGroup::Composite, PassGroup::Final] {
+            assert!(!dispatches_over_shadow_map(&ProgramKind::Compute { group, index: 0, letter: None }), "{group:?}");
+        }
+        assert!(!dispatches_over_shadow_map(&ProgramKind::GeometryCompute { program: GeometryProgram::TerrainSolid, letter: None }));
+        assert!(!dispatches_over_shadow_map(&ProgramKind::Geometry { program: GeometryProgram::Shadow }));
     }
 
     #[test]

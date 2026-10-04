@@ -7,6 +7,7 @@ use crate::error::RuntimeError;
 use crate::flips::Flips;
 use crate::pipelines::{self, PreparedProgram};
 use crate::resources::{Arena, BufferId, ImageDesc, ImageId, SamplerKey};
+use crate::scene::dh::LodCoverage;
 use crate::scene::entity::EntityInstance;
 use crate::scene::formats::VertexLayout;
 use crate::scene::{CpuMesh, CpuScene, SubDraw};
@@ -493,7 +494,11 @@ impl<'r> Executor<'r> {
         let dh_enabled = dim.distant_horizons.strategy != DhStrategy::Disabled && req.scene.clamped_dh_distance() > 0;
         let unified = dh_enabled && dim.distant_horizons.unified_projection;
         let with_sodium = dim.programs.iter().any(|p| p.draw_profile.as_deref() == Some(crate::scene::formats::SODIUM_TERRAIN.profile));
-        let cpu = CpuScene::generate(&req.scene, &req.pack.id_maps, dh_enabled, with_sodium);
+        // Native DH programs draw LODs into their own depth buffer and discard them near
+        // the camera, so LODs cover the vanilla area as with DH under Iris; synthesized
+        // programs share the vanilla depth buffer and get the ring only.
+        let lods = dh_enabled.then_some(if unified { LodCoverage::Ring } else { LodCoverage::Full });
+        let cpu = CpuScene::generate(&req.scene, &req.pack.id_maps, lods, with_sodium);
         let scene = upload_scene(gpu, arena, &cpu)?;
 
         // Programs.

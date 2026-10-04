@@ -1,0 +1,181 @@
+package dev.shaderbridge.render.frame;
+
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.CommandEncoder;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.textures.FilterMode;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.shaderbridge.model.PassGroup;
+import dev.shaderbridge.model.Program;
+import dev.shaderbridge.model.ViewportScale;
+import dev.shaderbridge.render.draw.UniformTarget;
+import dev.shaderbridge.render.pipeline.AttachmentLayout;
+import dev.shaderbridge.render.pipeline.AttachmentPlan;
+import dev.shaderbridge.render.pipeline.ProgramResolution;
+import dev.shaderbridge.render.targets.ColorPair;
+import dev.shaderbridge.render.targets.TextureBinding;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderPipelines;
+
+/**
+ * Draws composite-style programs: each in its own render pass over its output targets (the
+ * {@link FlipState#write} textures, or Minecraft's main color target for {@code final}) as the
+ * {@code fullscreen} profile's six vertices, with its inputs bound per {@code BindingUse.use_alt}.
+ * Also performs the copies around them: {@code colortex0} to the main target when no
+ * {@code final} program drew, and the end-of-frame alt to main copies. Render thread only.
+ */
+final class FullscreenPasses {
+    /** Vertices of the {@code fullscreen} profile's quad (two triangles from the vertex index). */
+    static final int VERTICES = 6;
+
+    private final PackResources r;
+
+    FullscreenPasses(PackResources r) {
+        this.r = r;
+    }
+
+    /**
+     * @param index the program
+     * @param group its pass group
+     * @param flips the frame's flip state
+     * @param frame the frame's {@code sb_Frame} slice
+     * @return whether it drew, and the shadowcolor targets a {@code shadowcomp} program wrote
+     */
+    FrameSteps.Drawn draw(int index, PassGroup group, FlipState flips, GpuBufferSlice frame) {
+        Program program = r.dim.programs().get(index);
+        boolean shadow = group == PassGroup.SHADOW_COMP;
+        RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        int[] size = shadow ? shadowSize() : new int[] {main.width, main.height};
+        int maxAttachments = r.device.getDeviceInfo().limits().maxColorAttachments();
+        List<AttachmentSlot> slots = PassAttachments.fullscreen(program, group, flips, t -> sized(pair(t, shadow), size), maxAttachments);
+        if (slots.isEmpty()) {
+            return FrameSteps.Drawn.NOTHING;
+        }
+        AttachmentLayout layout = group == PassGroup.FINAL ? AttachmentLayout.single("final", 0, main.getColorTexture().getFormat())
+            : AttachmentLayout.fullscreen(r.dim, program);
+        if (!(r.programs.program(index, layout) instanceof ProgramResolution.Renderpearl pipeline)) {
+            return FrameSteps.Drawn.NOTHING;
+        }
+        if (!isDefault(program.viewport())) {
+            r.diagnostics.report(program.name() + ": viewport scale/offset (scale." + program.name() + ") is not supported; drawn over the whole target");
+        }
+        if (!program.mipmapTargets().isEmpty()) {
+            r.diagnostics.report(program.name() + ": mipmaps of " + program.mipmapTargets() + " are not generated; their lower levels keep old contents");
+        }
+        RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> "ShaderBridge " + program.name());
+        for (int s = 0; s < slots.size(); s++) {
+            switch (slots.get(s)) {
+                case AttachmentSlot.Target t -> descriptor.withColorAttachment(pair(t.target(), shadow).orElseThrow().attachmentView(t.alt()));
+                case AttachmentSlot.MainColor m -> descriptor.withColorAttachment(main.getColorTextureView());
+                case AttachmentSlot.Sink k -> descriptor.withColorAttachment(r.sinks.view(layout.attachments().get(s).format(), size[0], size[1]));
+                case AttachmentSlot.Unused u -> descriptor.withUnusedColorAttachment();
+            }
+        }
+        DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.NONE, false);
+        try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build())) {
+            pass.setPipeline(pipeline.compiled());
+            r.binder.bind(new FreshPass(pass), pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key), MinecraftHost.blockAtlas());
+            pass.draw(VERTICES, 1, 0, 0);
+        }
+        return new FrameSteps.Drawn(true, shadow ? written(slots, pipeline.pipeline().attachments()) : List.of());
+    }
+
+    /**
+     * Without a {@code final} program: draws the current {@code colortex0} into Minecraft's main
+     * color target with Minecraft's screen blit.
+     *
+     * @param flips the frame's flip state
+     */
+    void copyToOutput(FlipState flips) {
+        Optional<ColorPair> color0 = r.targets.color(0);
+        CompiledRenderPipeline blit = RenderSystem.getCompiledPipelineNullable(RenderPipelines.TRACY_BLIT);
+        RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        if (color0.isEmpty() || blit == null || main.getColorTexture().getFormat() != RenderPipelines.TRACY_BLIT.getColorTargetStates().getFirst().format()) {
+            r.diagnostics.report("colortex0 cannot be shown: the pack has no final program and the screen blit is unavailable");
+            return;
+        }
+        try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder()
+            .createRenderPass(() -> "ShaderBridge colortex0 to screen", main.getColorTextureView(), Optional.empty())) {
+            RenderSystem.bindDefaultUniforms(pass);
+            pass.setPipeline(blit);
+            pass.setUniform("InSampler", color0.get().sampleView(flips.read(0)), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+            pass.draw(3, 1, 0, 0);
+        }
+    }
+
+    /**
+     * Copies the alternate texture of buffers left in it over the main one.
+     *
+     * @param color  colortex indices
+     * @param shadow shadowcolor indices
+     */
+    void endOfFrame(List<Integer> color, List<Integer> shadow) {
+        CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
+        color.forEach(i -> r.targets.copyAltToMain(encoder, i));
+        for (int i : shadow) {
+            r.targets.shadowColor(i).ifPresent(pair -> {
+                GpuTexture alt = pair.texture(true);
+                encoder.copyTextureToTexture(alt, pair.texture(false), 0, 0, 0, 0, 0, alt.getWidth(0), alt.getHeight(0));
+            });
+        }
+    }
+
+    private int[] shadowSize() {
+        GpuTextureView depth = r.targets.shadowDepthView(0);
+        return new int[] {depth.getWidth(0), depth.getHeight(0)};
+    }
+
+    private Optional<ColorPair> pair(int target, boolean shadow) {
+        return shadow ? r.targets.shadowColor(target) : r.targets.color(target);
+    }
+
+    private static boolean sized(Optional<ColorPair> pair, int[] size) {
+        return pair.isPresent() && pair.get().spec().width() == size[0] && pair.get().spec().height() == size[1];
+    }
+
+    private static boolean isDefault(ViewportScale v) {
+        return v.scale() == 1 && v.offsetX() == 0 && v.offsetY() == 0;
+    }
+
+    /** Targets the program really writes: an attachment with a texture and a written slot. */
+    private static List<Integer> written(List<AttachmentSlot> slots, AttachmentPlan plan) {
+        List<Integer> out = new ArrayList<>();
+        for (int s = 0; s < slots.size() && s < plan.slots().size(); s++) {
+            if (slots.get(s) instanceof AttachmentSlot.Target t && plan.slots().get(s).write()) {
+                out.add(t.target());
+            }
+        }
+        return out;
+    }
+
+    /** A pass ShaderBridge just created: nothing is bound yet. */
+    private record FreshPass(RenderPass pass) implements UniformTarget {
+        @Override
+        public boolean isBound(String name) {
+            return false;
+        }
+
+        @Override
+        public Optional<TextureBinding> boundTexture(String name) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void bind(String name, GpuBufferSlice slice) {
+            pass.setUniform(name, slice);
+        }
+
+        @Override
+        public void bind(String name, TextureBinding texture) {
+            pass.setUniform(name, texture.view(), texture.sampler());
+        }
+    }
+}

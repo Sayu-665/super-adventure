@@ -1,7 +1,7 @@
-//! Distant Horizons LOD terrain: the world heightmap at 4x coarser resolution, covering
-//! the ring between the vanilla render distance and the DH distance, in DH's 16-byte
-//! vertex layout (one buffer per 128x128-block region, as DH keeps one buffer per LOD
-//! container with its own `uModelOffset`).
+//! Distant Horizons LOD terrain: the world heightmap at 4x coarser resolution out to the
+//! DH distance (see [`LodCoverage`] for the area under the vanilla chunks), in DH's
+//! 16-byte vertex layout (one buffer per 128x128-block region, as DH keeps one buffer per
+//! LOD container with its own `uModelOffset`).
 
 use super::formats::{DH_STRIDE, DH_TERRAIN, VertexWriter};
 use super::terrain::Face;
@@ -27,6 +27,21 @@ pub(crate) enum DhMaterial {
     Sand = 9,
     Water = 12,
     Grass = 13,
+}
+
+/// Which cells of the DH square get LODs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LodCoverage {
+    /// Every cell, the vanilla area included. DH keeps LODs for all loaded terrain and,
+    /// while an Iris shader pack is active, only clips them at a near plane of 20 % of the
+    /// vanilla render distance ("overdraw prevention" 0.2, `RenderUtil.
+    /// getNearClipPlaneInBlocks`), so LODs overlap the vanilla chunks and packs hide them
+    /// with their own distance discards (`dh_terrain` and `gbuffers_terrain` fade at about
+    /// `far`). Without the overlap those discards leave holes at the transition.
+    Full,
+    /// Only the ring outside the vanilla area: LODs that share the vanilla depth buffer and
+    /// projection (synthesized DH programs) would poke through vanilla terrain.
+    Ring,
 }
 
 /// One LOD region.
@@ -126,8 +141,9 @@ fn quad(w: &mut VertexWriter, origin: [i32; 3], min: [i32; 3], max: [i32; 3], fa
     }
 }
 
-/// Generate LODs for the ring between `rd` and `dh_distance` chunks around `cam_chunk`.
-pub(crate) fn build(world: &World, cam_chunk: [i32; 2], rd: i32, dh_distance: i32) -> DhMeshes {
+/// Generate LODs out to `dh_distance` chunks around `cam_chunk`; `coverage` says whether
+/// the vanilla area (`rd` chunks) gets LODs too.
+pub(crate) fn build(world: &World, cam_chunk: [i32; 2], rd: i32, dh_distance: i32, coverage: LodCoverage) -> DhMeshes {
     let sea = world.sea_level();
     // Vanilla area (block coordinates, half-open) and LOD area.
     let inner = [(cam_chunk[0] - rd) * 16, (cam_chunk[0] + rd + 1) * 16, (cam_chunk[1] - rd) * 16, (cam_chunk[1] + rd + 1) * 16];
@@ -135,7 +151,7 @@ pub(crate) fn build(world: &World, cam_chunk: [i32; 2], rd: i32, dh_distance: i3
     let in_vanilla = |x: i32, z: i32| x >= inner[0] && x < inner[1] && z >= inner[2] && z < inner[3];
     let in_lod = |cx: i32, cz: i32| {
         let (x, z) = (cx * CELL, cz * CELL);
-        x >= outer[0] && x < outer[1] && z >= outer[2] && z < outer[3] && !in_vanilla(x, z)
+        x >= outer[0] && x < outer[1] && z >= outer[2] && z < outer[3] && (coverage == LodCoverage::Full || !in_vanilla(x, z))
     };
     let mut regions = Vec::new();
     let r0x = outer[0].div_euclid(REGION);
@@ -219,7 +235,7 @@ mod tests {
     #[test]
     fn lods_cover_only_the_ring() {
         let world = World::new(5);
-        let m = build(&world, [0, 0], 1, 4);
+        let m = build(&world, [0, 0], 1, 4, LodCoverage::Ring);
         assert!(!m.regions.is_empty());
         let mut tops = 0;
         for r in &m.regions {
@@ -241,5 +257,42 @@ mod tests {
             assert_eq!(r.opaque.indices.len() % 6, 0);
         }
         assert!(tops > 0);
+    }
+
+    /// Full coverage adds the cells under the vanilla chunks (DH with a shader pack) and
+    /// keeps the ring identical.
+    #[test]
+    fn full_coverage_includes_the_vanilla_area() {
+        let world = World::new(5);
+        // Minimum corner (x, y, z) of every top quad (4 vertices each).
+        let tops = |m: &DhMeshes| -> Vec<[i32; 3]> {
+            let mut v: Vec<[i32; 3]> = m
+                .regions
+                .iter()
+                .flat_map(|r| {
+                    let verts: Vec<&[u8]> = r.opaque.vertices.chunks_exact(DH_STRIDE as usize).collect();
+                    verts
+                        .chunks_exact(4)
+                        .filter(|q| q[0][13] == 1)
+                        .map(|q| {
+                            let c = |v: &[u8], i: usize| i32::from(u16::from_le_bytes([v[i], v[i + 1]]));
+                            let min = |i: usize| q.iter().map(|v| c(v, i)).min().unwrap_or(0);
+                            [min(0) + r.origin[0], min(2) + r.origin[1], min(4) + r.origin[2]]
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let ring = tops(&build(&world, [0, 0], 1, 4, LodCoverage::Ring));
+        let full = tops(&build(&world, [0, 0], 1, 4, LodCoverage::Full));
+        // The DH square is 9x9 chunks (36x36 cells), the vanilla area 3x3 chunks.
+        assert_eq!(full.len(), 36 * 36);
+        assert_eq!(ring.len(), 36 * 36 - 12 * 12);
+        let inside = |p: &[i32; 3]| (-16..32).contains(&p[0]) && (-16..32).contains(&p[2]);
+        assert_eq!(full.iter().filter(|p| inside(p)).count(), 12 * 12);
+        let full_ring: Vec<[i32; 3]> = full.iter().filter(|p| !inside(p)).copied().collect();
+        assert_eq!(full_ring, ring);
     }
 }

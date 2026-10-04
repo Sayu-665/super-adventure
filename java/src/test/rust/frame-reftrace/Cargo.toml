@@ -1,0 +1,15 @@
+# Writes the reference frame traces of the headless executor for the Java frame sequencing tests
+# (java/src/test/resources/dev/shaderbridge/render/frame/*.trace).
+# Standalone package (not a workspace member); see README.md.
+[package]
+name = "sb-frame-reftrace"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sb-core = { path = "../../../../../crates/sb-core" }
+sb-uniforms = { path = "../../../../../crates/sb-uniforms" }
+serde_json = "1"
+
+[workspace]

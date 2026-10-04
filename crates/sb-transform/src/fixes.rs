@@ -34,7 +34,7 @@ pub(crate) fn apply(w: &mut StageWork, ctx: &Ctx) {
     if params + locals > 0 {
         w.info(
             "xf.zero-init",
-            format!("{params} `out` parameter(s) and {locals} local variable(s) without an initializer start at zero (GLSL leaves them undefined; GL drivers yield zero)"),
+            format!("{params} `out` parameter(s) and {locals} local or global variable(s) without an initializer start at zero (GLSL leaves them undefined; GL drivers yield zero)"),
             0,
         );
     }
@@ -618,16 +618,17 @@ fn const_from_const_params(unit: &mut TranslationUnit) {
     }
 }
 
-/// Built-in functions glslang constant-folds (MachineIndependent/Constant.cpp; not
-/// `transpose`, `inverse`, `determinant` or texture functions).
+/// Built-in functions glslang constant-folds (MachineIndependent/Constant.cpp). GLSL
+/// calls every non-texture built-in with constant arguments constant, but glslang
+/// returns no constant for `transpose`, `inverse`, `determinant`, `matrixCompMult` and
+/// the `pack*`/`unpack*` functions.
 const FOLDABLE: &[&str] = &[
     "abs", "acos", "acosh", "all", "any", "asin", "asinh", "atan", "atanh", "ceil", "clamp", "cos", "cosh", "cross",
     "degrees", "distance", "dot", "exp", "exp2", "faceforward", "floatBitsToInt", "floatBitsToUint", "floor", "fract",
     "intBitsToFloat", "inversesqrt", "isinf", "isnan", "length", "log", "log2", "max", "min", "mix", "mod", "normalize",
-    "outerProduct", "packHalf2x16", "packSnorm2x16", "packUnorm2x16", "pow", "radians", "reflect", "refract", "round",
-    "roundEven", "sign", "sin", "sinh", "smoothstep", "sqrt", "step", "tan", "tanh", "trunc", "uintBitsToFloat",
-    "unpackHalf2x16", "unpackSnorm2x16", "unpackUnorm2x16", "lessThan", "lessThanEqual", "greaterThan",
-    "greaterThanEqual", "equal", "notEqual", "not", "matrixCompMult",
+    "outerProduct", "pow", "radians", "reflect", "refract", "round", "roundEven", "sign", "sin", "sinh", "smoothstep",
+    "sqrt", "step", "tan", "tanh", "trunc", "uintBitsToFloat", "lessThan", "lessThanEqual", "greaterThan",
+    "greaterThanEqual", "equal", "notEqual", "not",
 ];
 
 /// Whether `e` is a constant expression; `is_const` tells whether a variable name is a
@@ -664,26 +665,60 @@ fn init_const_with(i: &Init, is_const: &dyn Fn(&str) -> bool, structs: &HashSet<
 
 /// Global `const` declarations whose initializer is not a constant expression lose
 /// their `const` (glslang: "global const initializers must be constant").
+///
+/// Declarators are checked in order, so one may use an earlier one of the same
+/// declaration (`const int A = 4, B = A * 2;`), and a declaration mixing constant and
+/// non-constant declarators is split so that only the non-constant ones are demoted:
+/// the constant ones may size arrays, which a demoted global cannot. Returns the names
+/// of the global constants and of the declared structs.
 fn demote_global_consts(unit: &mut TranslationUnit) -> (HashSet<String>, HashSet<String>) {
     let mut consts: HashSet<String> = HashSet::new();
     let mut structs: HashSet<String> = HashSet::new();
-    for item in &mut unit.items {
-        let ItemKind::Decl(d) = &mut item.kind else { continue };
-        if let TypeBase::Struct(s) = &d.ty.ty.base
-            && let Some(n) = &s.name
-        {
-            structs.insert(n.clone());
+    let items = std::mem::take(&mut unit.items);
+    let mut out = Vec::with_capacity(items.len());
+    for mut item in items {
+        if let ItemKind::Decl(d) = &mut item.kind {
+            if let TypeBase::Struct(s) = &d.ty.ty.base
+                && let Some(n) = &s.name
+            {
+                structs.insert(n.clone());
+            }
+            if d.ty.has_storage(&Storage::Const) {
+                let constant: Vec<bool> = d
+                    .vars
+                    .iter()
+                    .map(|v| {
+                        let ok = v.init.as_ref().is_some_and(|i| init_const(i, &consts, &structs));
+                        if ok {
+                            consts.insert(v.name.clone());
+                        }
+                        ok
+                    })
+                    .collect();
+                let strip = |ty: &mut FullType| ty.quals.retain(|q| !matches!(q, Qualifier::Storage(Storage::Const)));
+                if constant.iter().any(|&c| c) && !constant.iter().all(|&c| c) && !matches!(d.ty.ty.base, TypeBase::Struct(_)) {
+                    // One declaration per declarator (an inline struct definition cannot
+                    // be repeated, so such declarations are demoted as a whole).
+                    for (v, c) in std::mem::take(&mut d.vars).into_iter().zip(constant) {
+                        let mut ty = d.ty.clone();
+                        if !c {
+                            strip(&mut ty);
+                        }
+                        out.push(Item { kind: ItemKind::Decl(Declaration { ty, vars: vec![v] }), line: item.line });
+                    }
+                    continue;
+                }
+                if !constant.iter().all(|&c| c) {
+                    strip(&mut d.ty);
+                    for v in &d.vars {
+                        consts.remove(&v.name);
+                    }
+                }
+            }
         }
-        if !d.ty.has_storage(&Storage::Const) {
-            continue;
-        }
-        let ok = d.vars.iter().all(|v| v.init.as_ref().is_some_and(|i| init_const(i, &consts, &structs)));
-        if ok {
-            consts.extend(d.vars.iter().map(|v| v.name.clone()));
-        } else {
-            d.ty.quals.retain(|q| !matches!(q, Qualifier::Storage(Storage::Const)));
-        }
+        out.push(item);
     }
+    unit.items = out;
     (consts, structs)
 }
 
@@ -765,6 +800,20 @@ mod tests {
         assert!(s.contains("\nmat3 m ="), "{s}");
         assert!(s.contains("const float c[2]"), "{s}");
         assert!(s.contains("\nfloat d ="), "{s}");
+    }
+
+    #[test]
+    fn multi_declarator_const_demotion() {
+        let mut u = parse_glsl("uniform float u;\nconst int A = 4, B = A * 2;\nconst float k = 3.0, d = u, e = k + 1.0, f = d;\nconst struct S { float x; } s1 = S(1.0), s2 = S(u);\n", 330).unwrap();
+        let (consts, _) = demote_global_consts(&mut u);
+        let s = print(&u);
+        assert!(s.contains("const int A = 4, B = A * 2;"), "{s}");
+        assert!(s.contains("const float k = 3.0;\nfloat d = u;\nconst float e = k + 1.0;\nfloat f = d;"), "{s}");
+        // An inline struct definition cannot be repeated: demoted as a whole.
+        assert!(s.contains("\nstruct S {") && !s.contains("const struct"), "{s}");
+        let mut names: Vec<&str> = consts.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["A", "B", "e", "k"]);
     }
 
     #[test]
