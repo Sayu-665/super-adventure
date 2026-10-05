@@ -450,3 +450,19 @@ fn fallback_programs_compile_for_every_slot() {
     assert!(!dim.geometry.contains_key(&GeometryProgram::Shadow));
     assert!(out.pack.diagnostics.iter().any(|d| d.code == "pipeline.fallback-program"));
 }
+
+#[test]
+fn probe_variant_profiles() {
+    let mut files = base_files();
+    files.push(("shadow.vsh".into(), TERRAIN_VSH.into()));
+    files.push(("shadow.fsh".into(), "#version 120\nvarying vec2 uv;\nvarying vec4 color;\nvoid main() { gl_FragData[0] = color; }\n".into()));
+    let pack = pack_of(&files);
+    let mut session = PackSession::new(&pack, vulkan_only());
+    session.compile();
+    for p in sb_transform::builtin_profiles() {
+        for g in [GeometryProgram::TerrainSolid, GeometryProgram::Water, GeometryProgram::ShadowSolid, GeometryProgram::Entities, GeometryProgram::DhTerrain] {
+            let r = compile_variant(&mut session, "", g, &p.name);
+            eprintln!("PROBE {:28} {:?}: {}", p.name, g, match &r { Ok(_) => "ok".to_string(), Err(d) => d.iter().filter(|x| x.is_error()).map(|x| x.to_string()).next().unwrap_or_default() });
+        }
+    }
+}
