@@ -13,7 +13,7 @@ use std::sync::Arc;
 use sb_core::SourceProvider;
 use sb_preprocess::PreprocessOptions;
 
-pub const DEFAULT_CORPUS: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus";
+pub const DEFAULT_CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus");
 
 pub const PROGRAM_EXTENSIONS: &[&str] = &["vsh", "fsh", "gsh", "csh", "tcs", "tes"];
 

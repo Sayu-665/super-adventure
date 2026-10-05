@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const DEFAULT_CORPUS: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus";
+const DEFAULT_CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus");
 
 /// (directory name, minimum expected option count)
 const PACKS: &[(&str, usize)] = &[

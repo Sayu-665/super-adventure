@@ -239,7 +239,7 @@ fn parsers_never_panic_on_mutated_corpus_files() {
     let corpus = std::env::var_os("SB_CORPUS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus".into()
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus").into()
         });
     let dir = corpus.join("ComplementaryReimagined");
     let Ok(pack) = ShaderPack::open(&dir) else {

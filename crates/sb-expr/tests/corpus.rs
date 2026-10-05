@@ -18,8 +18,8 @@ use sb_expr::{
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_CORPUS: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus";
-const DEFAULT_CORPUS2: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus2";
+const DEFAULT_CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus");
+const DEFAULT_CORPUS2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus2");
 
 /// (pack directory, minimum number of custom uniform/variable lines expected)
 const PACKS: &[(&str, usize)] = &[

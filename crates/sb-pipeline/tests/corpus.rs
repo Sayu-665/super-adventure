@@ -12,7 +12,7 @@ use sb_pipeline::{CompileSettings, compile_pack, inspect};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-const SCRATCH: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad";
+const SCRATCH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data");
 
 /// Packs without Distant Horizons programs (DH is synthesized for them).
 const SYNTHESIZED_DH: &[&str] = &["spectrum", "Ominous-Shaderpack", "MinecraftShaderProgramming"];

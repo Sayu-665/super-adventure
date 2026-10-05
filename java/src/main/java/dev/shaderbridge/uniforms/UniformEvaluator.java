@@ -25,7 +25,7 @@ public final class UniformEvaluator implements AutoCloseable {
      * @throws PackException if the session is closed
      */
     public static Optional<UniformEvaluator> create(PackSession session, String folder) throws PackException {
-        long handle = ShaderBridgeNative.createUniformEvaluator(session.handle(), folder);
+        long handle = session.withHandle(h -> ShaderBridgeNative.createUniformEvaluator(h, folder));
         return handle == 0 ? Optional.empty() : Optional.of(new UniformEvaluator(handle));
     }
 

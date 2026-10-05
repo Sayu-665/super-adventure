@@ -19,8 +19,8 @@ use sb_runtime::{RenderOutput, RenderRequest, Runtime, SceneParams};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_ROOTS: [&str; 2] = [
-    "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus",
-    "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus2",
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus2"),
 ];
 
 fn corpus_roots() -> Vec<PathBuf> {

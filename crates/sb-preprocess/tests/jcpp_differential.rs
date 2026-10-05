@@ -30,7 +30,7 @@ use sb_preprocess::{
     ESCAPE_PREFIX, PreprocessOptions, Preprocessed, Preprocessor, preprocess_properties,
 };
 
-const DEFAULT_JCPP_JAR: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/mc/x_iris/META-INF/jars/jcpp-1.4.14.jar";
+const DEFAULT_JCPP_JAR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/mc/x_iris/META-INF/jars/jcpp-1.4.14.jar");
 
 struct Harness {
     classpath: String,

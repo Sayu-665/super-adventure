@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_CORPUS: &str =
-    "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/corpus";
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/corpus");
 
 fn corpus_dir() -> Option<PathBuf> {
     let dir = std::env::var_os("SB_CORPUS_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(DEFAULT_CORPUS));

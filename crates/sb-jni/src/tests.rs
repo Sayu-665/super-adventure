@@ -1,7 +1,7 @@
 //! Tests of the [`api`](crate::api) layer: small generated packs, the handle registry
 //! under concurrency, the disk cache, variants, profiles, evaluators and (when present)
 //! the ComplementaryReimagined pack of the small corpus (`$SB_CORPUS_DIRS`, colon-separated,
-//! or the scratchpad corpus).
+//! or the default test-data corpus).
 
 use crate::api::{self, PackKind};
 use crate::error::Error;
@@ -18,7 +18,7 @@ static PROFILE_REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn profile_registry() -> std::sync::MutexGuard<'static, ()> {
     PROFILE_REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
 }
-const SCRATCH: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad";
+const SCRATCH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data");
 
 fn write(root: &Path, files: &[(&str, &str)]) {
     for (path, text) in files {
