@@ -409,6 +409,17 @@ fn failed_output(pack: &ShaderPack, settings: &CompileSettings, d: Diagnostic) -
     }
 }
 
+/// A variant from [`compile_variant`].
+#[derive(Debug, Clone)]
+pub struct CompiledProgramVariant {
+    /// The program, translated for the requested draw profile.
+    pub program: Program,
+    /// Its SPIR-V and GLSL; the program's blob ids index this table.
+    pub blobs: BlobTable,
+    /// What compiling it reported (warnings, notes, and errors that did not fail it).
+    pub diagnostics: Diagnostics,
+}
+
 /// Compile one extra variant: the program resolved for `program` in `folder` (following
 /// the fallback chain past programs that fail; for a Distant Horizons slot of a pack
 /// without DH programs, the program synthesized from its gbuffers source, as in the
@@ -420,12 +431,14 @@ fn failed_output(pack: &ShaderPack, settings: &CompileSettings, d: Diagnostic) -
 /// part of them, so any of those works; a profile registered after the compile fails
 /// with `pipeline.unknown-profile`. Compiles the session first if needed, and reuses the
 /// session's variant cache. Blob ids of the returned program index the returned table.
+/// The variant's own diagnostics (glslang warnings, `xf.too-many-descriptors` when it needs
+/// the raw Vulkan path, ...) come with it; failures of fallbacks it skipped are not included.
 pub fn compile_variant(
     session: &mut PackSession<'_>,
     folder: &str,
     program: GeometryProgram,
     profile: &str,
-) -> Result<(Program, BlobTable), Diagnostics> {
+) -> Result<CompiledProgramVariant, Diagnostics> {
     if session.state.is_none() {
         session.compile();
     }
@@ -495,7 +508,6 @@ pub fn compile_variant(
                     &fs.directives,
                     props,
                     &fs.bindings,
-                    &props.settings(),
                     &settings.env,
                     &mut d,
                     &mut blobs,
@@ -507,7 +519,9 @@ pub fn compile_variant(
                         _ => false,
                     };
                 }
-                return Ok((p, blobs.into_table()));
+                let mut diagnostics = c.diagnostics.clone();
+                diagnostics.extend(d);
+                return Ok(CompiledProgramVariant { program: p, blobs: blobs.into_table(), diagnostics });
             }
             Err(d) => diags.extend(d),
         }

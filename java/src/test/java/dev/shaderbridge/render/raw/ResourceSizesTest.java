@@ -31,8 +31,8 @@ class ResourceSizesTest {
     }
 
     @Test
-    void relativeImagesRoundUpLikeRenderTargets() {
-        assertEquals(Optional.of(new ResourceSizes.ImageSpec("lut", 2, 961, 361, 1, TextureFormat.RGBA16F, false, true)),
+    void relativeImagesTruncateLikeRenderTargetsAndIris() {
+        assertEquals(Optional.of(new ResourceSizes.ImageSpec("lut", 2, 960, 360, 1, TextureFormat.RGBA16F, false, true)),
             ResourceSizes.image(image(new ImageSize.Relative(0.5f, 1f / 3), false), 1921, 1081, LIMITS, m -> { }));
     }
 

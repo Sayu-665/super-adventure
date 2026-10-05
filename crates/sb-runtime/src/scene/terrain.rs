@@ -78,10 +78,15 @@ fn sodium_quantize(p: f32) -> u32 {
     ((f64::from(p) + 8.0) / 32.0 * f64::from(1u32 << 20)).round().clamp(0.0, f64::from(0xF_FFFF)) as u32
 }
 
-/// A 15-bit texture coordinate with the centre-nudge sign in bit 15.
+/// A texture coordinate as Sodium's `CompactChunkVertex.encodeTexture` writes it: quantized
+/// to 15 bits (`Math.round(c * 32768)`), moved one unit towards the quad centre, and the
+/// direction of that move in bit 15 (set when it moved down, i.e. the coordinate is at or
+/// past the centre). The shader undoes the move with `u_TexCoordShrink`.
 fn sodium_uv(c: f32, centre: f32) -> u16 {
-    let v = (f64::from(c) * 32768.0).round().clamp(0.0, 32767.0) as u16;
-    v | (u16::from(c < centre) << 15)
+    let bias: i32 = if c < centre { 1 } else { -1 };
+    // Java's Math.round(float): floor(x + 0.5).
+    let quantized = (c * 32768.0 + 0.5).floor() as i32 + bias;
+    (quantized & 0x7FFF) as u16 | (u16::from(bias < 0) << 15)
 }
 
 /// Pack one vertex in the [`SODIUM_TERRAIN`] layout.
@@ -502,9 +507,10 @@ mod tests {
         let dec = |shift: u32| f64::from(((u32_at(0) >> shift & 0x3FF) << 10) | (u32_at(4) >> shift & 0x3FF)) * 32.0 / f64::from(1u32 << 20) - 8.0;
         assert_eq!([dec(0), dec(10), dec(20)], [1.0, 16.0, 0.5]);
         assert_eq!(&w.bytes[8..12], &[255, 128, 0, 255]);
-        // UV: 15 bits + sign bit set when below the centre.
-        assert_eq!(u16_at(12), 8192 | 0x8000);
-        assert_eq!(u16_at(14), 24576);
+        // UV as Sodium's encodeTexture: round(c * 32768) moved one unit towards the centre,
+        // bit 15 set when it moved down (the coordinate is at or past the centre).
+        assert_eq!(u16_at(12), 8193);
+        assert_eq!(u16_at(14), 24575 | 0x8000);
         // Light 16 L + 8, material, section.
         assert_eq!(&w.bytes[16..20], &[40, 248, 5, (3 << 5) | (6 << 2) | 2]);
         assert_eq!(u32_at(20), (42 << 1) | 1);

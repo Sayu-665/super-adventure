@@ -188,10 +188,11 @@ fn fullscreen_buffers_without_shader_output_are_masked() {
     assert!(c2.pixels().all(|p| p.0 == [64, 128, 191, 255]), "colortex2 alt was written: {:?}", c2.get_pixel(10, 10));
 }
 
-/// Leaves (cutout terrain) are back-face culled by default; `backFace.cutout=true`
-/// renders their back faces, which are visible through the cutout holes.
+/// Leaves (cutout terrain) are back-face culled like every Minecraft terrain layer, and
+/// `backFace.cutout=true` changes nothing: Iris 26.3 parses `backFace.*` but ignores it,
+/// and the model leaves `Program::cull` unset, so both hosts keep the vanilla culling.
 #[test]
-fn cutout_back_faces_follow_back_face_setting() {
+fn back_face_settings_are_ignored_like_iris() {
     let _g = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut rt) = runtime() else { return };
     let (pack, blobs) = test_pack(Variant::default());
@@ -202,12 +203,8 @@ fn cutout_back_faces_follow_back_face_setting() {
     let b = render(&mut rt, &with_back_faces, &blobs, scene, (160, 90), 1, false);
     assert_no_validation_messages(&a);
     assert_no_validation_messages(&b);
-    a.image.save(render_dir().join("review_leaves_culled.png")).ok();
-    b.image.save(render_dir().join("review_leaves_back_faces.png")).ok();
     let d = mean_abs_diff(&a.image, &b.image);
-    assert!(d > 0.0, "back faces of leaves are drawn although backFace.cutout is off");
-    // The setting only touches leaves: the difference stays small.
-    assert!(d < 0.05, "{d}");
+    assert_eq!(d, 0.0, "backFace.cutout changed the render");
 }
 
 /// Creating, using and dropping the runtime repeatedly works and stays clean.
@@ -363,7 +360,7 @@ fn dh_shadow_writes_shadowcolor_targets() {
         dh_shadow.bindings_used.clear();
         d.programs.push(dh_shadow);
         let index = d.programs.len() as u32 - 1;
-        d.geometry.insert(sb_core::program::GeometryProgram::DhShadow, GeometrySlot { program: index, resolved_from: sb_core::program::GeometryProgram::DhShadow, variants: Default::default() });
+        d.geometry.insert(sb_core::program::GeometryProgram::DhShadow, GeometrySlot::new(index, sb_core::program::GeometryProgram::DhShadow, sb_core::program::GeometryProgram::DhShadow));
         d.distant_horizons.shadow_enabled = true;
         d.shadow_attachments = if shared { vec![0, 3] } else { Vec::new() };
         assert!(!d.targets.shadowcolor.iter().any(|t| t.index == 3), "the pack already declares shadowcolor3");

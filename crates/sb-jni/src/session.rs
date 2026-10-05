@@ -85,6 +85,9 @@ impl Recover for Session {
 struct VariantJson<'a> {
     program: &'a Program,
     blobs: &'a [BlobInfo],
+    /// What compiling the variant reported (warnings, the reason it needs the raw Vulkan
+    /// path, ...).
+    diagnostics: &'a [sb_core::Diagnostic],
 }
 
 impl Session {
@@ -263,7 +266,7 @@ impl Session {
         let result = worker::in_pool(threads, || {
             std::panic::catch_unwind(AssertUnwindSafe(|| sb_pipeline::compile_variant(pipeline, folder, program, profile)))
         });
-        let (program_model, table) = match result {
+        let variant = match result {
             Ok(Ok(v)) => v,
             Ok(Err(diagnostics)) => return Err(Error::Unavailable(describe(&diagnostics))),
             Err(payload) => {
@@ -272,8 +275,8 @@ impl Session {
                 return Err(Error::Internal(format!("compiling a variant panicked: {}", panic_message(&*payload))));
             }
         };
-        let (infos, buffer) = table.concat();
-        let json = serde_json::to_string(&VariantJson { program: &program_model, blobs: &infos })
+        let (infos, buffer) = variant.blobs.concat();
+        let json = serde_json::to_string(&VariantJson { program: &variant.program, blobs: &infos, diagnostics: &variant.diagnostics.0 })
             .map_err(|source| Error::Serialize { what: "the variant", source })?;
         self.variant = Some(buffer);
         Ok(json)

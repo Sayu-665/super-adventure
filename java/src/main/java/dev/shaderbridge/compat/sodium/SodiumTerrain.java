@@ -132,9 +132,14 @@ public final class SodiumTerrain {
         return true;
     }
 
-    /** @return how Sodium should mesh terrain now */
+    /**
+     * @return how Sodium should mesh terrain now: extended for the pack ShaderBridge renders in
+     *     this dimension ({@link RenderBridge#packActive()}, set once the renderer accepted the
+     *     pack), Sodium's own vertex otherwise (no pack, a refused pack, a pack without a pipeline
+     *     for the dimension)
+     */
     static MeshPlan desiredPlan() {
-        if (!SodiumIntegration.active() || !layoutProblems().isEmpty()) {
+        if (!SodiumIntegration.active() || !layoutProblems().isEmpty() || !RenderBridge.packActive()) {
             return MeshPlan.COMPACT;
         }
         Optional<LoadedPack> pack;

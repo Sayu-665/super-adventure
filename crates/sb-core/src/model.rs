@@ -365,7 +365,7 @@ pub struct DimensionPipeline {
     pub distant_horizons: DhPipeline,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeometrySlot {
     /// Index into `programs` of the program drawing this geometry with the slot's default
     /// draw profile.
@@ -380,6 +380,56 @@ pub struct GeometrySlot {
     /// program here. Variants compiled later on demand (`compile_variant`) are not listed.
     #[serde(default)]
     pub variants: IndexMap<String, u32>,
+    /// Blend state of the geometry this slot stands for ([`GeometryProgram::host_blend`]):
+    /// the vanilla (or Distant Horizons) state Iris keeps for programs that do not override
+    /// it. Hosts that draw the slot's geometry themselves use it for a program whose
+    /// [`Program::inherit_blend`] is set ([`Self::blend_for`]); hosts that replace a vanilla
+    /// draw keep that draw's own state instead. Absent in models written before it existed
+    /// (no blend).
+    #[serde(default)]
+    pub blend: Option<BlendMode>,
+    /// Alpha test of this slot's draws: the `alphaTest.<program>` directive of the program
+    /// drawing it, else Iris' default for the slot's geometry
+    /// ([`GeometryProgram::slot_alpha_test`]); `func: always` means no test. It applies to
+    /// the slot's program and to every variant of it; [`Self::alpha_test_ref`] gives the
+    /// `alphaTestRef` a draw feeds the program's compiled test. Absent in models written
+    /// before it existed: hosts then use [`Program::alpha_test`].
+    #[serde(default)]
+    pub alpha_test: Option<AlphaTest>,
+}
+
+impl GeometrySlot {
+    /// A slot without variants, with the slot's default blend and alpha test.
+    pub fn new(program: u32, resolved_from: GeometryProgram, slot: GeometryProgram) -> Self {
+        GeometrySlot {
+            program,
+            resolved_from,
+            variants: IndexMap::new(),
+            blend: slot.host_blend(),
+            alpha_test: Some(slot.slot_alpha_test().map_or(AlphaTest::OFF, |(func, reference)| AlphaTest { func, reference })),
+        }
+    }
+
+    /// The blend for drawing this slot's geometry with `program` (the slot's program or one
+    /// of its variants) when the host has no vanilla draw state to keep: the program's own
+    /// blend, or this slot's [`Self::blend`] when the program inherits the host's blend.
+    /// Per-buffer overrides (`blend_per_buffer`) apply on top.
+    pub fn blend_for(&self, program: &Program) -> Option<BlendMode> {
+        if program.inherit_blend { self.blend } else { program.blend }
+    }
+
+    /// The `alphaTestRef` for drawing this slot's geometry with `program`. The comparison is
+    /// compiled into the program ([`Program::alpha_test`]); the reference comes from the
+    /// slot. A slot that does not test alpha (`func: always`) gets a reference the compiled
+    /// comparison always passes.
+    pub fn alpha_test_ref(&self, program: &Program) -> f32 {
+        let compiled = program.alpha_test;
+        match (self.alpha_test.or(compiled), compiled) {
+            (Some(t), Some(c)) if t.func == AlphaFunc::Always => c.func.always_passing_reference().unwrap_or(c.reference),
+            (Some(t), _) => t.reference,
+            (None, _) => 0.0,
+        }
+    }
 }
 
 /// Render target configuration (from const directives + shaders.properties).
@@ -435,9 +485,11 @@ pub enum AxisSize {
 }
 
 impl TargetSize {
-    /// Resolve to pixels for a screen of `width` x `height` (at least 1x1).
+    /// Resolve to pixels for a screen of `width` x `height` (at least 1x1). Relative
+    /// extents are truncated, as Iris sizes scaled buffers (`TextureScaleOverride`),
+    /// relative images (`GlImage.Relative`) and relative SSBOs (`(int) (extent * scale)`).
     pub fn resolve(&self, width: u32, height: u32) -> (u32, u32) {
-        let rel = |f: f32, e: u32| ((e as f32 * f).ceil() as u32).max(1);
+        let rel = |f: f32, e: u32| ((e as f32 * f) as u32).max(1);
         let axis = |a: AxisSize, e: u32| match a {
             AxisSize::Relative(f) => rel(f, e),
             AxisSize::Absolute(p) => p.max(1),
@@ -608,7 +660,8 @@ pub struct PackSettings {
     pub end_flash_shadows: bool,
     /// colortex index unshaded geometry writes to.
     pub fallback_tex: u32,
-    /// `backFace.solid/cutout/cutoutMipped/translucent` overrides.
+    /// `backFace.solid/cutout/cutoutMipped/translucent` as the pack sets them (informational: Iris 26.3
+    /// parses them but ignores them, and so do ShaderBridge's hosts).
     pub back_face: IndexMap<String, bool>,
     pub sun_path_rotation: f32,
     pub ambient_occlusion_level: f32,
@@ -850,9 +903,17 @@ pub struct Program {
     pub output_slots: Vec<u32>,
     /// Output base type per location (`float`, `int`, `uint`).
     pub output_types: Vec<String>,
+    /// Blend of the program's outputs: `blend.<program>`, else the program file's own
+    /// override ([`GeometryProgram::program_blend_override`]), else (with
+    /// [`Self::inherit_blend`] set) ShaderBridge's stand-in for the vanilla blend of the
+    /// program's own slot. `None` = no blending.
     pub blend: Option<BlendMode>,
     /// Per-buffer blend overrides: target index -> blend (None = off).
     pub blend_per_buffer: IndexMap<u32, Option<BlendMode>>,
+    /// Alpha test compiled into the fragment epilogue (`alphaTest.<program>`, else
+    /// [`GeometryProgram::default_alpha_test`]). Its reference is only the default: the
+    /// shader compares against `alphaTestRef` from `sb_Draw`, which geometry hosts set per
+    /// slot ([`GeometrySlot::alpha_test_ref`]).
     pub alpha_test: Option<AlphaTest>,
     /// `scale.<prog>`: viewport scale and offset.
     pub viewport: ViewportScale,
@@ -862,12 +923,20 @@ pub struct Program {
     pub vertex_inputs: Vec<VertexInput>,
     pub push_constant_size: u32,
     pub compute: Option<ComputeInfo>,
-    /// Cull back faces (None = host default for the geometry type).
+    /// Cull back faces (None = host default for the geometry type). ShaderBridge follows
+    /// Iris 26.3, which parses `backFace.*` but ignores it, so compiles leave this `None`.
     pub cull: Option<bool>,
     /// The program was synthesized: a DH program generated from a gbuffers or shadow
     /// program (the source program's path, e.g. `world0/gbuffers_terrain`), or Iris's
     /// fallback program for geometry the pack has no program for (`<iris fallback>`).
     pub synthesized_from: Option<String>,
+    /// Geometry programs without a `blend.<program>` directive or program-file override:
+    /// like Iris, a host keeps the blend state of the draw the program replaces (vanilla
+    /// solid terrain does not blend, vanilla water does), or uses the slot's
+    /// [`GeometrySlot::blend`] when it draws the geometry itself. `blend` is then only a
+    /// stand-in. `false` (absent) = `blend` applies as it is.
+    #[serde(default)]
+    pub inherit_blend: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -899,6 +968,11 @@ pub struct StageModule {
 pub struct AlphaTest {
     pub func: AlphaFunc,
     pub reference: f32,
+}
+
+impl AlphaTest {
+    /// No alpha test (Iris `AlphaTests.OFF`).
+    pub const OFF: AlphaTest = AlphaTest { func: AlphaFunc::Always, reference: 0.0 };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1054,11 +1128,18 @@ mod tests {
     #[test]
     fn added_fields_default_when_absent() {
         let slot: GeometrySlot = serde_json::from_str(r#"{"program":3,"resolved_from":"terrain"}"#).unwrap();
-        assert_eq!(slot, GeometrySlot { program: 3, resolved_from: GeometryProgram::Terrain, variants: IndexMap::new() });
+        assert_eq!(
+            slot,
+            GeometrySlot { program: 3, resolved_from: GeometryProgram::Terrain, variants: IndexMap::new(), blend: None, alpha_test: None }
+        );
         let mut with = slot.clone();
         with.variants.insert("sodium_terrain".into(), 7);
+        with.alpha_test = Some(AlphaTest::OFF);
         let j = serde_json::to_string(&with).unwrap();
-        assert_eq!(j, r#"{"program":3,"resolved_from":"terrain","variants":{"sodium_terrain":7}}"#);
+        assert_eq!(
+            j,
+            r#"{"program":3,"resolved_from":"terrain","variants":{"sodium_terrain":7},"blend":null,"alpha_test":{"func":"always","reference":0.0}}"#
+        );
         assert_eq!(serde_json::from_str::<GeometrySlot>(&j).unwrap(), with);
 
         let used: BindingUse = serde_json::from_str(r#"{"name":"shadowtex0","set":1,"binding":4,"use_alt":false,"stages":["fragment"]}"#).unwrap();
@@ -1067,5 +1148,63 @@ mod tests {
         let j = serde_json::to_string(&emulated).unwrap();
         assert!(j.ends_with(r#""shadow_emulated":true}"#), "{j}");
         assert_eq!(serde_json::from_str::<BindingUse>(&j).unwrap(), emulated);
+    }
+
+    fn program_with(blend: Option<BlendMode>, alpha_test: Option<AlphaTest>, inherit_blend: bool) -> Program {
+        Program {
+            name: "world0/gbuffers_terrain".into(),
+            kind: ProgramKind::Geometry { program: GeometryProgram::Terrain },
+            draw_profile: Some("vanilla_terrain".into()),
+            requires_raw_vulkan: false,
+            stages: Vec::new(),
+            draw_buffers: vec![0],
+            output_slots: vec![0],
+            output_types: vec!["float".into()],
+            blend,
+            blend_per_buffer: IndexMap::new(),
+            alpha_test,
+            viewport: ViewportScale { scale: 1.0, offset_x: 0.0, offset_y: 0.0 },
+            mipmap_targets: Vec::new(),
+            bindings_used: Vec::new(),
+            vertex_inputs: Vec::new(),
+            push_constant_size: 0,
+            compute: None,
+            cull: None,
+            synthesized_from: None,
+            inherit_blend,
+        }
+    }
+
+    /// One `gbuffers_terrain` drawing every terrain layer: each slot gets its own blend and
+    /// alpha reference, as in Iris.
+    #[test]
+    fn slots_resolve_blend_and_alpha_reference() {
+        let greater = Some(AlphaTest { func: AlphaFunc::Greater, reference: 0.1 });
+        let terrain = program_with(None, greater, true);
+        let solid = GeometrySlot::new(0, GeometryProgram::Terrain, GeometryProgram::TerrainSolid);
+        let cutout = GeometrySlot::new(0, GeometryProgram::Terrain, GeometryProgram::TerrainCutout);
+        let water = GeometrySlot::new(0, GeometryProgram::Terrain, GeometryProgram::Water);
+        assert_eq!(solid.blend_for(&terrain), None);
+        assert_eq!(water.blend_for(&terrain), Some(BlendMode::TRANSLUCENT));
+        assert_eq!(solid.alpha_test_ref(&terrain), f32::MIN);
+        assert_eq!(cutout.alpha_test_ref(&terrain), 0.5);
+        assert_eq!(water.alpha_test_ref(&terrain), 0.1);
+        // A `blend.gbuffers_terrain` directive applies to every slot.
+        let directed = program_with(Some(BlendMode::OVERLAY), greater, false);
+        assert_eq!(solid.blend_for(&directed), Some(BlendMode::OVERLAY));
+        // Models without slot alpha tests keep the program's reference.
+        let old = GeometrySlot { alpha_test: None, ..solid.clone() };
+        assert_eq!(old.alpha_test_ref(&terrain), 0.1);
+        // A program without a compiled test ignores the reference.
+        assert_eq!(solid.alpha_test_ref(&program_with(None, None, true)), 0.0);
+    }
+
+    /// Relative sizes truncate like Iris: a 1365-pixel-wide screen with
+    /// `size.buffer.colortex4 = 0.5 0.5` gives Iris a 682-pixel buffer.
+    #[test]
+    fn relative_sizes_truncate_like_iris() {
+        assert_eq!(TargetSize::Relative { x: 0.5, y: 0.5 }.resolve(1365, 767), (682, 383));
+        assert_eq!(TargetSize::Relative { x: 0.0001, y: 1.0 }.resolve(100, 100), (1, 100));
+        assert_eq!(TargetSize::PerAxis { x: AxisSize::Relative(0.5), y: AxisSize::Absolute(7) }.resolve(1281, 10), (640, 7));
     }
 }

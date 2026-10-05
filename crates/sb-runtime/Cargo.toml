@@ -9,8 +9,8 @@ license.workspace = true
 [features]
 default = []
 # Integration tests that compile real corpus packs with `sb_pipeline::compile_pack`
-# (`tests/corpus_packs.rs`, `#[ignore]` by default). Enable once sb-pipeline exists:
-# `cargo test -p sb-runtime --features pipeline-tests -- --ignored`.
+# (`tests/corpus_packs.rs`, `#[ignore]` by default; they need the corpus, see
+# docs/VALIDATION.md): `cargo test -p sb-runtime --features pipeline-tests -- --ignored`.
 pipeline-tests = ["dep:sb-pipeline", "dep:sb-pack"]
 
 [dependencies]

@@ -13,19 +13,29 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongConsumer;
 
 /**
- * An open pack in the native library. Calls are serialized per session; long-running calls
- * ({@link #compile}) block and belong on a worker thread. Closing is idempotent, and calls on a
- * closed session fail with a {@link PackException} instead of touching a dead native handle.
+ * An open pack in the native library. Native calls are serialized per session
+ * ({@link #withHandle}); long-running calls ({@link #compile}, an on-demand variant compile)
+ * block and belong on a worker thread. Closing never waits for them: {@link #close} releases
+ * the native session at once when no call runs, and otherwise when the running call returns.
+ * Closing is idempotent, and calls on a closed (or closing) session fail with a
+ * {@link PackException} instead of touching a dead native handle.
  */
 public final class PackSession implements AutoCloseable {
     private final Path path;
-    private long handle;
+    private final LongConsumer closer;
+    private final ReentrantLock lock = new ReentrantLock();
+    /** Written under {@link #lock}; volatile so {@link #isReleased} needs no lock. */
+    private volatile long handle;
+    private volatile boolean closeRequested;
 
-    private PackSession(Path path, long handle) {
+    PackSession(Path path, long handle, LongConsumer closer) {
         this.path = path;
         this.handle = handle;
+        this.closer = closer;
     }
 
     /**
@@ -41,7 +51,7 @@ public final class PackSession implements AutoCloseable {
         if (handle == 0) {
             throw new PackException("Cannot open " + path.getFileName() + ": " + lastError());
         }
-        return new PackSession(path, handle);
+        return new PackSession(path, handle, ShaderBridgeNative::closePack);
     }
 
     /**
@@ -51,7 +61,41 @@ public final class PackSession implements AutoCloseable {
      * @return a session whose native calls fail
      */
     static PackSession detached(Path path) {
-        return new PackSession(path, 0);
+        return new PackSession(path, 0, h -> { });
+    }
+
+    /** A native call on a session's handle. */
+    @FunctionalInterface
+    public interface HandleCall<T> {
+        /**
+         * @param handle the open native session
+         * @return the call's result
+         * @throws PackException if the call fails
+         */
+        T apply(long handle) throws PackException;
+    }
+
+    /**
+     * Runs native calls on this session's handle, serialized with every other call on it (the
+     * native session keeps per-call buffers, such as a variant's blobs, until the next call). If
+     * the session was closed while the call ran, it is released when the call returns.
+     *
+     * @param call the native calls
+     * @param <T>  result type
+     * @return the call's result
+     * @throws PackException if the session is closed or the call fails
+     */
+    public <T> T withHandle(HandleCall<T> call) throws PackException {
+        lock.lock();
+        try {
+            if (handle == 0 || closeRequested) {
+                throw new PackException("The session of " + path.getFileName() + " is closed");
+            }
+            return call.apply(handle);
+        } finally {
+            lock.unlock();
+            releaseIfClosed();
+        }
     }
 
     /** @return the pack directory or zip file */
@@ -61,15 +105,13 @@ public final class PackSession implements AutoCloseable {
 
     /**
      * The raw native handle, for wrappers of handle-taking natives such as the uniform evaluator.
+     * Prefer {@link #withHandle}, which keeps the session open during the call.
      *
      * @return the handle
      * @throws PackException if the session is closed
      */
-    public synchronized long handle() throws PackException {
-        if (handle == 0) {
-            throw new PackException("The session of " + path.getFileName() + " is closed");
-        }
-        return handle;
+    public long handle() throws PackException {
+        return withHandle(h -> h);
     }
 
     /**
@@ -77,8 +119,8 @@ public final class PackSession implements AutoCloseable {
      * @return the options model
      * @throws PackException if the native call fails or returns an invalid model
      */
-    public synchronized OptionsModel options(String language) throws PackException {
-        String json = ShaderBridgeNative.getOptions(handle(), language);
+    public OptionsModel options(String language) throws PackException {
+        String json = withHandle(h -> ShaderBridgeNative.getOptions(h, language));
         if (json == null) {
             throw new PackException("Cannot read the options of " + path.getFileName() + ": " + lastError());
         }
@@ -92,8 +134,8 @@ public final class PackSession implements AutoCloseable {
      * @return normalized settings text
      * @throws PackException if the native call fails
      */
-    public synchronized String normalizeOptionValues(String optionValues) throws PackException {
-        String normalized = ShaderBridgeNative.normalizeOptionValues(handle(), optionValues);
+    public String normalizeOptionValues(String optionValues) throws PackException {
+        String normalized = withHandle(h -> ShaderBridgeNative.normalizeOptionValues(h, optionValues));
         if (normalized == null) {
             throw new PackException("Cannot normalize the settings of " + path.getFileName() + ": " + lastError());
         }
@@ -109,8 +151,11 @@ public final class PackSession implements AutoCloseable {
      * @return the compiled model and its blobs
      * @throws PackException if compilation fails outright (per-program problems are diagnostics, not exceptions)
      */
-    public synchronized CompileResult compile(CompileEnvironment environment, String optionValues, CompileSettings settings) throws PackException {
-        long session = handle();
+    public CompileResult compile(CompileEnvironment environment, String optionValues, CompileSettings settings) throws PackException {
+        return withHandle(session -> compileOn(session, environment, optionValues, settings));
+    }
+
+    private CompileResult compileOn(long session, CompileEnvironment environment, String optionValues, CompileSettings settings) throws PackException {
         String json = ShaderBridgeNative.compile(session, ModelJson.toJson(environment), optionValues, settings.toJson());
         if (json == null) {
             throw new PackException("Compiling " + path.getFileName() + " failed: " + lastError());
@@ -139,11 +184,37 @@ public final class PackSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Releases the native session: at once when no call runs, otherwise as soon as the running
+     * call returns. Never waits for a running call (a compile on a worker thread).
+     */
     @Override
-    public synchronized void close() {
-        if (handle != 0) {
-            ShaderBridgeNative.closePack(handle);
-            handle = 0;
+    public void close() {
+        closeRequested = true;
+        releaseIfClosed();
+    }
+
+    /** @return whether the native session has been released (never blocks) */
+    public boolean isReleased() {
+        return handle == 0;
+    }
+
+    /**
+     * Releases the native session if closing was requested and no call holds it. A call that
+     * holds it releases it itself when it returns (it checks after unlocking, and the request is
+     * made before {@link #close} tries the lock, so one of the two always sees the other).
+     */
+    private void releaseIfClosed() {
+        if (closeRequested && lock.tryLock()) {
+            try {
+                if (handle != 0) {
+                    long h = handle;
+                    handle = 0;
+                    closer.accept(h);
+                }
+            } finally {
+                lock.unlock();
+            }
         }
     }
 

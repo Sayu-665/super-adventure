@@ -17,7 +17,10 @@ Facts checked first-hand against Mojang's version JSON, the decompiled 26.3
 `client.jar`, and the released Iris and DH jars:
 
 * Minecraft **26.3** (Java 25, unobfuscated) ships a new renderer,
-  `com.mojang.renderpearl`, with **OpenGL and Vulkan backends**. Core shaders
+  `com.mojang.renderpearl`, with **OpenGL and Vulkan backends**. In 26.3 the
+  default graphics API tries OpenGL first (`PreferredGraphicsApi.getBackendsToTry`);
+  Vulkan is opt-in (Video Settings → Graphics API → "Prefer Vulkan
+  (Experimental)"), and the 26.4 snapshots make it the default. Core shaders
   are GLSL, compiled to SPIR-V by shaderc for a Vulkan 1.2 target in
   `frontend/shaders/GlslCompiler`. Backends consume SPIR-V. On GL it is
   cross-compiled back to GLSL with spvc.
@@ -132,9 +135,15 @@ Shader packs assume GL conventions throughout, for example
    semantics. A `TransformOptions::flip_y` escape hatch exists for hosts that
    use a negative viewport.
 4. Hosts must use `frontFace = CLOCKWISE` for pack pipelines, as Mojang does.
-5. `gl_InstanceID` → `(gl_InstanceIndex - gl_BaseInstance)`. This needs
-   `GL_ARB_shader_draw_parameters`, so the plain `gl_InstanceIndex` is used when
-   the host guarantees base instance 0. `gl_VertexID` → `gl_VertexIndex`.
+5. `gl_InstanceID` → `gl_InstanceIndex`, `gl_VertexID` → `gl_VertexIndex`.
+   `sb-pipeline` always compiles this way: `gl_InstanceIndex` includes the
+   draw's `firstInstance`, so the translation is right only for draws with base
+   instance 0. Minecraft 26.3's multi-draw-indirect terrain selects its
+   per-section data with a non-zero base instance, so a terrain program reading
+   `gl_InstanceID` would see an offset there. No corpus pack reads it. The exact
+   form, `(gl_InstanceIndex - gl_BaseInstance)`, exists as
+   `TransformOptions::draw_parameters` but needs `shaderDrawParameters`, which
+   Mojang does not enable.
 6. Hosts must create pipelines with tessellation stages with
    `VkPipelineTessellationDomainOriginStateCreateInfo { domainOrigin = LOWER_LEFT }`
    (core in Vulkan 1.1), as `sb-runtime` does. GL's tessellation domain origin is
@@ -268,7 +277,10 @@ hardware-filtering variant `shadowtex0HW`), `ShadowColor(i)`, `Noise`,
 
 Following GL texture-unit-0 semantics, an `Unknown` sampler aliases the atlas
 in gbuffers and shadow programs, `White` in DH programs (whose `gtexture` is
-white as well, §9) and `colortex0` in fullscreen programs.
+white as well, §9) and `colortex0` in fullscreen programs. A name that maps to
+`White` in DH programs and to another resource elsewhere (`gtexture`, the overlay
+sampler) gets two bindings like any resource conflict, but only the info
+`binding.class-resource`: it is ShaderBridge's own mapping, not a pack problem.
 
 Each binding also carries a `ResourceKind`. In the model it describes what the
 translated shaders declare, which is what their SPIR-V reflection reports and
@@ -389,7 +401,8 @@ matching `vanilla_*` profile for the rest. Other profiles are
 compiled as variants (§7). `sb-runtime`'s synthetic scene draws with a subset
 of these profiles (`vanilla_terrain`, `vanilla_entity`, `vanilla_position`,
 `vanilla_position_tex`, `dh_terrain`/`dh_terrain_synth` and `sodium_terrain`,
-plus `fullscreen`), with byte-exact vertex buffers.
+plus `fullscreen`), with byte-exact vertex buffers (Sodium's texture coordinates
+included: they are encoded as Sodium's `CompactChunkVertex.encodeTexture` does).
 
 ## 7. Pipeline model (CompiledPack) (contract)
 
@@ -421,13 +434,14 @@ Key parts:
       profile, `requires_raw_vulkan`, `synthesized_from`
     * stage modules: SPIR-V blob, Vulkan GLSL blob, Renderpearl GLSL blob, entry point
     * `draw_buffers` (`RENDERTARGETS`)
-    * output types per location, blend (global and per-buffer), alpha test,
-      viewport `scale`/offset, `mipmap` targets
+    * output types per location, blend (global and per-buffer) and
+      `inherit_blend`, alpha test, viewport `scale`/offset, `mipmap` targets
     * `bindings_used` (with `ResourceRef`, the main/alt choice and
       `shadow_emulated`, §5.2)
     * vertex inputs (location, name, type, semantic), push constants
     * compute info (local size, `workGroups` / `workGroupsRender`, indirect)
-    * `cull` / `backFace` overrides
+    * `cull` (always unset: Iris 26.3 parses `backFace.*` but ignores it, and
+      so does ShaderBridge; both hosts keep Minecraft's culling)
   * `geometry`: map from `GeometryProgram` to a `GeometrySlot` after fallback
     resolution: `program` (index of the program drawing the slot with its
     default draw profile, §6) and `resolved_from` (the program actually used,
@@ -440,6 +454,28 @@ Key parts:
     whether the DH slots hold the pack's own (`native`) or `synthesized`
     programs; synthesized ones carry `synthesized_from` (the gbuffers or shadow
     program they were generated from, §9).
+  * **Blend and alpha test belong to the slot**, not to the program file, as in
+    Iris: one `gbuffers_terrain` draws solid terrain without blending or an
+    alpha test, cutout terrain with an alpha test at 0.5 and water blended.
+    * A program's `blend` comes from `blend.<program>`, else from the program
+      file's own override (Iris `ProgramId`: shadow programs never blend,
+      `gbuffers_spidereyes` blends additively). Without either,
+      `inherit_blend` is set: the host keeps the blend of the draw the program
+      replaces (the vanilla pipeline's state), and a host that draws the
+      geometry itself (sb-runtime, DH passes) uses `GeometrySlot.blend`, the
+      blend of the geometry the slot stands for
+      (`GeometryProgram::host_blend`).
+    * The alpha test's comparison is compiled into the fragment epilogue
+      (`Program.alpha_test`: the directive, else `Greater` whenever any slot
+      the program file can draw tests alpha), and its reference is
+      `alphaTestRef` in `sb_Draw`. `GeometrySlot.alpha_test` is the slot's test:
+      the directive of its program, else Iris' default for its geometry
+      (`GeometryProgram::slot_alpha_test`, Iris' `ShaderKey` with the Sodium
+      terrain keys: solid off, cutout 0.5, translucent terrain, entities and
+      particles 0.1, ...). `GeometrySlot::alpha_test_ref` gives the reference a
+      draw feeds: the slot's, or one the compiled comparison always passes
+      when the slot does not test. Both fields are absent in models written
+      before them (hosts then use the program's).
   * `GeometrySlot.variants` (absent in older models = empty): the same program
     translated for other draw profiles, as profile → program index, each with
     the `use_alt` flags of the slot's pass. It lists every variant the compile
@@ -490,7 +526,10 @@ never reused:
   features, patches) and `.cargo/config.toml` (glslang's build flags). A
   changed translator therefore invalidates every cache, even without a version
   bump.
-* **In memory, per `PackSession`** (one per open pack in `sb-jni`). The session
+* **In memory, per `PackSession`** (one per open pack in `sb-jni`; the Java mod
+  opens a new session for every compile request, so it does not reuse these
+  caches across option changes, only for the on-demand variants of the compile
+  it made). The session
   keeps the preprocessed and analyzed stages, glslang's SPIR-V and reflection,
   `spirv-val` results, the Renderpearl compile check and whole translated
   **variants** (one program compiled for one draw profile). A variant is keyed
@@ -502,10 +541,15 @@ never reused:
   ...). A recompile after an option change therefore re-translates only the
   programs whose inputs changed, and `compile_variant` reuses the same cache
   (`CompileStats::variants_cached` counts a compile's reuses). Memory stays
-  bounded in a long-lived session: the preprocessed-stage and variant caches
-  keep two generations (entries the latest compile did not use are dropped at
-  the next one), and the other tables are cleared when they reach 20,000
-  entries.
+  bounded in a long-lived session: every table (preprocessed and analyzed
+  stages, variants, SPIR-V, validation, Renderpearl checks) keeps two
+  generations, and entries the latest compile did not use are dropped at the
+  next one, so a session holds at most two compiles' worth of entries
+  (`session_caches_stay_bounded_across_recompiles`). glslang's diagnostics are
+  cached with their pack locations, so the line map is part of those keys.
+  After a disk-cache hit the session has no compiled state; the first
+  `compile_variant` then compiles the pack (on the host's worker thread; the
+  Java mod's `PackSession.close` never waits for it).
 
 ## 8. GLSL translation rules (sb-transform)
 
@@ -597,10 +641,13 @@ Uniforms:
 
 Alpha test (gbuffers/shadow):
 * The fragment epilogue appends
-  `if (!(sb_FragData_0.a <op> alphaTestRef)) discard;`.
-* The op and reference come from `alphaTest.<prog>` or the program default:
-  cutout programs use `GREATER 0.1` (Iris defaults).
-* `alphaTestRef` lives in `sb_Draw`, so hosts can adjust it per draw.
+  `if (!(sb_FragData_0.a <op> alphaTestRef)) discard;` (compatibility-profile
+  stages that write `gl_FragData[0]`/`gl_FragColor`, as Iris' `CommonTransformer`).
+* The op comes from `alphaTest.<prog>`, else `GREATER` whenever a slot the program
+  file can draw tests alpha (§7).
+* `alphaTestRef` lives in `sb_Draw`: hosts set the slot's reference per draw
+  (`GeometrySlot::alpha_test_ref`), e.g. 0.5 for cutout terrain and a reference
+  every alpha passes for solid terrain.
 
 Fixups for leniency in NVIDIA and old drivers (glslang is strict):
 * Implicit int→float conversions in constructors, returns and assignments
@@ -699,7 +746,7 @@ Both hosts draw LODs with the slot programs per §4.1 and Iris's order:
 * **Frame order.** Opaque LODs (`dh_terrain`) are drawn **before** vanilla
   opaque geometry, and `dhDepthTex1` is copied from the LOD depth before
   `deferred` (the Java mod copies it, and `dhDepthTex0`, right after
-  `dh_terrain`). `dh_water` is drawn **before** vanilla translucent geometry,
+  `dh_terrain` and the replay of DH's generic objects, so both include them). `dh_water` is drawn **before** vanilla translucent geometry,
   as DH 3.3 draws its deferred translucent pass at the start of Minecraft's
   translucent chunk layer, so vanilla water blends over the LOD water behind it
   (the Java mod copies `dhDepthTex0` again after it). In the shadow pass,
@@ -766,8 +813,9 @@ the vanilla chunk square with synthesized ones.
   reference for the frame order, flips and depth copies the Java mod follows.
 * **The Java mod** (`java/`, Fabric, MC 26.3; details in [JAVA_MOD.md](JAVA_MOD.md)) does the following:
   * Loads the native library via JNI and manages packs and options, with its own GUI.
-  * Compiles packs off-thread (one `PackSession` per pack, with the caches of
-    §7.1) and creates pack render targets as renderpearl `GpuTexture`s.
+  * Compiles packs off-thread (a native `PackSession` per compile request, which
+    then serves the pack's on-demand variants; §7.1) and creates pack render
+    targets as renderpearl `GpuTexture`s.
   * Builds renderpearl `RenderPipeline`s from the packs' SPIR-V, which a hook on Mojang's
     `GlslCompiler` serves in place of compiled GLSL, and swaps them in for vanilla pipelines at
     `RenderPass#setPipeline` inside its own gbuffers and shadow passes. Variants
@@ -793,7 +841,9 @@ the vanilla chunk square with synthesized ones.
     programs (`gbuffers_*`, `shadow*`, `dh_*`) cannot be recorded inside
     Minecraft's open passes, so those needing raw Vulkan fall back along their
     chain. On the OpenGL backend there is no raw path: such programs are
-    declined with a diagnostic.
+    declined with a diagnostic. Minecraft 26.3 starts on OpenGL unless the
+    player selects Vulkan (§1), so packs with computes, custom images or SSBOs
+    need that setting.
   * Takes over DH's terrain renderer and draws its LODs with the pack's `dh_*`
     programs (§9.1).
   * **Sodium** 0.9 replaces Minecraft's terrain renderer but still draws into
@@ -840,7 +890,9 @@ the vanilla chunk square with synthesized ones.
   `sb-runtime` traces, attachment and pipeline planning, uniform layouts, DH
   math, SPIR-V reflection and admission, ...); every mixin target, descriptor
   and injection point checked against the bytecode of the Minecraft 26.3 jar
-  (and of the Sodium jar for the Sodium mixins); native smoke tests that load
-  the Rust library and compile corpus packs through JNI. Everything that drives
+  (and of the Sodium jar for the Sodium mixins); a native smoke test that loads
+  the Rust library and compiles a minimal pack through JNI, and native corpus
+  smoke tests that compile ComplementaryReimagined when a corpus is given
+  (`-Pshaderbridge.corpus` or `SB_CORPUS_DIR`; skipped otherwise). Everything that drives
   Minecraft or the GPU is compile-verified only; JAVA_MOD.md ("Verification")
   lists both sides.

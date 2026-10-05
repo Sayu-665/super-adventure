@@ -1,6 +1,7 @@
 package dev.shaderbridge.render.targets;
 
 import com.mojang.blaze3d.systems.SamplerCache;
+import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.shaderbridge.model.DepthMode;
 import dev.shaderbridge.model.DimensionPipeline;
@@ -10,6 +11,7 @@ import dev.shaderbridge.model.ResourceRef;
 import dev.shaderbridge.render.pipeline.DepthStates;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * Turns a pack resource ({@code BindingPlan.Source.Pack}) into the texture view and sampler to
@@ -29,15 +31,16 @@ public final class TextureResolver {
     private final SamplerChoice.Targets specs;
 
     /**
-     * @param dim       the dimension pipeline
-     * @param targets   its render targets
-     * @param textures  its textures
-     * @param samplers  Mojang's sampler cache
-     * @param depthMode the pack's depth convention (which neutral texture means "far")
-     * @param warnings  receives messages about missing resources (deduplicate them)
+     * @param dim            the dimension pipeline
+     * @param targets        its render targets
+     * @param textures       its textures
+     * @param samplers       Mojang's sampler cache
+     * @param depthMode      the pack's depth convention (which neutral texture means "far")
+     * @param linearFilter   whether the device can sample a format with linear filtering
+     * @param warnings       receives messages about missing resources (deduplicate them)
      */
     public TextureResolver(DimensionPipeline dim, PackTargets targets, PackTextures textures, SamplerCache samplers, DepthMode depthMode,
-                           Consumer<String> warnings) {
+                           Predicate<GpuFormat> linearFilter, Consumer<String> warnings) {
         this.dim = dim;
         this.targets = targets;
         this.textures = textures;
@@ -53,6 +56,11 @@ public final class TextureResolver {
             @Override
             public Optional<TargetSpec> shadowColor(int index) {
                 return targets.shadowColor(index).map(ColorPair::spec);
+            }
+
+            @Override
+            public boolean linearFilterable(GpuFormat format) {
+                return linearFilter.test(format);
             }
         };
     }

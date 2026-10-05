@@ -3,14 +3,16 @@
 //! `sb-runtime` executes a [`CompiledPack`] (the `sb-core` model plus its [`BlobTable`])
 //! on a Vulkan device without a window. It renders a synthetic Minecraft-like scene —
 //! voxel terrain with trees and water, entities, the sky, and Distant Horizons LOD
-//! terrain beyond the vanilla render distance — through the pack's passes and returns the
+//! terrain (the full DH square for native DH programs, only the ring beyond the vanilla
+//! render distance for synthesized ones) — through the pack's passes and returns the
 //! final image (and optionally every render target).
 //!
 //! It is both the end-to-end proof that translated packs run on Vulkan (pipelines link,
 //! descriptors match, nothing faults under the Khronos validation layer) and the
 //! reference implementation of the host contract that the Java mod mirrors:
 //!
-//! * frame order follows Iris: clears → `setup` (first frame) → `begin` → shadow pass
+//! * frame order follows Iris: clears (depth copies only on the first frame) → `setup`
+//!   (first frame) → `begin` → shadow pass
 //!   (opaque casters, shadowtex1 copy, translucent casters) → `shadowcomp` → `prepare` →
 //!   opaque gbuffers (sky, DH LODs, terrain, entities) → centre depth sample and depthtex2
 //!   copy (`beginHand`), depthtex1 copy (`beginTranslucents`) → `deferred` → translucent
@@ -25,9 +27,12 @@
 //!   filled once per frame and custom uniforms are evaluated with `sb-expr`;
 //! * the draw-profile host blocks (`Globals`, `TerrainUniform`, `DynamicTransforms`, DH's
 //!   `vertUniqueUniformBlock`/`vertSharedUniformBlock`, ...) are filled per draw;
+//! * each geometry batch draws with its slot's blend and alpha test reference
+//!   ([`sb_core::model::GeometrySlot::blend_for`] / `alpha_test_ref`), so one
+//!   `gbuffers_terrain` draws solid terrain unblended and water blended, as in Iris;
 //! * the scene's vertex buffers are byte-exact Minecraft 26.3 / DH 3.3 layouts, plus
-//!   Sodium 0.9's compact terrain format for programs translated with the
-//!   `sodium_terrain` profile ([`scene::formats`]);
+//!   Sodium 0.9's compact terrain format (encoded as Sodium's `CompactChunkVertex` does)
+//!   for programs translated with the `sodium_terrain` profile ([`scene::formats`]);
 //! * matrices are GL-style ([`math`]), including Iris' shadow and celestial math.
 //!
 //! The runtime never translates anything: it only consumes the model. Model

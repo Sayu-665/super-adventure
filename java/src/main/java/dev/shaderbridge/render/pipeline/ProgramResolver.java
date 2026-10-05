@@ -103,13 +103,19 @@ public final class ProgramResolver implements AutoCloseable {
     public GeometryResolution geometry(GeometryProgram slot, String profile, PipelineShape shape, boolean shadowPass) {
         List<String> reasons = new ArrayList<>();
         Set<Integer> tried = new HashSet<>();
+        // The blend of a program that inherits it depends on the slot it draws: the slot is part
+        // of the pipeline's identity.
+        PipelineShape slotShape = shape.forSlot(slot.wireName());
         for (GeometryProgram candidate : GeometryChain.chain(slot)) {
             GeometrySlot resolved = dim.geometry().get(candidate);
             if (resolved == null || !tried.add(resolved.program())) {
                 continue;
             }
             ProgramResolution resolution = switch (variants.find(dim, candidate, profile)) {
-                case VariantSource.Lookup.Found found -> resolve(found.variant(), shape, AttachmentLayout.geometry(dim, found.variant().program(), shadowPass));
+                case VariantSource.Lookup.Found found -> {
+                    ProgramVariant drawn = new ProgramVariant(found.variant().folder(), drawn(slot, found.variant().program()), found.variant().blobs());
+                    yield resolve(drawn, slotShape, AttachmentLayout.geometry(dim, drawn.program(), shadowPass));
+                }
                 case VariantSource.Lookup.Pending pending -> new ProgramResolution.Pending(candidate.fileName() + " for draw profile " + profile);
                 case VariantSource.Lookup.Missing missing -> new ProgramResolution.Unavailable(List.of(missing.reason()));
             };
@@ -122,6 +128,22 @@ public final class ProgramResolver implements AutoCloseable {
             reasons.add("the pack has no program for " + slot.fileName());
         }
         return new GeometryResolution(slot, new ProgramResolution.Unavailable(reasons));
+    }
+
+    /**
+     * The program to draw a slot's geometry with: {@code program} (the slot's program, a variant or
+     * a fallback) with the slot's blend and alpha test ({@link GeometrySlot#drawn}). Blend and
+     * alpha test belong to the geometry, not to the program file: one {@code gbuffers_terrain}
+     * draws solid terrain unblended without an alpha test, cutout terrain at 0.5 and water blended,
+     * as in Iris.
+     *
+     * @param slot    the geometry slot drawn
+     * @param program a program drawing it
+     * @return the program with the slot's draw state (itself when the model has no slot entry)
+     */
+    public Program drawn(GeometryProgram slot, Program program) {
+        GeometrySlot state = dim.geometry().get(slot);
+        return state == null ? program : state.drawn(program);
     }
 
     private ProgramResolution resolveCompute(ProgramVariant variant) {

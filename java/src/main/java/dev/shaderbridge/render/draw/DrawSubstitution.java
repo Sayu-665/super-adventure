@@ -3,6 +3,7 @@ package dev.shaderbridge.render.draw;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.model.GeometryProgram;
+import dev.shaderbridge.model.GeometrySlot;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.render.mapping.PipelineMapping;
 import dev.shaderbridge.render.pipeline.PipelineShape;
@@ -142,12 +143,21 @@ public final class DrawSubstitution {
         return resolve(vanilla, slot.get(), mapped.gbuffers(), mapped.profile(), shadow);
     }
 
+    /**
+     * The program with the blend and alpha test of the slot it draws ({@link GeometrySlot#drawn}),
+     * so the draw's {@code sb_Draw} block carries the slot's {@code alphaTestRef} and blend.
+     */
+    private Program drawn(GeometryProgram slot, Program program) {
+        GeometrySlot state = dim.geometry().get(slot);
+        return state == null ? program : state.drawn(program);
+    }
+
     private Optional<Decision> resolve(RenderPipeline vanilla, GeometryProgram slot, GeometryProgram routed, String profile, boolean shadow) {
         PipelineShape shape = shadow ? PipelineShape.of(vanilla).withCull(false) : PipelineShape.of(vanilla);
         ProgramResolver.GeometryResolution r = programs.geometry(slot, profile, shape, shadow);
         return switch (r.resolution()) {
             case ProgramResolution.Renderpearl rp -> dim.programFor(r.program())
-                .<Decision>map(p -> new Decision.Pack(routed, p, rp))
+                .<Decision>map(p -> new Decision.Pack(routed, drawn(slot, p), rp))
                 .or(() -> Optional.of(new Decision.Vanilla()));
             case ProgramResolution.Pending p -> Optional.empty();
             case ProgramResolution.Raw raw -> Optional.of(new Decision.Vanilla());

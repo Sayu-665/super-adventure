@@ -383,7 +383,7 @@ fn compile_variant_and_cache() {
     let pack = pack_of(&base_files());
     // A variant with a profile the folder already uses.
     let mut session = PackSession::new(&pack, vulkan_only());
-    let (p, blobs) = compile_variant(&mut session, "", GeometryProgram::Block, "vanilla_entity").unwrap();
+    let CompiledProgramVariant { program: p, blobs, .. } = compile_variant(&mut session, "", GeometryProgram::Block, "vanilla_entity").unwrap();
     assert_eq!(p.name, "gbuffers_terrain");
     assert_eq!(p.draw_profile.as_deref(), Some("vanilla_entity"));
     assert!(blobs.get_spirv(p.stages[0].spirv.unwrap()).is_some());
@@ -594,7 +594,7 @@ fn compile_variant_for_every_builtin_profile() {
     let slots = [GeometryProgram::TerrainSolid, GeometryProgram::Water, GeometryProgram::ShadowSolid, GeometryProgram::Entities, GeometryProgram::DhTerrain];
     for p in sb_transform::builtin_profiles() {
         for g in slots {
-            let (program, blobs) = compile_variant(&mut session, "", g, &p.name)
+            let CompiledProgramVariant { program, blobs, .. } = compile_variant(&mut session, "", g, &p.name)
                 .unwrap_or_else(|d| panic!("{} for {g:?}: {:?}", p.name, d.iter().map(|x| x.to_string()).collect::<Vec<_>>()));
             assert_eq!(program.draw_profile.as_deref(), Some(p.name.as_str()));
             assert!(program.stages.iter().all(|s| s.spirv.and_then(|b| blobs.get_spirv(b)).is_some()), "{} {g:?}", p.name);
@@ -659,7 +659,7 @@ fn slot_variants_follow_the_flip_state() {
     // compile_variant produces the same programs.
     let mut session = PackSession::new(&pack, settings);
     for (g, idx) in [(GeometryProgram::Terrain, t), (GeometryProgram::Water, w)] {
-        let (p, _) = compile_variant(&mut session, "", g, "sodium_terrain").unwrap();
+        let p = compile_variant(&mut session, "", g, "sodium_terrain").unwrap().program;
         assert_eq!(p.bindings_used, dim.programs[idx as usize].bindings_used, "{g:?}");
     }
 }
@@ -720,4 +720,130 @@ fn assert_reflection_matches(out: &CompileOutput) {
             }
         }
     }
+}
+
+/// One `gbuffers_terrain` draws solid, cutout and translucent terrain. As in Iris, it keeps
+/// the blend of each vanilla draw (solid and cutout do not blend, water does) and each slot
+/// tests alpha with Iris' reference for its geometry; a `blend.` / `alphaTest.` directive
+/// applies to every slot the program draws.
+#[test]
+fn slots_carry_iris_blend_and_alpha_defaults() {
+    let out = compile_pack(&pack_of(&base_files()), &vulkan_only());
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    let dim = &out.pack.dimensions[0];
+    let slot = |g: GeometryProgram| &dim.geometry[&g];
+    let terrain = &dim.programs[slot(GeometryProgram::TerrainSolid).program as usize];
+    assert!(terrain.inherit_blend);
+    assert_eq!(terrain.alpha_test.map(|a| a.func), Some(sb_core::program::AlphaFunc::Greater));
+    let solid = slot(GeometryProgram::TerrainSolid);
+    let cutout = slot(GeometryProgram::TerrainCutout);
+    let water = slot(GeometryProgram::Water);
+    assert_eq!(solid.blend_for(terrain), None);
+    assert_eq!(cutout.blend_for(terrain), None);
+    assert_eq!(water.blend_for(terrain), Some(sb_core::program::BlendMode::TRANSLUCENT));
+    assert_eq!(solid.alpha_test_ref(terrain), f32::MIN);
+    assert_eq!(cutout.alpha_test_ref(terrain), 0.5);
+    assert_eq!(water.alpha_test_ref(terrain), 0.1);
+    // Composite-style programs blend only through directives (Iris `CompositeRenderer`).
+    for p in dim.programs.iter().filter(|p| matches!(p.kind, sb_core::model::ProgramKind::Composite { .. })) {
+        assert!(!p.inherit_blend, "{}", p.name);
+    }
+
+    let mut files = base_files();
+    files.push((
+        "shaders.properties".into(),
+        "blend.gbuffers_terrain=ONE ZERO ONE ZERO\nalphaTest.gbuffers_terrain=GREATER 0.3\n".into(),
+    ));
+    let out = compile_pack(&pack_of(&files), &vulkan_only());
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    let dim = &out.pack.dimensions[0];
+    let terrain = &dim.programs[dim.geometry[&GeometryProgram::TerrainSolid].program as usize];
+    assert!(!terrain.inherit_blend);
+    for g in [GeometryProgram::TerrainSolid, GeometryProgram::TerrainCutout, GeometryProgram::Water] {
+        let slot = &dim.geometry[&g];
+        assert_eq!(slot.alpha_test_ref(terrain), 0.3, "{g:?}");
+        assert_eq!(slot.blend_for(terrain).map(|b| b.src_color), Some(sb_core::program::BlendFactor::One), "{g:?}");
+    }
+}
+
+/// A long-lived session recompiling after every option change keeps at most two compiles'
+/// worth of cache entries in every table (preprocessed and analyzed stages, variants,
+/// SPIR-V, validation, Renderpearl checks), however many recompiles it runs.
+#[test]
+fn session_caches_stay_bounded_across_recompiles() {
+    let files: Vec<(String, String)> = base_files()
+        .into_iter()
+        .map(|(name, text)| {
+            if name.ends_with(".fsh") {
+                let text = text.replacen("#version 120\n", "#version 120\n#define LEVEL 1 // [1 2 3 4 5 6 7 8]\nconst float sbLevel = float(LEVEL);\n", 1);
+                (name, text)
+            } else {
+                (name, text)
+            }
+        })
+        .collect();
+    let pack = pack_of(&files);
+    let mut settings = vulkan_only();
+    settings.validate_spirv = true;
+    settings.env.targets = vec![OutputTarget::Vulkan, OutputTarget::Renderpearl];
+    let mut session = PackSession::new(&pack, settings);
+    let first = session.compile();
+    assert!(errors(&first).is_empty(), "{:#?}", errors(&first));
+    let one = session.caches.entry_counts();
+    assert!(one.iter().all(|&n| n > 0), "{one:?}");
+    for level in 2..=8 {
+        session.set_option_values(OptionValues::from_pairs([("LEVEL", level.to_string().as_str())]));
+        let out = session.compile();
+        assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+        let now = session.caches.entry_counts();
+        for (table, (n, limit)) in now.iter().zip(one.iter()).enumerate() {
+            assert!(*n <= 2 * limit, "table {table} holds {n} entries after {level} compiles (one compile: {limit})");
+        }
+    }
+}
+
+/// glslang's diagnostics are cached with their pack locations: after lines move in a pack
+/// file between two compiles of a session, the recompile reports the new lines.
+#[test]
+fn session_reports_moved_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let shaders = dir.path().join("shaders");
+    std::fs::create_dir_all(&shaders).unwrap();
+    for (name, text) in base_files() {
+        std::fs::write(shaders.join(name), text).unwrap();
+    }
+    let body = "uniform sampler2D colortex0;\nuniform int frameCounter;\nvarying vec2 texcoord;\nvoid main() {\n    vec4 c = texture2D(colortex0, texcoord);\n    switch (frameCounter) { case 0: c.r = 1.0; break; default: }\n    gl_FragColor = c;\n}\n";
+    std::fs::write(shaders.join("final.fsh"), format!("#version 130\n{body}")).unwrap();
+    let pack = ShaderPack::open(dir.path()).unwrap();
+    let mut session = PackSession::new(&pack, vulkan_only());
+    let lines = |out: &CompileOutput| -> Vec<u32> {
+        out.pack
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.starts_with("spv.") && d.location.as_ref().is_some_and(|l| l.file.ends_with("final.fsh")))
+            .filter_map(|d| d.location.as_ref().map(|l| l.line))
+            .collect()
+    };
+    let first = session.compile();
+    let before = lines(&first);
+    assert!(!before.is_empty(), "no glslang diagnostic for final.fsh: {:#?}", first.pack.diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>());
+    std::fs::write(shaders.join("final.fsh"), format!("#version 130\n// 1\n// 2\n// 3\n// 4\n// 5\n{body}")).unwrap();
+    session.set_settings(vulkan_only());
+    let second = session.compile();
+    let after = lines(&second);
+    assert_eq!(after, before.iter().map(|l| l + 5).collect::<Vec<_>>());
+    let fresh = compile_pack(&pack, &vulkan_only());
+    assert_eq!(lines(&fresh), after);
+}
+
+/// An on-demand variant reports its own diagnostics: here why it needs the raw Vulkan path.
+#[test]
+fn compile_variant_returns_its_diagnostics() {
+    let mut s = vulkan_only();
+    s.env.device.max_descriptors_per_program = Some(1);
+    let pack = pack_of(&base_files());
+    let mut session = PackSession::new(&pack, s);
+    let v = compile_variant(&mut session, "", GeometryProgram::TerrainSolid, "sodium_terrain").unwrap();
+    assert!(v.program.requires_raw_vulkan);
+    assert!(v.diagnostics.iter().any(|d| d.code == "xf.too-many-descriptors"), "{:?}", v.diagnostics);
 }

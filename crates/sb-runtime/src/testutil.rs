@@ -72,6 +72,7 @@ fn program(blobs: &mut BlobTable, name: &str, kind: ProgramKind, profile: Option
         compute,
         cull: None,
         synthesized_from: None,
+        inherit_blend: false,
     }
 }
 
@@ -104,7 +105,7 @@ pub(crate) fn mini_pack() -> (CompiledPack, BlobTable) {
     dim.folder = "world0".into();
     dim.programs = programs;
     for g in [GeometryProgram::Terrain, GeometryProgram::TerrainSolid, GeometryProgram::TerrainCutout, GeometryProgram::Water, GeometryProgram::Shadow, GeometryProgram::ShadowSolid, GeometryProgram::ShadowCutout] {
-        dim.geometry.insert(g, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain, variants: Default::default() });
+        dim.geometry.insert(g, GeometrySlot::new(0, GeometryProgram::Terrain, g));
     }
     let sampler = ResourceKind::Sampler { dim: "2d".into(), shadow: false, sample_type: "float".into() };
     dim.bindings.entries = vec![

@@ -99,40 +99,113 @@ impl GeometryProgram {
         )
     }
 
-    /// Default alpha test as (comparison, reference) for programs that alpha-test by
-    /// default (Iris: cutout geometry uses `GREATER 0.1`). `None` = no alpha test.
-    pub fn default_alpha_test(self) -> Option<(AlphaFunc, f32)> {
+    /// Iris' default alpha test for the geometry this slot stands for, as (comparison,
+    /// reference), when the pack sets no `alphaTest.<program>` (Iris `ShaderKey`; chunk
+    /// terrain uses Iris' Sodium terrain keys, since Iris always draws chunk terrain through
+    /// Sodium). `None` = no alpha test. Unlike [`Self::default_alpha_test`], this belongs
+    /// to the slot, not to the program file: one `gbuffers_terrain` that draws solid,
+    /// cutout and translucent terrain tests nothing, 0.5 and 0.1 respectively.
+    pub fn slot_alpha_test(self) -> Option<(AlphaFunc, f32)> {
+        const OFF: Option<(AlphaFunc, f32)> = None;
+        const NON_ZERO: Option<(AlphaFunc, f32)> = Some((AlphaFunc::Greater, 0.0001));
+        const ONE_TENTH: Option<(AlphaFunc, f32)> = Some((AlphaFunc::Greater, 0.1));
+        const HALF: Option<(AlphaFunc, f32)> = Some((AlphaFunc::Greater, 0.5));
         match self {
-            G::Basic | G::Line | G::SkyBasic | G::Water | G::HandWater | G::DhTerrain | G::DhWater | G::DhGeneric | G::DhShadow
-            | G::BeaconBeam | G::TerrainSolid | G::ShadowSolid | G::ShadowWater => None,
-            _ => Some((AlphaFunc::Greater, 0.1)),
+            // BASIC (leash), LINES, SKY_BASIC (sky disc), SKY_TEXTURED, BEACON, LIGHTNING.
+            G::Basic | G::Line | G::SkyBasic | G::SkyTextured | G::BeaconBeam | G::Lightning => OFF,
+            // TEXTURED (world border), GLINT, ENTITIES_EYES.
+            G::Textured | G::ArmorGlint | G::SpiderEyes => NON_ZERO,
+            G::TerrainSolid | G::ShadowSolid => OFF,
+            G::TerrainCutout | G::ShadowCutout => HALF,
+            G::ShadowLightning => OFF,
+            G::DhTerrain | G::DhWater | G::DhGeneric | G::DhShadow => OFF,
+            // Cutout entities, block entities, items, hands, particles, weather, clouds,
+            // crumbling, Sodium's translucent terrain, and the shadow programs of those.
+            _ => ONE_TENTH,
         }
     }
 
-    /// Default blend mode before `blend.<prog>` overrides.
-    pub fn default_blend(self) -> Option<BlendMode> {
+    /// The alpha test compiled into a program **file** when the pack sets no
+    /// `alphaTest.<program>`: `Greater` (the host feeds the reference per draw through
+    /// `alphaTestRef`) whenever any slot the program can draw through Iris' fallback chains
+    /// tests alpha ([`Self::slot_alpha_test`]); the reference is the program's own slot
+    /// default, or 0.1 when only other slots test. `None`: no slot it can draw tests alpha.
+    pub fn default_alpha_test(self) -> Option<(AlphaFunc, f32)> {
+        if let Some(own) = self.slot_alpha_test() {
+            return Some(own);
+        }
+        let serves_tested = Self::ALL.iter().any(|slot| slot.slot_alpha_test().is_some() && slot.chain().any(|p| p == self));
+        serves_tested.then_some((AlphaFunc::Greater, 0.1))
+    }
+
+    /// Iris' blend override of a program **file** (`ProgramId`'s default) that applies when
+    /// the pack sets no `blend.<program>`: shadow programs never blend, `gbuffers_spidereyes`
+    /// blends additively. `None` = no override: Iris leaves the blend state of the vanilla
+    /// (or Distant Horizons) draw the program replaces in place ([`Self::host_blend`]).
+    pub fn program_blend_override(self) -> Option<Option<BlendMode>> {
         match self.group() {
-            GeometryGroup::Shadow => None,
+            GeometryGroup::Shadow => Some(None),
             _ => match self {
-                G::SpiderEyes => Some(BlendMode {
+                G::SpiderEyes => Some(Some(BlendMode {
                     src_color: BlendFactor::SrcAlpha,
                     dst_color: BlendFactor::One,
                     src_alpha: BlendFactor::Zero,
                     dst_alpha: BlendFactor::One,
-                }),
-                G::TerrainSolid | G::TerrainCutout | G::DhTerrain | G::DhShadow => None,
+                })),
+                _ => None,
+            },
+        }
+    }
+
+    /// The blend state of the vanilla (or Distant Horizons) geometry this slot stands for,
+    /// which Iris keeps when neither the pack nor the program file overrides it. Hosts that
+    /// replace a vanilla draw use that draw's own state instead; this is for hosts that draw
+    /// the slot's geometry themselves (`sb-runtime`, Distant Horizons passes).
+    pub fn host_blend(self) -> Option<BlendMode> {
+        match self.group() {
+            GeometryGroup::Shadow => None,
+            _ => match self {
+                // Solid and cutout terrain, block models, entities, items, hands, beacon
+                // beams, leashes, DH's opaque LODs: Minecraft's `ColorTargetState.DEFAULT`.
+                G::Terrain
+                | G::TerrainSolid
+                | G::TerrainCutout
+                | G::Block
+                | G::Entities
+                | G::Item
+                | G::Hand
+                | G::BeaconBeam
+                | G::Basic
+                | G::DhTerrain
+                | G::DhShadow => None,
                 // The sun and moon (Minecraft's `CELESTIAL` pipeline, Iris' SKY_TEXTURED) are
                 // blended additively: their textures have opaque black backgrounds.
                 G::SkyTextured => Some(BlendMode::OVERLAY),
                 // The sky disc and Iris' horizon cone use Minecraft's `SKY` pipeline, which
-                // does not blend (Iris has no override for skybasic, so the vanilla state
-                // applies): packs that write `vec4(0.0)` outside the stars (glimmer) clear the
-                // sky to zero with it. (Stars and the sunrise fan, also skybasic, blend in
-                // vanilla; a per-program blend cannot express that.)
+                // does not blend: packs that write `vec4(0.0)` outside the stars (glimmer)
+                // clear the sky to zero with it. (Stars and the sunrise fan, also skybasic,
+                // blend in vanilla; a per-slot blend cannot express that.)
                 G::SkyBasic => None,
+                // Minecraft's `LIGHTNING` pipeline: SRC_ALPHA ONE for colour and alpha.
+                G::Lightning => Some(BlendMode {
+                    src_color: BlendFactor::SrcAlpha,
+                    dst_color: BlendFactor::One,
+                    src_alpha: BlendFactor::SrcAlpha,
+                    dst_alpha: BlendFactor::One,
+                }),
+                // Translucent terrain, entities and particles, weather, clouds, glint, DH
+                // water and generic objects.
                 _ => Some(BlendMode::TRANSLUCENT),
             },
         }
+    }
+
+    /// Default blend of a program file without `blend.<program>`: its
+    /// [`Self::program_blend_override`], else the [`Self::host_blend`] of its own slot.
+    /// Programs without an override are marked [`crate::model::Program::inherit_blend`]:
+    /// a host keeps the blend of the geometry each draw replaces.
+    pub fn default_blend(self) -> Option<BlendMode> {
+        self.program_blend_override().unwrap_or_else(|| self.host_blend())
     }
 }
 
@@ -166,6 +239,16 @@ impl AlphaFunc {
             _ => return None,
         })
     }
+    /// A reference that every finite alpha passes with this comparison: how a host turns
+    /// off a compiled test per draw. `None` for comparisons no reference always passes.
+    pub fn always_passing_reference(self) -> Option<f32> {
+        match self {
+            Self::Greater | Self::GEqual => Some(f32::MIN),
+            Self::Less | Self::LEqual => Some(f32::MAX),
+            _ => None,
+        }
+    }
+
     /// GLSL comparison operator (`a <op> ref` passes the test). `None` for Never/Always.
     pub fn glsl_op(self) -> Option<&'static str> {
         Some(match self {
@@ -391,14 +474,49 @@ mod tests {
 
     /// Vanilla blend states that apply without a `blend.<program>` override: the sun and
     /// moon are additive (their black backgrounds must not cover the sky), the sky disc,
-    /// solid terrain and shadows are unblended, other geometry is translucent.
+    /// solid and cutout terrain, entities and shadows are unblended, translucent geometry is
+    /// translucent.
     #[test]
     fn default_blends_follow_vanilla_pipelines() {
         assert_eq!(GeometryProgram::SkyTextured.default_blend(), Some(BlendMode::OVERLAY));
         assert_eq!(GeometryProgram::SkyBasic.default_blend(), None);
         assert_eq!(GeometryProgram::Water.default_blend(), Some(BlendMode::TRANSLUCENT));
         assert_eq!(GeometryProgram::TerrainSolid.default_blend(), None);
+        assert_eq!(GeometryProgram::Terrain.default_blend(), None);
+        assert_eq!(GeometryProgram::Entities.default_blend(), None);
         assert_eq!(GeometryProgram::Shadow.default_blend(), None);
+        assert_eq!(GeometryProgram::DhWater.host_blend(), Some(BlendMode::TRANSLUCENT));
+    }
+
+    /// Only shadow programs and `gbuffers_spidereyes` override the blend themselves (Iris
+    /// `ProgramId`); every other program keeps the blend of the draw it replaces.
+    #[test]
+    fn program_blend_overrides_follow_iris() {
+        for g in GeometryProgram::ALL {
+            let expected = g.group() == GeometryGroup::Shadow || *g == GeometryProgram::SpiderEyes;
+            assert_eq!(g.program_blend_override().is_some(), expected, "{g:?}");
+        }
+        assert_eq!(GeometryProgram::ShadowWater.program_blend_override(), Some(None));
+    }
+
+    /// Iris' alpha tests per draw kind: one program file serves slots with different tests,
+    /// so the file compiles a `Greater` test whenever any slot it can draw needs one.
+    #[test]
+    fn alpha_tests_are_per_slot() {
+        assert_eq!(GeometryProgram::TerrainSolid.slot_alpha_test(), None);
+        assert_eq!(GeometryProgram::TerrainCutout.slot_alpha_test(), Some((AlphaFunc::Greater, 0.5)));
+        assert_eq!(GeometryProgram::Water.slot_alpha_test(), Some((AlphaFunc::Greater, 0.1)));
+        assert_eq!(GeometryProgram::Entities.slot_alpha_test(), Some((AlphaFunc::Greater, 0.1)));
+        // gbuffers_terrain draws solid, cutout and translucent terrain: it tests at its own 0.1.
+        assert_eq!(GeometryProgram::Terrain.default_alpha_test(), Some((AlphaFunc::Greater, 0.1)));
+        // gbuffers_terrain_solid only draws solid terrain.
+        assert_eq!(GeometryProgram::TerrainSolid.default_alpha_test(), None);
+        // gbuffers_basic is the root of every gbuffers chain.
+        assert_eq!(GeometryProgram::Basic.default_alpha_test(), Some((AlphaFunc::Greater, 0.1)));
+        assert_eq!(GeometryProgram::SkyBasic.default_alpha_test(), None);
+        assert_eq!(GeometryProgram::DhTerrain.default_alpha_test(), None);
+        assert_eq!(GeometryProgram::ShadowSolid.default_alpha_test(), None);
+        assert_eq!(GeometryProgram::Shadow.default_alpha_test(), Some((AlphaFunc::Greater, 0.1)));
     }
 
     #[test]

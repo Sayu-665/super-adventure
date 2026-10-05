@@ -1,6 +1,8 @@
 //! The synthetic Minecraft-like scene: voxel heightmap terrain with trees and water,
-//! a few entities, the sky, and Distant Horizons LOD terrain beyond the vanilla render
-//! distance. Everything is deterministic for a given [`SceneParams::seed`].
+//! a few entities, the sky, and Distant Horizons LOD terrain (the full DH square for native
+//! DH programs, which hide LODs under vanilla terrain themselves; only the ring beyond the
+//! vanilla render distance for synthesized ones). Everything is deterministic for a given
+//! [`SceneParams::seed`].
 
 pub mod formats;
 pub(crate) mod dh;

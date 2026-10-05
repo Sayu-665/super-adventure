@@ -21,7 +21,7 @@ class TargetPlannerTest {
     @Test
     void targetSizesResolveLikeTheRustModel() {
         assertArrayEquals(new int[] {960, 540}, new TargetSize.Relative(0.5f, 0.5f).resolve(1920, 1080));
-        assertArrayEquals(new int[] {641, 1}, new TargetSize.Relative(0.5f, 0.0001f).resolve(1281, 721), "ceil, at least one pixel");
+        assertArrayEquals(new int[] {640, 1}, new TargetSize.Relative(0.5f, 0.0001f).resolve(1281, 721), "truncated as in Iris, at least one pixel");
         assertArrayEquals(new int[] {64, 1}, new TargetSize.Absolute(64, 0).resolve(1920, 1080));
         assertArrayEquals(new int[] {960, 64}, new TargetSize.PerAxis(new AxisSize.Relative(0.5f), new AxisSize.Absolute(64)).resolve(1920, 1080));
     }

@@ -10,7 +10,7 @@ import java.util.function.Consumer;
 
 /**
  * Sizes of the resources only the raw path provides, with the headless executor's rules: custom
- * images ({@code image.<name>}, screen-relative ones rounded up like render targets) and shader
+ * images ({@code image.<name>}, screen-relative ones truncated like render targets) and shader
  * storage buffers ({@code bufferObject.<n>}, screen-relative ones as bytes per pixel), each storage
  * buffer grown to the largest block a program declares for it (GL tolerates a smaller buffer;
  * Vulkan needs the bound range to cover the block) and clamped to the device's range limit.

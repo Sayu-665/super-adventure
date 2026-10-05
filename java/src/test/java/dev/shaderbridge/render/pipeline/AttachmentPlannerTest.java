@@ -145,4 +145,27 @@ class AttachmentPlannerTest {
         assertEquals(1, mainTarget.slotOf(0) + 1);
         assertEquals(-1, mainTarget.slotOf(3));
     }
+
+    /**
+     * A program without a blend directive inherits the blend of the vanilla draw it replaces, as in
+     * Iris: one gbuffers_terrain does not blend solid terrain and blends water. A directive (or a
+     * program that does not inherit) keeps its own blend, and per-buffer overrides apply on top.
+     */
+    @Test
+    void inheritingProgramsTakeTheReplacedDrawsBlend() {
+        Program terrain = TUTORIAL.program("gbuffers_terrain", "vanilla_terrain");
+        AttachmentLayout layout = AttachmentLayout.geometry(TUTORIAL.dim(), terrain, false);
+        Program inheriting = terrain.withDrawState(TRANSLUCENT, true, terrain.alphaTest());
+        AttachmentPlan solid = AttachmentPlanner.plan(inheriting, Optional.empty(), layout, floats(3), BASELINE);
+        assertTrue(solid.colorTargetStates().stream().allMatch(s -> s.blendFunction().isEmpty()), "solid terrain does not blend");
+        AttachmentPlan water = AttachmentPlanner.plan(inheriting, Optional.of(BlendFunction.TRANSLUCENT), layout, floats(3), BASELINE);
+        assertTrue(water.colorTargetStates().stream().allMatch(s -> s.blendFunction().equals(Optional.of(BlendFunction.TRANSLUCENT))));
+        // No replaced draw (profile shapes): the program's (slot's) blend.
+        AttachmentPlan own = AttachmentPlanner.plan(inheriting, null, layout, floats(3), BASELINE);
+        assertTrue(own.colorTargetStates().stream().allMatch(s -> s.blendFunction().equals(Optional.of(BlendFunctions.of(TRANSLUCENT)))));
+        // A directive's blend is not replaced.
+        Program directed = terrain.withDrawState(ADD, false, terrain.alphaTest());
+        AttachmentPlan kept = AttachmentPlanner.plan(directed, Optional.empty(), layout, floats(3), BASELINE);
+        assertTrue(kept.colorTargetStates().stream().allMatch(s -> s.blendFunction().equals(Optional.of(BlendFunctions.of(ADD)))));
+    }
 }

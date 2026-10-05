@@ -186,6 +186,7 @@ fn program(blobs: &mut BlobTable, spec: ProgramSpec, defines: &[&str], table: &B
         compute: spec.compute,
         cull: None,
         synthesized_from: None,
+        inherit_blend: false,
     }
 }
 
@@ -238,7 +239,7 @@ pub fn test_pack(v: Variant) -> (CompiledPack, BlobTable) {
     let programs: Vec<Program> = specs.into_iter().map(|s| program(&mut blobs, s, &defines, &table)).collect();
     let mut geometry = IndexMap::new();
     let mut slot = |g: GeometryProgram, program: u32, from: GeometryProgram| {
-        geometry.insert(g, GeometrySlot { program, resolved_from: from, variants: Default::default() });
+        geometry.insert(g, GeometrySlot::new(program, from, g));
     };
     use GeometryProgram as G;
     for g in [G::Terrain, G::TerrainSolid, G::TerrainCutout, G::Block, G::DamagedBlock] {

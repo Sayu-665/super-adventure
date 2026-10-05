@@ -19,42 +19,13 @@ use std::sync::{Arc, Mutex};
 /// Cache key (blake3 hash).
 pub type Key = [u8; 32];
 
-/// A bounded memo table shared by the parallel workers of a session.
-#[derive(Debug)]
-pub struct Memo<V> {
-    map: Mutex<HashMap<Key, V>>,
-}
-
-impl<V> Default for Memo<V> {
-    fn default() -> Self {
-        Self { map: Mutex::new(HashMap::new()) }
-    }
-}
-
-impl<V: Clone> Memo<V> {
-    /// Entries beyond which the table is cleared (a session over many option changes
-    /// must not grow without bound).
-    const LIMIT: usize = 20_000;
-
-    pub fn get(&self, k: &Key) -> Option<V> {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned()
-    }
-
-    pub fn insert(&self, k: Key, v: V) {
-        let mut m = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        if m.len() >= Self::LIMIT {
-            m.clear();
-        }
-        m.insert(k, v);
-    }
-}
-
-/// A two-generation cache: the entries the current compile used and those of the
-/// previous compile. [`Generations::rotate`] starts a compile: the previous generation is
-/// dropped and the current one becomes the previous one; an entry found in the previous
-/// generation moves back into the current one. Memory therefore stays bounded by what two
-/// consecutive compiles use, however many recompiles a long-lived session runs, and a
-/// recompile reuses everything the compile before it produced.
+/// A two-generation cache shared by the parallel workers of a session: the entries the
+/// current compile used and those of the previous compile. [`Generations::rotate`] starts
+/// a compile: the previous generation is dropped and the current one becomes the previous
+/// one; an entry found in the previous generation moves back into the current one. Memory
+/// therefore stays bounded by what two consecutive compiles use, however many recompiles a
+/// long-lived session runs, and a recompile reuses everything the compile before it
+/// produced. Every session table is one ([`crate::compile::Caches`]).
 #[derive(Debug)]
 pub struct Generations<V> {
     inner: Mutex<GenerationMaps<V>>,
@@ -213,7 +184,7 @@ pub struct AnalysisCaches<'a> {
     /// the pack contents, so edits on disk between compiles are picked up).
     pub preprocessed: &'a Generations<PreprocessedStage>,
     /// Analysis results by [`analysis_key`] (content-addressed).
-    pub analysis: &'a Memo<AnalysisResult>,
+    pub analysis: &'a Generations<AnalysisResult>,
     /// Fingerprint of the option edits the sources apply ([`sources_fingerprint`]).
     pub sources: Key,
 }
@@ -541,7 +512,7 @@ mod tests {
         let plan = resolve_folder(&pack, "", &l, &env);
         let sources = crate::sources::OptionSources::new(crate::sources::PackRef::Borrowed(&pack), l.options.clone(), l.values.clone());
         let opts = PreprocessOptions { defines: l.glsl_macros.clone(), ..Default::default() };
-        let memo = Memo::default();
+        let memo = Generations::default();
         let preprocessed = Generations::default();
         let caches = AnalysisCaches {
             preprocessed: &preprocessed,

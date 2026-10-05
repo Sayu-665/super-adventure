@@ -679,11 +679,18 @@ impl PreparedProgram {
     }
 }
 
-/// The blend of logical output `i` of `program` (per-buffer override, else global).
+/// The blend of the output of `program` that writes `target` (per-buffer override, else
+/// the program's blend).
 pub(crate) fn output_blend(program: &Program, target: u32) -> Option<BlendMode> {
+    output_blend_over(program, target, program.blend)
+}
+
+/// The blend of the output of `program` that writes `target`: its per-buffer override, else
+/// `base` (the program's blend, or the slot's for a geometry program that inherits it).
+pub(crate) fn output_blend_over(program: &Program, target: u32, base: Option<BlendMode>) -> Option<BlendMode> {
     match program.blend_per_buffer.get(&target) {
         Some(b) => *b,
-        None => program.blend,
+        None => base,
     }
 }
 

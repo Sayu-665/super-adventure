@@ -7,6 +7,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.vertex.VertexFormat;
 import dev.shaderbridge.ShaderBridge;
+import dev.shaderbridge.compat.sodium.SodiumIntegration;
 import dev.shaderbridge.render.frame.RenderBridge;
 import java.util.List;
 import java.util.Map;
@@ -138,9 +139,13 @@ public final class ChunkMeshFormat {
         }
     }
 
-    /** @return the block id map of the pack that renders, or null */
+    /**
+     * @return the block id map of the pack that renders, or null: no pack renders, or Sodium meshes
+     *     and draws the terrain itself (its integration extends Sodium's vertex instead; Minecraft's
+     *     chunk meshes are never built, so a vanilla rebuild would only reload Sodium's renderer)
+     */
     private static Map<Integer, List<String>> wantedBlockIds() {
-        if (!RenderBridge.packActive()) {
+        if (!RenderBridge.packActive() || SodiumIntegration.active()) {
             return null;
         }
         return ShaderBridge.get().activePack().map(pack -> pack.model().idMaps().blocks()).orElse(null);

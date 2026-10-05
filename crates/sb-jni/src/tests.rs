@@ -303,6 +303,8 @@ fn variants_and_registered_profiles() {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let program: sb_core::model::Program = serde_json::from_value(v["program"].clone()).unwrap();
         let infos: Vec<BlobInfo> = serde_json::from_value(v["blobs"].clone()).unwrap();
+        // The variant's own diagnostics travel with it (an array, possibly empty).
+        let _: Vec<sb_core::Diagnostic> = serde_json::from_value(v["diagnostics"].clone()).unwrap();
         assert_eq!(program.draw_profile.as_deref(), Some("vanilla_terrain"));
         let buffer = api::with_variant_blob_data(s, |b| b.to_vec()).unwrap();
         assert_eq!(api::variant_blob_size(s).unwrap() as usize, buffer.len());

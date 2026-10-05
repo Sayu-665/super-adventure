@@ -180,7 +180,7 @@ fn broken_programs_are_skipped_not_fatal() {
     let bad = blobs.push(sb_core::model::BlobKind::Spirv, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     dim.programs[4].stages[1].spirv = Some(bad);
     // 2. A geometry slot pointing at a program that does not exist.
-    dim.geometry.insert(sb_core::program::GeometryProgram::SkyTextured, sb_core::model::GeometrySlot { program: 99, resolved_from: sb_core::program::GeometryProgram::SkyTextured, variants: Default::default() });
+    dim.geometry.insert(sb_core::program::GeometryProgram::SkyTextured, sb_core::model::GeometrySlot::new(99, sb_core::program::GeometryProgram::SkyTextured, sb_core::program::GeometryProgram::SkyTextured));
     // 3. A pass referencing a missing compute program and a bogus flip state.
     dim.passes[3].computes.push(1234);
     dim.passes[4].flip_state = vec![false; 3];

@@ -329,7 +329,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": true,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/composite",
@@ -350,7 +351,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/composite3_b",
@@ -371,7 +373,8 @@
           "push_constant_size": 16,
           "compute": {"local_size": [8, 8, 1], "work_groups": {"type": "absolute", "x": 4, "y": 2, "z": 1}, "indirect": [1, 16]},
           "cull": false,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/composite3",
@@ -392,7 +395,8 @@
           "push_constant_size": 0,
           "compute": {"local_size": [16, 16, 1], "work_groups": {"type": "relative", "x": 1.0, "y": 0.5}, "indirect": null},
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/shadow_a",
@@ -413,7 +417,8 @@
           "push_constant_size": 0,
           "compute": {"local_size": [1, 1, 1], "work_groups": {"type": "absolute", "x": 1, "y": 1, "z": 1}, "indirect": null},
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/dh_terrain",
@@ -434,7 +439,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": "world0/gbuffers_terrain"
+          "synthesized_from": "world0/gbuffers_terrain",
+          "inherit_blend": false
         },
         {
           "name": "world0/gbuffers_water",
@@ -455,7 +461,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/gbuffers_hand",
@@ -476,7 +483,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/gbuffers_basic",
@@ -497,7 +505,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/gbuffers_textured",
@@ -518,7 +527,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         }
       ],
       "geometry": {

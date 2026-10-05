@@ -2,7 +2,6 @@ package dev.shaderbridge.render.pipeline;
 
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
-import dev.shaderbridge.model.BlendMode;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.render.pipeline.AttachmentLayout.Attachment;
 import dev.shaderbridge.render.pipeline.SpirvReflection.ScalarClass;
@@ -19,7 +18,8 @@ import java.util.Set;
  * layout (slot {@code i} otherwise); a slot is written when the program maps an output to it and
  * the fragment shader declares that location with the target's numeric class; every other slot is
  * masked so the attachment keeps its contents. Blending uses the per-buffer override, else the
- * program's blend, and is off for integer targets.
+ * program's blend (or, for a program that inherits it, the blend of the draw it replaces), and is
+ * off for integer targets.
  */
 public final class AttachmentPlanner {
     private AttachmentPlanner() {
@@ -34,6 +34,24 @@ public final class AttachmentPlanner {
      */
     public static AttachmentPlan plan(Program program, AttachmentLayout layout, Map<Integer, ScalarClass> fragmentOutputs,
                                       PipelineCapabilities capabilities) {
+        return plan(program, null, layout, fragmentOutputs, capabilities);
+    }
+
+    /**
+     * @param program          the program
+     * @param hostBlend        the blend of the draw the program replaces ({@link PipelineShape#hostBlend()}),
+     *                         used instead of the program's when the program inherits it
+     *                         ({@code Program.inheritBlend}, as Iris keeps the vanilla pipeline's
+     *                         blend); null when there is no such draw
+     * @param layout           the attachments of the pass it draws in
+     * @param fragmentOutputs  fragment output locations with their numeric class (SPIR-V reflection)
+     * @param capabilities     device capabilities
+     * @return the plan
+     */
+    public static AttachmentPlan plan(Program program, Optional<BlendFunction> hostBlend, AttachmentLayout layout,
+                                      Map<Integer, ScalarClass> fragmentOutputs, PipelineCapabilities capabilities) {
+        Optional<BlendFunction> base = program.inheritBlend() && hostBlend != null ? hostBlend
+            : Optional.ofNullable(program.blend()).map(BlendFunctions::of);
         List<Attachment> attachments = layout.attachments();
         List<String> problems = new ArrayList<>();
         List<String> notes = new ArrayList<>();
@@ -56,7 +74,7 @@ public final class AttachmentPlanner {
                 continue;
             }
             mapped[slot] = true;
-            blends.set(slot, blendOf(program, target).map(BlendFunctions::of));
+            blends.set(slot, blendOf(program, target, base));
         }
         List<AttachmentPlan.Slot> slots = new ArrayList<>();
         for (int slot = 0; slot < attachments.size(); slot++) {
@@ -97,11 +115,11 @@ public final class AttachmentPlanner {
         return output < program.outputSlots().size() ? program.outputSlots().get(output) : layout.slotOf(target);
     }
 
-    /** The per-buffer override (a null value turns blending off), else the program's blend. */
-    private static Optional<BlendMode> blendOf(Program program, int target) {
+    /** The per-buffer override (a null value turns blending off), else the program-wide blend. */
+    private static Optional<BlendFunction> blendOf(Program program, int target, Optional<BlendFunction> base) {
         if (program.blendPerBuffer().containsKey(target)) {
-            return Optional.ofNullable(program.blendPerBuffer().get(target));
+            return Optional.ofNullable(program.blendPerBuffer().get(target)).map(BlendFunctions::of);
         }
-        return Optional.ofNullable(program.blend());
+        return base;
     }
 }

@@ -128,8 +128,11 @@ public final class PackTargets implements AutoCloseable {
     /**
      * Clears the targets at the start of a frame, as the headless executor does: the color
      * targets the pack clears (and every target on its first frame, after creation or a resize;
-     * main and alt alike) to their clear color, and the depth copies and shadow maps to the far
-     * value.
+     * main and alt alike) to their clear color, and the shadow map ({@code shadowtex0}, the
+     * shadow pass's attachment) to the far value. The depth copies ({@code depthtex1},
+     * {@code depthtex2}, {@code shadowtex1}) are cleared only on their first frame: as in Iris,
+     * programs that run before this frame's copy (begin, shadow, prepare, opaque gbuffers) see the
+     * previous frame's depth.
      *
      * @param encoder   the command encoder
      * @param fog       the current fog color (default clear of {@code colortex0})
@@ -143,11 +146,14 @@ public final class PackTargets implements AutoCloseable {
             clear(encoder, pair, fog, shadowCleared);
         }
         double far = DepthStates.clearValue(depthMode);
-        for (DepthTexture d : depthCopies) {
-            encoder.clearDepthTexture(d.texture(), far);
+        if (!screenCleared) {
+            for (DepthTexture d : depthCopies) {
+                encoder.clearDepthTexture(d.texture(), far);
+            }
         }
-        for (DepthTexture d : shadowDepth) {
-            encoder.clearDepthTexture(d.texture(), far);
+        encoder.clearDepthTexture(shadowDepth[0].texture(), far);
+        if (!shadowCleared) {
+            encoder.clearDepthTexture(shadowDepth[1].texture(), far);
         }
         screenCleared = true;
         shadowCleared = true;

@@ -11,9 +11,12 @@ public sealed interface TargetSize {
      */
     int[] resolve(int width, int height);
 
-    /** Rounds a relative extent up, as the Rust side does. */
+    /**
+     * Truncates a relative extent (at least 1), as the Rust side and Iris do
+     * ({@code (int) (extent * factor)}).
+     */
     private static int relative(float factor, int extent) {
-        return Math.max(1, (int) Math.ceil(extent * factor));
+        return Math.max(1, (int) (extent * factor));
     }
 
     /**

@@ -292,6 +292,7 @@ fn coverage_pack() -> (CompiledPack, BlobTable) {
             compute: None,
             cull: None,
             synthesized_from: None,
+            inherit_blend: false,
         }
     };
     let geo = |p| ProgramKind::Geometry { program: p };
@@ -326,7 +327,7 @@ fn coverage_pack() -> (CompiledPack, BlobTable) {
     let mut geometry = IndexMap::new();
     use GeometryProgram as G;
     for (g, p) in [(G::TerrainSolid, 0), (G::TerrainCutout, 0), (G::Water, 1), (G::SkyBasic, 2), (G::ShadowSolid, 3), (G::ShadowCutout, 3), (G::ShadowWater, 3)] {
-        geometry.insert(g, GeometrySlot { program: p, resolved_from: g, variants: Default::default() });
+        geometry.insert(g, GeometrySlot::new(p, g, g));
     }
     let flips = |set: &[usize]| {
         let mut v = vec![false; 7];

@@ -2,7 +2,12 @@
 
 This document describes how the Fabric mod in `java/` renders a compiled shader pack
 (`CompiledPack`, `crates/sb-core/src/model.rs`) inside Minecraft 26.3. Minecraft 26.3 renders
-through Mojang's renderpearl API, and its default backend is Vulkan. The host conventions the mod
+through Mojang's renderpearl API, with an OpenGL and a Vulkan backend. **26.3 starts on OpenGL by
+default** (`PreferredGraphicsApi.getBackendsToTry` tries OpenGL first unless the player picks
+Vulkan); Vulkan is opt-in under Options → Video Settings → Graphics API → "Prefer Vulkan
+(Experimental)", and becomes the default in the 26.4 snapshots. The mod renders packs on both
+backends, but the raw Vulkan path (§7: compute programs, custom images and SSBOs, composite viewport
+scale) exists only on Vulkan. The host conventions the mod
 implements are those of [ARCHITECTURE.md](ARCHITECTURE.md) §4–§7 and §9. The headless executor
 `crates/sb-runtime` implements the same contract on raw Vulkan and is the reference for:
 
@@ -146,10 +151,13 @@ The order is the one `sb-runtime`'s `record_frame` uses. `FramePlan` transcribes
    1. Capture the game state and update `FrameState` (`centerDepthSmooth` from the newest
       finished centre-depth readback, below).
    2. Upload `sb_Frame`; write the two default `sb_Draw` blocks into this frame's `sb_Draw` pages.
-   3. Clear targets per `ColorTarget.clear`, and clear every target on its first frame.
+   3. Clear targets per `ColorTarget.clear`, and clear every target on its first frame. The depth
+      copies (`depthtex1`, `depthtex2`, `shadowtex1`) are cleared only on their first frame: as in
+      Iris, programs that run before this frame's copy see the previous frame's depth.
    4. Start the DH frame.
 2. **Once Minecraft has prepared the frame's features** (`FeatureRenderDispatcher.prepareFrame`,
-   `PackRenderer.beforeGeometry`), still outside any pass: `setup` (first frame only), `begin`,
+   `PackRenderer.beforeGeometry`), still outside any pass: `setup` (on the first frame, and again
+   after a resize recreated the screen-sized targets, images and buffers, as Iris does), `begin`,
    the **shadow pass** (§6) with its shadowcolor mipmaps, `shadowcomp` and `prepare`. Each pass
    starts by adopting its `flip_state`, and the flips follow `flips_after`. (If the feature hook
    did not apply, these run at the start of the sky or main pass, without entity shadows.)
@@ -161,7 +169,7 @@ The order is the one `sb-runtime`'s `record_frame` uses. `FramePlan` transcribes
    1. Terrain fog, the chunk sampler and `prepareTranslucents`. DH hands over its LODs here.
    2. Where Minecraft creates its render pass: the opaque DH LODs (`dh_terrain`), DH's generic
       objects (`dh_generic`, §8), then the copy of the LOD depth to `dhDepthTex1` and
-      `dhDepthTex0`. Minecraft gets a **gbuffers pass** instead of its own: the pack's
+      `dhDepthTex0` (both include the generic objects). Minecraft gets a **gbuffers pass** instead of its own: the pack's
       `gbuffer_attachments` in their current textures plus Minecraft's main depth.
    3. In it, vanilla `executeSolid` draws opaque terrain and opaque features.
    4. Before `executeClassicTransparency`: the gbuffers pass is closed; the centre texel of the
@@ -201,7 +209,8 @@ which Minecraft renders vanilla until another pack (or a recompile) is activated
 
 Diagnostics that do not stop the pack go to the log through `PipelineDiagnostics`, which
 deduplicates them. Examples: programs that fall back or are skipped, unsupported features,
-missing resources, draws that are skipped. The pack screen lists them ("Rendering diagnostics"),
+missing resources, draws that are skipped, and chunk terrain without the extended vertex (only
+when its format switch is unavailable). Diagnostics of variants compiled on demand are logged. The pack screen lists them ("Rendering diagnostics"),
 for the pack that renders or, after it stopped, with the reason it stopped.
 
 ## 4. Pipeline substitution
@@ -223,6 +232,16 @@ attachment layout):
 * **Color targets**: the pass's attachment layout. A slot is written when the program maps an
   output to it with the matching numeric class; other slots get write mask 0. There is one shared
   blend function: Mojang's builder accepts only one.
+* **Blend**: `blend.<program>` or the program file's own override (shadow programs: none;
+  `gbuffers_spidereyes`: additive). Without either (`Program.inheritBlend`), the pipeline keeps the
+  blend of the vanilla pipeline it replaces, as Iris does: one `gbuffers_terrain` draws solid and
+  cutout terrain unblended and water blended. Draws ShaderBridge makes from a draw profile (DH
+  LODs) use the slot's `GeometrySlot.blend`. Per-buffer overrides apply on top. Because the blend
+  depends on the slot, the slot is part of the pipeline's identity (`PipelineShape.forSlot`).
+* **Alpha test**: the comparison is compiled into the program; the reference is the slot's
+  (`GeometrySlot.drawn`): `sb_Draw.alphaTestRef` is 0.5 for cutout terrain, 0.1 for water and
+  entities, and a value every alpha passes for solid terrain, unless the pack sets
+  `alphaTest.<program>`.
 
 A program is **ineligible** for renderpearl, and goes to the raw path or falls back along its
 `GeometryChain`, in any of these cases:
@@ -344,8 +363,8 @@ format instead, as Iris extends Sodium's (`TerrainVertexFormat`, the layout of t
   pipeline with the extended profile (`vanilla_terrain` on the MultiDrawIndirect path, whose
   programs the pack is compiled for by default, `vanilla_terrain_section_ext` on the per-section
   path); `PipelineRouter` falls back to the basic profile if the buffers lack the extension.
-* **Switching** (`ChunkMeshFormat`). With no pack rendering every hook returns Minecraft's own
-  values: meshing and drawing are vanilla. When a pack starts or stops rendering
+* **Switching** (`ChunkMeshFormat`). With no pack rendering, or with Sodium (which meshes terrain
+  itself, §9), every hook returns Minecraft's own values: meshing and drawing are vanilla. When a pack starts or stops rendering
   (`RenderBridge.packActive()`), or a new pack's block ids differ, the start of the next
   `LevelExtractor.extract` switches the format and rebuilds every chunk section: it releases the
   section meshes and the section dispatcher (`LevelRenderer.resetLevelRenderData`) and marks the
@@ -362,15 +381,16 @@ format instead, as Iris extends Sodium's (`TerrainVertexFormat`, the layout of t
 * **`colortexN`, `shadowcolorN`**:
   * Each is a main/alt pair of `GpuTexture`s (`ColorPair`) with usage attachment, sampled, copy
     source and copy destination.
-  * Sizes follow `TargetSize`. Shadow resolution is clamped to 16..8192 and to the device limit
-    per format.
+  * Sizes follow `TargetSize` (relative sizes truncated, as Iris does). Shadow resolution is
+    clamped to 16..8192 and to the device limit per format.
   * Formats are the renderable form of the pack format.
   * A full mip chain is allocated for targets a program requests mipmaps of.
 * **Clears** follow `ColorTarget.clear`/`clear_color`, with defaults as in `sb-runtime`. Every
   target is cleared on its first frame after creation or resize.
 * **Depth**:
   * `depthtex0` is Minecraft's main depth.
-  * `depthtex1` and `depthtex2` are copies taken after the opaque geometry.
+  * `depthtex1` and `depthtex2` are copies taken after the opaque geometry, cleared only when they
+    are created (programs before the copy read the previous frame's, as in Iris).
   * `shadowtex0` is the shadow pass's depth attachment; `shadowtex1` is its copy taken before
     translucent casters. Both are `D32_FLOAT`.
 * **Textures**: noise (Iris layout), white/black/flat-normal/no-specular defaults, and custom
@@ -392,7 +412,9 @@ format instead, as Iris extends Sodium's (`TerrainVertexFormat`, the layout of t
 
 `TextureResolver` resolves each `ResourceRef` to a view and sampler (`SamplerChoice`). A sampler
 the pack did not name (GL texture unit 0) is the draw's albedo in geometry programs, and
-`colortex0` in its current texture elsewhere.
+`colortex0` in its current texture elsewhere. Render targets and shadow maps are filtered linearly
+only if the device can filter their format (`SAMPLED_IMAGE_FILTER_LINEAR` on Vulkan, as
+`sb-runtime` checks; every non-integer format on OpenGL); otherwise they are sampled nearest.
 
 ## 6. Uniforms and the shadow pass
 
@@ -404,7 +426,7 @@ the pack did not name (GL texture unit 0) is the draw's albedo in geometry progr
   * the pipeline;
   * `renderStage` (Iris phase numbers);
   * shadow or not, which selects the model-view and projection;
-  * `alphaTestRef`;
+  * `alphaTestRef` (the slot's reference, §4);
   * `blendFunc`;
   * the albedo size (`gtextureSize`, and `atlasSize` when the albedo is one of Minecraft's texture
     atlases).
@@ -536,8 +558,8 @@ failure stops the replay for the session with a warning.
 **Modes** (`DhMode`):
 
 * **NATIVE**: the pack's own `dh_*` programs, with a separate `D32` LOD depth.
-  * `dhDepthTex1` is copied after `dh_terrain`.
-  * `dhDepthTex0` is copied after `dh_terrain` and again after `dh_water`, so it always holds the
+  * `dhDepthTex1` is copied after `dh_terrain` and the generic objects.
+  * `dhDepthTex0` is copied at the same point and again after `dh_water`, so it always holds the
     LODs drawn so far, like the live texture Iris binds.
   * LODs are also drawn in the vanilla area.
   * `dhProjection` spans DH's near plane to `dhFarPlane = (lodChunks*16 + 512)*sqrt(2)`.
@@ -584,7 +606,9 @@ exactly what Sodium's shader and the profile decode), followed by ShaderBridge's
   for the worker thread (`ChunkBuilderMeshingTaskMixin`, `BlockContext`). Fluid quads carry the
   id of the fluid's block (`FluidState.createLegacyBlock()`, so `minecraft:water` maps water in a
   waterlogged stair). Ids come from a table of every block state built when the vertex is chosen,
-  with `IdMapLookup` and the world's block tags.
+  resolved as for the vanilla terrain vertex (`render.chunk.BlockIdTable`: Iris' precedence, filters
+  on missing properties ignored) against the world's block tags, so terrain gets the same ids with
+  and without Sodium.
 * **Translucent sorting.** Sodium copies translucent quads for sorting and encodes the pieces of
   quads it splits after their block was meshed. Their vertices are tagged with the block's data
   when they enter the sorter (`TranslucentGeometryCollectorMixin`), and the tags travel through
@@ -592,8 +616,11 @@ exactly what Sodium's shader and the profile decode), followed by ShaderBridge's
   mesh appenders) gets id -1 and no `at_midBlock`.
 * **Switching** (`SodiumTerrain`, `MeshPlan`). The vertex is chosen when Sodium creates its
   section manager and chunk builder (`SodiumWorldRenderer.initRenderer`), because every buffer of
-  that renderer uses it: extended when a pack is active (`ShaderBridge.activePack()`), Sodium's
-  own otherwise. When that changes, or a pack with other block ids becomes active, Sodium's
+  that renderer uses it: extended while ShaderBridge renders a pack in the dimension
+  (`RenderBridge.packActive()`, so a refused pack or one without a pipeline for the dimension costs
+  no remesh), Sodium's own otherwise. Minecraft's own chunk mesh format (§4) stays vanilla while
+  Sodium draws terrain: its meshes are never built, so switching it would only reload Sodium's
+  renderer a second time. When that changes, or a pack with other block ids becomes active, Sodium's
   renderer is reloaded at the start of its next terrain update, right after chunk events are
   processed, where Sodium itself reloads after a render distance change; every section is meshed
   again. Sodium memoizes its terrain pipelines per pass with the vertex format they were built
@@ -662,7 +689,7 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * The block id table is built when the pack starts rendering; block tags changed later by a
     data pack reload are not picked up until the next pack or world change.
   * Ids outside the 16-bit range wrap, as in Iris' `RG16_SINT` attribute.
-  * Switching packs on or off remeshes every loaded chunk section, as in Iris.
+  * Switching packs on or off remeshes every loaded chunk section, as in Iris (with Sodium, only Sodium remeshes, §9).
   * Blocks drawn outside chunk meshes (moving pistons, falling blocks) keep the `vanilla_block`
     profile, without the extension attributes.
 * **Block entities.** They draw with the entity programs. Iris tells them apart by rendering phase
@@ -711,15 +738,12 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
     terrain uniforms (with the camera's matrices, as the main pass would); their fog colour is the
     previous frame's. Only Sodium's own shader reads it (fallback draws while a program compiles).
   * Activating or deactivating a pack, or a pack with other block ids, reloads Sodium's renderer
-    and remeshes every section; terrain drawn before the extended meshes exist stays unshaded
+    once and remeshes every section; terrain drawn before the extended meshes exist stays unshaded
     (in `fallback_tex`). The extended vertex costs 80% more terrain vertex memory (36 instead of
-    20 bytes) while a pack is active.
+    20 bytes) while a pack renders.
   * `mc_chunkFade` is 1 (Sodium's fade-in is not reproduced) and `at_tangent` is derived from the
     normal (the Sodium vertex has no tangent attribute, unlike ShaderBridge's extended vanilla
     vertex).
-  * Block ids resolve with `IdMapLookup` (the first matching entry in file order, blocks and tags
-    alike); the vanilla terrain path applies Iris' precedence (blocks before tags). They differ only
-    for packs whose tag entry precedes a block entry matching the same state.
   * `layer.*` render-layer overrides of `block.properties` are not applied.
 * **Distant Horizons:**
   * DH generic objects (`dh_generic`, §8) are drawn by replaying DH's generic renderer through
@@ -732,7 +756,8 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * Frustum culling is off while earth curvature is enabled.
   * The unified projection takes effect one frame after it is requested.
 * **Raw path:**
-  * GL backend: no raw path.
+  * GL backend (Minecraft 26.3's default): no raw path. Compute programs, custom images, SSBOs
+    and composite viewport scales need the player to select Vulkan.
   * Raw fullscreen draws generate no mipmaps.
   * Cube, array and multisampled images, runtime arrays and more than 4 descriptor sets are
     rejected.
@@ -753,6 +778,8 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   the pass) is skipped with its draws, with a diagnostic; that mod's geometry is missing while
   the pack renders.
 * **Diagnostics** are logged, summarized in toasts or chat, and listed in the pack screen.
+* **Closing a pack** never waits for a native call in flight (a compile or an on-demand variant
+  on a worker thread): the native session is released when that call returns.
 
 ## Verification
 
@@ -816,8 +843,12 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * Rust: `crates/sb-transform/tests/sodium_profile.rs` pins the profile to Sodium's vertex,
     push constants, `u_Globals` and samplers.
 * **Mixin targets.** `MixinTargetsTest`, `MixinMembersTest`, `RawMixinsTest`, `RedirectMixinsTest`, `ExpressionMixinsTest`, `GameTargetsTest`.
-* **Native library.** The native smoke tests (`nativeTest`) load the Rust library and compile
-  corpus packs.
+* **Native library.** `nativeTest`: `NativeSmokeTest` loads the Rust library and compiles a
+  minimal pack through JNI; `NativeCorpusSmokeTest` compiles ComplementaryReimagined through JNI
+  when a corpus is given (`-Pshaderbridge.corpus` or `SB_CORPUS_DIR`) and is skipped otherwise.
+* **Sessions and slot state.** `PackSessionTest` (closing never waits for a running native call),
+  `GeometrySlotTest` (per-slot blend and alpha reference), `TerrainVertexNoteTest`, and the
+  inheritance case of `AttachmentPlannerTest`.
 
 ### Compile-verified only (no GPU, no game)
 

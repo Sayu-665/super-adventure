@@ -87,7 +87,8 @@ class PackTexturesTest {
 
         PackTargets targets = new PackTargets(gpu.device(), GLIMMER.dim(), 64, 64, GpuFormat.D32_FLOAT, f -> 16384);
         List<String> missing = new ArrayList<>();
-        TextureResolver resolver = new TextureResolver(GLIMMER.dim(), targets, textures, new SamplerCache(), DepthMode.REVERSED_ZERO_TO_ONE, missing::add);
+        TextureResolver resolver = new TextureResolver(GLIMMER.dim(), targets, textures, new SamplerCache(), DepthMode.REVERSED_ZERO_TO_ONE, f -> true,
+            missing::add);
         Program finalPass = GLIMMER.program("world0/final", "fullscreen");
         HostStub host = new HostStub(gpu);
         assertSame(targets.color(2).orElseThrow().sampleView(true), resolver.resolve(new ResourceRef.ColorTex(2), true, finalPass, host).view());

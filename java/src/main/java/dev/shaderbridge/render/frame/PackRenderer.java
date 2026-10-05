@@ -5,11 +5,13 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
+import dev.shaderbridge.compat.sodium.SodiumIntegration;
 import dev.shaderbridge.dh.DhMode;
 import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
 import dev.shaderbridge.model.ShadowSettings;
+import dev.shaderbridge.render.chunk.ChunkMeshFormat;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.PipelineDiagnostics;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
@@ -22,6 +24,7 @@ import dev.shaderbridge.render.targets.Rgba;
 import dev.shaderbridge.uniforms.GameStateCapture;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
@@ -57,10 +60,11 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     /** Programs that draw Minecraft's chunk meshes. */
     private static final List<GeometryProgram> TERRAIN_SLOTS = List.of(GeometryProgram.TERRAIN, GeometryProgram.TERRAIN_SOLID,
         GeometryProgram.TERRAIN_CUTOUT, GeometryProgram.WATER);
-    /** What terrain programs see of Minecraft 26.3's chunk vertices. */
-    static final String TERRAIN_VERTEX_NOTE = "Minecraft 26.3's chunk meshes carry no normals, block ids or mid-texture coordinates; "
-        + "terrain and water programs read the normal (0, 1, 0), mc_Entity -1 and each vertex's own texture coordinate, so effects "
-        + "that depend on them (water and foliage detection, waving plants, material ids, normal-based lighting) do not work on terrain";
+    /** What terrain programs see of chunk vertices when the extended terrain vertex format cannot be used. */
+    static final String TERRAIN_VERTEX_NOTE = "chunk terrain keeps Minecraft's own vertices (%s): they carry no normals, block ids or "
+        + "mid-texture coordinates, so terrain and water programs read the normal (0, 1, 0), mc_Entity -1 and each vertex's own texture "
+        + "coordinate, and effects that depend on them (water and foliage detection, waving plants, material ids, normal-based lighting) "
+        + "do not work on terrain";
 
     private final PackResources r;
     private final GeometryPasses geometry;
@@ -71,6 +75,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     private LevelRenderer level;
     private GpuBufferSlice frameSlice;
     private boolean firstFrame = true;
+    /** The pack has a program for Minecraft's chunk terrain. */
+    private final boolean drawsTerrain;
+    private boolean terrainNoteReported;
     /** The frame's prepared features while {@link #beforeGeometry} runs. */
     private FeatureRenderDispatcher.PreparedFrame features;
     /** Drawing features into the shadow pass failed once: they cast no shadows for this pack. */
@@ -87,9 +94,35 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
             DhMode.castsShadows(resources.dim.distantHorizons(), resources.dim.targets().shadow()));
         plan.notes().forEach(n -> resources.diagnostics.report(resources.dim.folder() + ": " + n));
         this.shadows = new ShadowRenderer(plan, ShadowSections.SHADOW_FRUSTUM);
-        if (TERRAIN_SLOTS.stream().anyMatch(resources.dim.geometry()::containsKey)) {
-            resources.diagnostics.report(resources.dim.folder() + ": " + TERRAIN_VERTEX_NOTE);
+        this.drawsTerrain = TERRAIN_SLOTS.stream().anyMatch(resources.dim.geometry()::containsKey);
+    }
+
+    /**
+     * The note on chunk vertices for a pack that draws terrain: present only when the extended
+     * terrain vertex (normals, block ids, mid-texture coordinates, tangents, {@code at_midBlock})
+     * cannot be used. Sodium's terrain is extended by its own integration (packs are refused when
+     * that cannot work), so with Sodium there is nothing to report.
+     *
+     * @param sodiumShadesTerrain Sodium's integration is active (it meshes and draws terrain)
+     * @param unavailable         why Minecraft's chunk meshes cannot use the extended vertex, if so
+     * @return the diagnostic, or empty
+     */
+    static Optional<String> terrainVertexNote(boolean sodiumShadesTerrain, Optional<String> unavailable) {
+        if (sodiumShadesTerrain) {
+            return Optional.empty();
         }
+        return unavailable.map(reason -> String.format(TERRAIN_VERTEX_NOTE, reason));
+    }
+
+    /** Reports {@link #terrainVertexNote} once, as soon as the chunk mesh format knows it cannot switch. */
+    private void reportTerrainVertices() {
+        if (!drawsTerrain || terrainNoteReported) {
+            return;
+        }
+        terrainVertexNote(SodiumIntegration.active(), ChunkMeshFormat.unavailableReason()).ifPresent(note -> {
+            terrainNoteReported = true;
+            r.diagnostics.report(r.dim.folder() + ": " + note);
+        });
     }
 
     /**
@@ -113,8 +146,10 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         if (!compositesReady()) {
             return false;
         }
+        reportTerrainVertices();
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        if (r.targets.resize(main.width, main.height)) {
+        boolean resized = r.targets.resize(main.width, main.height);
+        if (resized) {
             r.sinks.close();
             r.passCopies.close();
         }
@@ -134,7 +169,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         r.distant.beginFrame(encoder, r.frameState.dhActive);
         RenderSystem.setShaderFog(terrainFog);
         this.level = level;
-        r.sequencer.begin(firstFrame);
+        // As Iris: setup computes run again after a resize, which recreated (and cleared) the
+        // screen-relative targets, custom images and storage buffers they initialize.
+        r.sequencer.begin(firstFrame || resized);
         firstFrame = false;
         if (shadows.drawsFeatures() && !featureShadowsFailed) {
             ShadowTransforms.startRecording();

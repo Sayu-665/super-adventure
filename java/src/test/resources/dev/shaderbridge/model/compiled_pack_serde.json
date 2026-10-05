@@ -797,7 +797,8 @@
           "push_constant_size": 16,
           "compute": null,
           "cull": false,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": true
         },
         {
           "name": "world0/dh_terrain",
@@ -831,7 +832,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": true,
-          "synthesized_from": "world0/gbuffers_terrain"
+          "synthesized_from": "world0/gbuffers_terrain",
+          "inherit_blend": false
         },
         {
           "name": "world0/composite3_b",
@@ -885,7 +887,8 @@
             ]
           },
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/shadow_a",
@@ -933,7 +936,8 @@
             "indirect": null
           },
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         },
         {
           "name": "world0/final",
@@ -968,7 +972,8 @@
           "push_constant_size": 0,
           "compute": null,
           "cull": null,
-          "synthesized_from": null
+          "synthesized_from": null,
+          "inherit_blend": false
         }
       ],
       "geometry": {
@@ -978,17 +983,34 @@
           "variants": {
             "sodium_terrain": 3,
             "vanilla_entity": 2
+          },
+          "blend": null,
+          "alpha_test": {
+            "func": "greater",
+            "reference": 0.1
           }
         },
         "damaged_block": {
           "program": 0,
           "resolved_from": "terrain",
-          "variants": {}
+          "variants": {},
+          "blend": {
+            "src_color": "src_alpha",
+            "dst_color": "one_minus_src_alpha",
+            "src_alpha": "one",
+            "dst_alpha": "one_minus_src_alpha"
+          },
+          "alpha_test": {
+            "func": "always",
+            "reference": 0.0
+          }
         },
         "dh_terrain": {
           "program": 1,
           "resolved_from": "dh_terrain",
-          "variants": {}
+          "variants": {},
+          "blend": null,
+          "alpha_test": null
         }
       },
       "passes": [

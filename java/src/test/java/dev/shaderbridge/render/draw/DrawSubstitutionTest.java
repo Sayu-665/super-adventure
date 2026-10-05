@@ -69,7 +69,9 @@ class DrawSubstitutionTest {
         DrawSubstitution s = new DrawSubstitution(DIM, p -> TERRAIN, programs);
         DrawSubstitution.Decision.Pack gbuffers = assertInstanceOf(DrawSubstitution.Decision.Pack.class, s.decide(SOLID, false));
         assertEquals(GeometryProgram.TERRAIN_SOLID, gbuffers.routed());
-        assertSame(DIM.programFor(GeometryProgram.TERRAIN_SOLID).orElseThrow(), gbuffers.program());
+        // The slot's program with the slot's blend and alpha test.
+        assertEquals(DIM.geometry().get(GeometryProgram.TERRAIN_SOLID).drawn(DIM.programFor(GeometryProgram.TERRAIN_SOLID).orElseThrow()),
+            gbuffers.program());
         assertSame(READY, gbuffers.resolution());
         DrawSubstitution.Decision.Pack shadow = assertInstanceOf(DrawSubstitution.Decision.Pack.class, s.decide(SOLID, true));
         assertEquals(GeometryProgram.TERRAIN_SOLID, shadow.routed(), "the render stage follows the gbuffers slot");
@@ -114,7 +116,8 @@ class DrawSubstitutionTest {
         DrawSubstitution.Decision.Pack generic = assertInstanceOf(DrawSubstitution.Decision.Pack.class,
             s.decideFor(SOLID, GeometryProgram.DH_GENERIC, "dh_generic", false));
         assertEquals(GeometryProgram.DH_GENERIC, generic.routed());
-        assertSame(DIM.programFor(GeometryProgram.DH_GENERIC).orElseThrow(), generic.program());
+        assertEquals(DIM.geometry().get(GeometryProgram.DH_GENERIC).drawn(DIM.programFor(GeometryProgram.DH_GENERIC).orElseThrow()),
+            generic.program());
         s.decideFor(SOLID, GeometryProgram.DH_GENERIC, "dh_generic", false);
         assertEquals(List.of("dh_generic dh_generic cull"), programs.calls, "decided once");
         assertEquals(List.of(), routed, "the vanilla table is not consulted");

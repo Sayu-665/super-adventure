@@ -80,7 +80,14 @@ class ModelJsonTest {
         GeometrySlot withVariants = ModelJson.parse("{\"program\":3,\"resolved_from\":\"terrain\",\"variants\":{\"sodium_terrain\":7}}", GeometrySlot.class);
         assertEquals(Map.of("sodium_terrain", 7), withVariants.variants());
         assertThrows(UnsupportedOperationException.class, () -> withVariants.variants().put("x", 1));
-        assertEquals("{\"program\":3,\"resolved_from\":\"terrain\",\"variants\":{\"sodium_terrain\":7}}", ModelJson.toJson(withVariants));
+        assertEquals("{\"program\":3,\"resolved_from\":\"terrain\",\"variants\":{\"sodium_terrain\":7},\"blend\":null,\"alpha_test\":null}",
+            ModelJson.toJson(withVariants), "as serde writes it");
+        assertNull(withVariants.blend(), "absent in older models");
+        assertNull(withVariants.alphaTest());
+        GeometrySlot withState = ModelJson.parse("{\"program\":3,\"resolved_from\":\"terrain\",\"alpha_test\":{\"func\":\"always\",\"reference\":0.0}}",
+            GeometrySlot.class);
+        assertEquals(new AlphaTest(AlphaFunc.ALWAYS, 0), withState.alphaTest());
+        assertFalse(ModelJson.parse("{\"program\":3,\"resolved_from\":\"terrain\"}", GeometrySlot.class).blend() != null);
 
         String use = "{\"name\":\"shadowtex0\",\"set\":1,\"binding\":4,\"use_alt\":false,\"stages\":[\"fragment\"]";
         BindingUse plain = ModelJson.parse(use + "}", BindingUse.class);

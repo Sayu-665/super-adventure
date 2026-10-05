@@ -289,6 +289,7 @@ fn base_program(name: &str, kind: ProgramKind) -> Program {
         compute: None,
         cull: None,
         synthesized_from: None,
+        inherit_blend: false,
     }
 }
 
@@ -654,6 +655,7 @@ fn pack() -> CompiledPack {
     terrain.output_slots = vec![0, 2];
     terrain.output_types = vec!["float".into(), "uint".into()];
     terrain.blend = Some(BlendMode::TRANSLUCENT);
+    terrain.inherit_blend = true;
     terrain.blend_per_buffer.insert(4, None);
     terrain.blend_per_buffer.insert(
         0,
@@ -722,9 +724,31 @@ fn pack() -> CompiledPack {
     let mut terrain_variants = IndexMap::new();
     terrain_variants.insert("sodium_terrain".to_string(), 3);
     terrain_variants.insert("vanilla_entity".to_string(), 2);
-    geometry.insert(GeometryProgram::Terrain, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain, variants: terrain_variants });
-    geometry.insert(GeometryProgram::DamagedBlock, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain, variants: IndexMap::new() });
-    geometry.insert(GeometryProgram::DhTerrain, GeometrySlot { program: 1, resolved_from: GeometryProgram::DhTerrain, variants: IndexMap::new() });
+    geometry.insert(
+        GeometryProgram::Terrain,
+        GeometrySlot {
+            program: 0,
+            resolved_from: GeometryProgram::Terrain,
+            variants: terrain_variants,
+            blend: None,
+            alpha_test: Some(AlphaTest { func: AlphaFunc::Greater, reference: 0.1 }),
+        },
+    );
+    geometry.insert(
+        GeometryProgram::DamagedBlock,
+        GeometrySlot {
+            program: 0,
+            resolved_from: GeometryProgram::Terrain,
+            variants: IndexMap::new(),
+            blend: Some(BlendMode::TRANSLUCENT),
+            alpha_test: Some(AlphaTest::OFF),
+        },
+    );
+    // A slot as models before slot blends and alpha tests existed wrote it.
+    geometry.insert(
+        GeometryProgram::DhTerrain,
+        GeometrySlot { program: 1, resolved_from: GeometryProgram::DhTerrain, variants: IndexMap::new(), blend: None, alpha_test: None },
+    );
 
     let world0 = DimensionPipeline {
         folder: "world0".into(),

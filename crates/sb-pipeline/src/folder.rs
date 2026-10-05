@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 use rayon::prelude::*;
 use sb_core::model::{
     AlphaTest, BindingTable, BindingUse, ColorTarget, ComputeInfo, DhPipeline, DhStrategy, DimensionPipeline, GeometrySlot,
-    PackSettings, Program, ProgramKind, RenderTargets, ResourceRef, ShadowSettings, StageModule, TargetSize, UniformLayout,
+    Program, ProgramKind, RenderTargets, ResourceRef, ShadowSettings, StageModule, TargetSize, UniformLayout,
     WorkGroups,
 };
 use sb_core::program::{GeometryGroup, GeometryProgram, PassGroup};
@@ -179,17 +179,6 @@ pub(crate) fn slot_units(
         };
     }
     (chain(g), None)
-}
-
-/// `backFace.*` → cull override of programs dedicated to one render layer.
-fn cull_of(identity: Option<GeometryProgram>, settings: &PackSettings) -> Option<bool> {
-    let key = match identity? {
-        GeometryProgram::TerrainSolid => "solid",
-        GeometryProgram::TerrainCutout => "cutout",
-        GeometryProgram::Water | GeometryProgram::BlockTranslucent => "translucent",
-        _ => return None,
-    };
-    settings.back_face.get(key).map(|render_back_faces| !render_back_faces)
 }
 
 /// Group rank of a composite-style program kind (for ordering).
@@ -558,14 +547,13 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     ok_keys.sort_by_key(|k| specs[*k].order);
     let mut index_of: HashMap<VariantKey, u32> = HashMap::new();
     let mut programs: Vec<Program> = Vec::new();
-    let back_settings = props.settings();
     for key in ok_keys {
         let spec = &specs[key];
         let Some(Ok(c)) = compiled.get(key) else { continue };
         stats.programs_ok += 1;
         stats.modules += c.stages.len();
         stats.modules_validated += c.validated_modules as usize;
-        let program = model_program(spec, c, &plan.units[key.unit], &directives, props, &binding_table, &back_settings, env, &mut diags, blobs);
+        let program = model_program(spec, c, &plan.units[key.unit], &directives, props, &binding_table, env, &mut diags, blobs);
         index_of.insert(key.clone(), programs.len() as u32);
         programs.push(program);
     }
@@ -601,8 +589,15 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
             (ProgramKind::Geometry { program }, Some(_)) => *program,
             _ => plan.units[u].geometry().unwrap_or(g),
         };
-        geometry.insert(g, GeometrySlot { program: idx, resolved_from, variants: IndexMap::new() });
-        slot_keys.push((g, VariantKey { unit: u, profile: r.profile.clone(), class: r.class, shadow_pass: r.shadow_pass }));
+        let key = VariantKey { unit: u, profile: r.profile.clone(), class: r.class, shadow_pass: r.shadow_pass };
+        // The slot's blend and alpha test are Iris' defaults for its geometry; a directive of
+        // the program drawing it applies to every slot it draws (Iris `ShaderCreator`).
+        let mut slot = GeometrySlot::new(idx, resolved_from, g);
+        if let Some(directive) = props.alpha_test_of(&specs[&key].props_name) {
+            slot.alpha_test = Some(directive);
+        }
+        geometry.insert(g, slot);
+        slot_keys.push((g, key));
     }
     // Each slot's program compiled for other draw profiles (variants other slots needed and
     // `profile_overrides`): the same unit, class and pass, and the same model identity.
@@ -957,7 +952,6 @@ pub(crate) fn model_program(
     directives: &FolderDirectives,
     props: &sb_pack::ShadersProperties,
     table: &BindingTable,
-    settings: &PackSettings,
     env: &sb_core::model::CompileEnvironment,
     diags: &mut Diagnostics,
     blobs: &mut BlobStore,
@@ -980,10 +974,15 @@ pub(crate) fn model_program(
         .iter()
         .map(|slot| c.fragment_outputs.iter().find(|(l, _)| l == slot).map(|(_, t)| t.clone()).unwrap_or_else(|| "float".into()))
         .collect();
-    let blend = match (&spec.kind, spec.identity) {
-        (ProgramKind::Compute { .. } | ProgramKind::GeometryCompute { .. }, _) => None,
-        (_, Some(g)) => props.blend_of(&spec.props_name).unwrap_or_else(|| g.default_blend()),
-        _ => props.blend_of(&spec.props_name).flatten(),
+    // Iris: `blend.<program>`, else the program file's own override (shadow: off;
+    // spidereyes), else the blend of the draw the program replaces (`inherit_blend`).
+    let (blend, inherit_blend) = match (&spec.kind, spec.identity) {
+        (ProgramKind::Compute { .. } | ProgramKind::GeometryCompute { .. }, _) => (None, false),
+        (_, Some(g)) => match props.blend_of(&spec.props_name) {
+            Some(directive) => (directive, false),
+            None => (g.default_blend(), g.program_blend_override().is_none()),
+        },
+        _ => (props.blend_of(&spec.props_name).flatten(), false),
     };
     let bindings_used: Vec<BindingUse> = c
         .resources_used
@@ -1038,8 +1037,10 @@ pub(crate) fn model_program(
         vertex_inputs: c.vertex_inputs.clone(),
         push_constant_size: c.push_constant_size,
         compute,
-        cull: cull_of(spec.identity, settings),
+        // Iris 26.3 parses `backFace.*` but never applies it: hosts keep the vanilla culling.
+        cull: None,
         synthesized_from: spec.synthesized_from.clone(),
+        inherit_blend,
     }
 }
 
@@ -1124,18 +1125,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phases_and_cull() {
+    fn phases() {
         assert_eq!(phase_of_slot(GeometryProgram::ShadowCutout), PassGroup::Shadow);
         assert_eq!(phase_of_slot(GeometryProgram::DhShadow), PassGroup::Shadow);
         assert_eq!(phase_of_slot(GeometryProgram::Water), PassGroup::GbuffersTranslucent);
         assert_eq!(phase_of_slot(GeometryProgram::DhWater), PassGroup::GbuffersTranslucent);
         assert_eq!(phase_of_slot(GeometryProgram::Terrain), PassGroup::GbuffersOpaque);
-        let mut s = PackSettings::default();
-        s.back_face.insert("solid".into(), true);
-        s.back_face.insert("translucent".into(), false);
-        assert_eq!(cull_of(Some(GeometryProgram::TerrainSolid), &s), Some(false));
-        assert_eq!(cull_of(Some(GeometryProgram::Water), &s), Some(true));
-        assert_eq!(cull_of(Some(GeometryProgram::TerrainCutout), &s), None);
-        assert_eq!(cull_of(Some(GeometryProgram::Terrain), &s), None);
     }
 }

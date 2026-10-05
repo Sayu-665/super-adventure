@@ -3,7 +3,7 @@
 //! Renderpearl compile check, and a per-session cache of whole variants keyed by
 //! everything a variant's translation reads ([`compile_job_cached`]).
 
-use crate::analysis::{Generations, Key, Memo, tag};
+use crate::analysis::{Generations, Key, tag};
 use indexmap::IndexMap;
 use sb_compile::{CompileOptions, Reflection, ValidationResult, VulkanTarget};
 use sb_core::model::{AlphaTest, CompileEnvironment, DepthMode, OutputTarget, ProgramKind, VertexInput};
@@ -21,29 +21,44 @@ pub type SpirvResult = Result<SpirvModule, Arc<Vec<Diagnostic>>>;
 /// Outcome of compiling one variant (shared with the session's variant cache).
 pub type VariantResult = Result<Arc<CompiledVariant>, Diagnostics>;
 
-/// Shared caches of a session.
+/// Shared caches of a session. Every table keeps two generations
+/// ([`crate::analysis::Generations`]): what the latest compile (and the on-demand variants
+/// since) used, and what the compile before it used. A long-lived session that recompiles
+/// after every option change therefore holds at most two compiles' worth of entries.
 #[derive(Debug, Default)]
 pub struct Caches {
-    /// Preprocessed stages and their analysis keys (two generations; see
+    /// Preprocessed stages and their analysis keys (see
     /// [`crate::analysis::AnalysisCaches::preprocessed`] for the key's scope).
     pub preprocessed: Generations<crate::analysis::PreprocessedStage>,
-    pub analysis: Memo<crate::analysis::AnalysisResult>,
-    /// Translated and compiled variants by [`variant_key`] (two generations), so a
-    /// recompile skips the transform of every program whose inputs did not change.
+    /// Analyzed stages (whole ASTs) by content.
+    pub analysis: Generations<crate::analysis::AnalysisResult>,
+    /// Translated and compiled variants by [`variant_key`], so a recompile skips the
+    /// transform of every program whose inputs did not change.
     pub variants: Generations<VariantResult>,
     /// Vulkan GLSL → SPIR-V + reflection (or the compile errors).
-    pub spirv: Memo<SpirvResult>,
-    pub validation: Memo<ValidationResult>,
+    pub spirv: Generations<SpirvResult>,
+    pub validation: Generations<ValidationResult>,
     /// Renderpearl GLSL compile check.
-    pub renderpearl: Memo<Result<(), Arc<Vec<Diagnostic>>>>,
+    pub renderpearl: Generations<Result<(), Arc<Vec<Diagnostic>>>>,
 }
 
 impl Caches {
-    /// Start a compile: rotate the generational caches (entries the previous compile did
-    /// not use are dropped).
+    /// Start a compile: rotate every table (entries the previous compile did not use are
+    /// dropped).
     pub fn start_compile(&self) {
         self.preprocessed.rotate();
+        self.analysis.rotate();
         self.variants.rotate();
+        self.spirv.rotate();
+        self.validation.rotate();
+        self.renderpearl.rotate();
+    }
+
+    /// Entries per table (preprocessed, analysis, variants, spirv, validation,
+    /// renderpearl), both generations counted.
+    #[cfg(test)]
+    pub fn entry_counts(&self) -> [usize; 6] {
+        [self.preprocessed.len(), self.analysis.len(), self.variants.len(), self.spirv.len(), self.validation.len(), self.renderpearl.len()]
     }
 }
 
@@ -181,8 +196,12 @@ pub fn compile_job_cached(job: &VariantJob<'_>, jenv: &JobEnv<'_>, stage_keys: &
 }
 
 fn transform_options(job: &VariantJob<'_>, env: &CompileEnvironment, target: OutputTarget, formats: &IndexMap<String, String>) -> TransformOptions {
-    // Fields not set here keep their defaults (e.g. `draw_parameters`: hosts draw with
-    // base instance 0, so `gl_InstanceID` is plain `gl_InstanceIndex`).
+    // Fields not set here keep their defaults. `draw_parameters` stays off, so
+    // `gl_InstanceID` becomes plain `gl_InstanceIndex`: right for draws with base instance 0,
+    // off by `firstInstance` on hosts that draw with another one (Minecraft 26.3's
+    // multi-draw-indirect terrain selects its per-section data with it). No corpus pack reads
+    // `gl_InstanceID`; `GL_ARB_shader_draw_parameters` would need a device feature Mojang does
+    // not enable.
     TransformOptions {
         target,
         depth_mode: env.depth_mode,
@@ -201,6 +220,29 @@ fn transform_options(job: &VariantJob<'_>, env: &CompileEnvironment, target: Out
     }
 }
 
+/// Hash of a line map. The glslang memos store diagnostics already mapped to the pack's
+/// files and lines, and the emitted GLSL does not encode those lines (it is printed from
+/// the AST), so the map is part of their keys: after lines move in a pack file, a
+/// recompile reports the new locations.
+fn line_map_key(line_map: &[Option<sb_core::SourceLocation>]) -> Key {
+    let mut h = blake3::Hasher::new();
+    for loc in line_map {
+        match loc {
+            Some(l) => {
+                h.update(&[1]);
+                h.update(&(l.file.len() as u64).to_le_bytes());
+                h.update(l.file.as_bytes());
+                h.update(&l.line.to_le_bytes());
+                h.update(&l.column.map_or(u32::MAX, |c| c).to_le_bytes());
+            }
+            None => {
+                h.update(&[0]);
+            }
+        }
+    }
+    *h.finalize().as_bytes()
+}
+
 fn compile_vulkan(
     glsl: &str,
     stage: ShaderStage,
@@ -208,7 +250,7 @@ fn compile_vulkan(
     line_map: &[Option<sb_core::SourceLocation>],
     caches: &Caches,
 ) -> SpirvResult {
-    let k = key(&[b"vk-v1", stage.name().as_bytes(), file.as_bytes(), glsl.as_bytes()]);
+    let k = key(&[b"vk-v2", stage.name().as_bytes(), file.as_bytes(), glsl.as_bytes(), &line_map_key(line_map)]);
     if let Some(r) = caches.spirv.get(&k) {
         return r;
     }
@@ -241,7 +283,7 @@ fn check_renderpearl(
     line_map: &[Option<sb_core::SourceLocation>],
     caches: &Caches,
 ) -> Result<(), Arc<Vec<Diagnostic>>> {
-    let k = key(&[b"rp-v1", stage.name().as_bytes(), file.as_bytes(), glsl.as_bytes()]);
+    let k = key(&[b"rp-v2", stage.name().as_bytes(), file.as_bytes(), glsl.as_bytes(), &line_map_key(line_map)]);
     if let Some(r) = caches.renderpearl.get(&k) {
         return r;
     }

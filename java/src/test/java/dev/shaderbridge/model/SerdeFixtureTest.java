@@ -219,7 +219,13 @@ class SerdeFixtureTest {
 
         DimensionPipeline world0 = pack.dimension("world0").orElseThrow();
         assertEquals(List.of(GeometryProgram.TERRAIN, GeometryProgram.DAMAGED_BLOCK, GeometryProgram.DH_TERRAIN), List.copyOf(world0.geometry().keySet()));
-        assertEquals(new GeometrySlot(0, GeometryProgram.TERRAIN), world0.geometry().get(GeometryProgram.DAMAGED_BLOCK));
+        BlendMode translucent = new BlendMode(BlendFactor.SRC_ALPHA, BlendFactor.ONE_MINUS_SRC_ALPHA, BlendFactor.ONE, BlendFactor.ONE_MINUS_SRC_ALPHA);
+        assertEquals(new GeometrySlot(0, GeometryProgram.TERRAIN, Map.of(), translucent, new AlphaTest(AlphaFunc.ALWAYS, 0)),
+            world0.geometry().get(GeometryProgram.DAMAGED_BLOCK));
+        assertEquals(new AlphaTest(AlphaFunc.GREATER, 0.1f), world0.geometry().get(GeometryProgram.TERRAIN).alphaTest());
+        // A slot as older models wrote it: no blend, no alpha test.
+        assertEquals(new GeometrySlot(1, GeometryProgram.DH_TERRAIN), world0.geometry().get(GeometryProgram.DH_TERRAIN));
+        assertTrue(world0.programs().get(0).inheritBlend());
         // Slot variants keep serde's (insertion) order.
         Map<String, Integer> variants = world0.geometry().get(GeometryProgram.TERRAIN).variants();
         assertEquals(List.of("sodium_terrain", "vanilla_entity"), List.copyOf(variants.keySet()));

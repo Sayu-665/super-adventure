@@ -26,7 +26,10 @@
 //! resources, gets separate entries: the first keeps the name, the others are named
 //! [`conflict_name`]`(name, suffix)` = `sb_as_<suffix>_<name>` (`sb_as_shadow_shadowtex1`,
 //! `sb_as_uint_colortex2`, `sb_as_3d_colortex0`; see [`crate::naming`]), with a
-//! `binding.kind-conflict` / `binding.resource-conflict` warning. Use the name returned
+//! `binding.kind-conflict` / `binding.resource-conflict` warning (only an info,
+//! `binding.class-resource`, when one side is [`ResourceRef::White`]: ShaderBridge's own
+//! per-class mapping of `gtexture` and the overlay sampler in Distant Horizons programs).
+//! Use the name returned
 //! by [`BindingTableBuilder::add`], or [`find_binding`], to find the entry for a
 //! declaration. Storage-image declarations of the same name are merged: memory
 //! qualifiers are kept only if every declaration has them, and the first format wins.
@@ -166,8 +169,19 @@ impl BindingTableBuilder {
             Some(primary) => {
                 let variant = conflict_name(name, &variant_suffix(primary, &kind, &resource));
                 let kind_conflict = kind_key(&primary.kind) != key;
-                diagnostics.push(Diagnostic::warning(
-                    if kind_conflict { "binding.kind-conflict" } else { "binding.resource-conflict" },
+                // ShaderBridge itself maps a name to different resources by program class
+                // (`gtexture` and the overlay sampler are white in Distant Horizons programs,
+                // as in Iris): that is no problem of the pack, so it is only a note.
+                let by_class = !kind_conflict && (primary.resource == ResourceRef::White || resource == ResourceRef::White);
+                let make = if by_class { Diagnostic::info } else { Diagnostic::warning };
+                diagnostics.push(make(
+                    if kind_conflict {
+                        "binding.kind-conflict"
+                    } else if by_class {
+                        "binding.class-resource"
+                    } else {
+                        "binding.resource-conflict"
+                    },
                     if kind_conflict {
                         format!(
                             "`{name}` is declared as {} and as {}; the second gets its own binding `{variant}`",
@@ -701,6 +715,13 @@ mod tests {
                 "binding.kind-conflict"
             ]
         );
+        // `gtexture` is the atlas in gbuffers programs and white in DH programs: ShaderBridge's
+        // own mapping, reported as an info only.
+        let mut c = BindingTableBuilder::new();
+        assert_eq!(c.add("gtexture", s2d(), R::Atlas), "gtexture");
+        assert_eq!(c.add("gtexture", s2d(), R::White), "sb_as_white_gtexture");
+        let d: Vec<(&str, bool)> = c.diagnostics().iter().map(|d| (d.code.as_str(), d.is_error() || d.severity == sb_core::Severity::Warning)).collect();
+        assert_eq!(d, vec![("binding.class-resource", false)]);
         // A canonical name that equals an existing variant name is made unique.
         assert_eq!(
             b.add(

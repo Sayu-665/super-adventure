@@ -8,6 +8,8 @@ import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.model.ResourceRef;
 import dev.shaderbridge.render.RenderFixture;
+import dev.shaderbridge.render.pipeline.SpirvReflection;
+import dev.shaderbridge.render.pipeline.TextureFormats;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,6 +33,24 @@ class SamplerChoiceTest {
         @Override
         public Optional<TargetSpec> shadowColor(int index) {
             return Optional.ofNullable(SHADOW.get(index));
+        }
+
+        @Override
+        public boolean linearFilterable(GpuFormat format) {
+            return true;
+        }
+    };
+
+    /** A device that filters only the formats Vulkan guarantees (no 32-bit float or depth filtering). */
+    private static final SamplerChoice.Targets MINIMAL_DEVICE = new SamplerChoice.Targets() {
+        @Override
+        public Optional<TargetSpec> color(int index) {
+            return TARGETS.color(index);
+        }
+
+        @Override
+        public Optional<TargetSpec> shadowColor(int index) {
+            return TARGETS.shadowColor(index);
         }
     };
 
@@ -100,5 +120,19 @@ class SamplerChoiceTest {
         assertEquals(SamplerSpec.NEAREST_CLAMP, SamplerChoice.of(new ResourceRef.ColorTex(0), DIM, composite90, targets),
             "their mipmaps are not generated, even when the program asks for them");
         assertEquals(SamplerSpec.NEAREST_CLAMP, SamplerChoice.of(new ResourceRef.ShadowColor(0), DIM, composite90, targets));
+    }
+
+    /**
+     * Formats the device cannot filter linearly are sampled with nearest filtering (linear
+     * sampling of them is undefined in Vulkan), as the headless executor does.
+     */
+    @Test
+    void formatsWithoutLinearFilteringAreSampledNearest() {
+        Program final_ = GLIMMER.program("world0/final", "fullscreen");
+        assertEquals(SamplerSpec.NEAREST_CLAMP, SamplerChoice.of(new ResourceRef.ShadowTex(0), DIM, final_, MINIMAL_DEVICE), "D32_FLOAT shadow map");
+        COLOR.values().forEach(t -> {
+            boolean filterable = TextureFormats.filterable(t.format()) && TextureFormats.numericClass(t.format()) == SpirvReflection.ScalarClass.FLOAT;
+            assertEquals(filterable, SamplerChoice.of(new ResourceRef.ColorTex(t.index()), DIM, final_, MINIMAL_DEVICE).linear(), "colortex" + t.index() + " " + t.format());
+        });
     }
 }

@@ -71,7 +71,7 @@ public final class PackPipelineFactory {
                 problems.addAll(capabilities.modules().problems(variant.blobs().spirv(module.spirv()), module.stage()));
             }
         }
-        AttachmentPlan attachments = AttachmentPlanner.plan(program, layout, iface.fragmentOutputs(), capabilities);
+        AttachmentPlan attachments = AttachmentPlanner.plan(program, shape.hostBlend(), layout, iface.fragmentOutputs(), capabilities);
         problems.addAll(attachments.problems());
         BindingPlan bindings = BindingPlan.of(iface, program, dim.bindings(), dim.uniforms(), profiles.profile(variant.profile()));
         bindings.unresolved().forEach(n -> problems.add("nothing provides descriptor " + n));

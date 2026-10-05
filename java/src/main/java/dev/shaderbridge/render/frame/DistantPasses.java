@@ -232,7 +232,9 @@ final class DistantPasses {
         // The shadow pass draws without back-face culling, as for vanilla geometry.
         PipelineShape drawn = shadow ? shape.get().withCull(false) : shape.get();
         ProgramResolver.GeometryResolution resolution = r.programs.geometry(slot, profile, drawn, shadow);
-        Program program = programOf(resolution.program());
+        Program chainProgram = programOf(resolution.program());
+        // The slot's blend and alpha test (dh_water blends, dh_terrain does not).
+        Program program = chainProgram == null ? null : r.programs.drawn(slot, chainProgram);
         return resolution.resolution() instanceof ProgramResolution.Renderpearl rp && program != null ? Optional.of(new Resolved(program, rp))
             : Optional.empty();
     }

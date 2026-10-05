@@ -2,7 +2,9 @@ package dev.shaderbridge.render.frame;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import dev.shaderbridge.model.DepthMode;
 import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.pack.LoadedPack;
@@ -24,6 +26,7 @@ import dev.shaderbridge.render.pipeline.ProgramResolver;
 import dev.shaderbridge.render.pipeline.RawPath;
 import dev.shaderbridge.render.raw.RawBackend;
 import dev.shaderbridge.render.raw.RawContext;
+import dev.shaderbridge.render.raw.VulkanContext;
 import dev.shaderbridge.render.pipeline.SessionVariantCompiler;
 import dev.shaderbridge.render.pipeline.SpirvModules;
 import dev.shaderbridge.render.targets.PackFiles;
@@ -44,8 +47,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.Util;
+import org.lwjgl.vulkan.VK10;
 
 /**
  * Everything one dimension pipeline of an active pack renders with: render targets and textures,
@@ -113,7 +118,8 @@ final class PackResources implements AutoCloseable {
                     files.read(path).ifPresent(data -> rawFiles.put(path, data));
                 }
             }
-            this.textureResolver = new TextureResolver(dim, targets, textures, RenderSystem.getSamplerCache(), depthMode, diagnostics::report);
+            this.textureResolver = new TextureResolver(dim, targets, textures, RenderSystem.getSamplerCache(), depthMode, linearFilter(device),
+                diagnostics::report);
             this.raw = own(backend.open(new RawContext(dim, depthMode, targets, textureResolver, this::host,
                 () -> minecraft.gameRenderer.mainRenderTarget().getColorTexture().getFormat(), diagnostics, Util.backgroundExecutor()),
                 pack.blobs(), rawFiles));
@@ -141,6 +147,18 @@ final class PackResources implements AutoCloseable {
             close();
             throw e;
         }
+    }
+
+    /**
+     * @param device Minecraft's GPU device
+     * @return which formats the device samples with linear filtering: on Vulkan, those with
+     *     {@code SAMPLED_IMAGE_FILTER_LINEAR} (as the headless executor checks); on OpenGL every
+     *     non-integer format, which desktop GL can filter
+     */
+    private static Predicate<GpuFormat> linearFilter(GpuDevice device) {
+        return VulkanContext.of(device)
+            .<Predicate<GpuFormat>>map(vk -> format -> (vk.formatFeatures(VulkanConst.toVk(format)) & VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0)
+            .orElse(format -> true);
     }
 
     /** @return the game's textures (block atlas as albedo, lightmap, depth, Distant Horizons textures) for the current frame */

@@ -1,6 +1,8 @@
 package dev.shaderbridge.render.pipeline;
 
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
@@ -28,6 +30,10 @@ import java.util.Optional;
  * @param polygonMode      polygon mode
  * @param pushConstantSize push constant bytes the host pushes (0 if none)
  * @param hostUniforms     descriptors the host declares, by name
+ * @param hostBlend        the blend of the draw the shape replaces, for programs that inherit it
+ *                         ({@code Program.inheritBlend}, as Iris keeps the vanilla pipeline's
+ *                         blend): empty for no blending; null when the shape replaces no draw
+ *                         (the program's own blend applies)
  */
 public record PipelineShape(
     String id,
@@ -37,7 +43,8 @@ public record PipelineShape(
     boolean cull,
     PolygonMode polygonMode,
     int pushConstantSize,
-    Map<String, BindGroupLayout.UniformDescription> hostUniforms
+    Map<String, BindGroupLayout.UniformDescription> hostUniforms,
+    Optional<BlendFunction> hostBlend
 ) {
     public PipelineShape {
         List<VertexFormat> trimmed = new ArrayList<>(vertexBindings);
@@ -59,9 +66,20 @@ public record PipelineShape(
         for (BindGroupLayout.UniformDescription u : BindGroupLayout.flattenUniforms(vanilla.getBindGroupLayouts())) {
             host.putIfAbsent(u.name(), u);
         }
+        List<ColorTargetState> colors = vanilla.getColorTargetStates();
+        Optional<BlendFunction> blend = colors.isEmpty() || colors.getFirst() == null ? Optional.empty() : colors.getFirst().blendFunction();
         return new PipelineShape(vanilla.getLocation().getNamespace() + "/" + vanilla.getLocation().getPath(), vanilla.getVertexFormatBindings(),
             vanilla.getPrimitiveTopology(), vanilla.getDepthStencilState(), vanilla.isCull(), vanilla.getPolygonMode(), vanilla.pushConstantSize(),
-            host);
+            host, blend);
+    }
+
+    /**
+     * @param suffix what tells this use of the shape apart (the geometry slot it draws)
+     * @return this shape with the suffix appended to its id: the blend of an inheriting program
+     *     depends on the slot it draws, so pipelines of different slots must not share a key
+     */
+    public PipelineShape forSlot(String suffix) {
+        return new PipelineShape(id + "/" + suffix, vertexBindings, topology, depth, cull, polygonMode, pushConstantSize, hostUniforms, hostBlend);
     }
 
     /**
@@ -70,7 +88,7 @@ public record PipelineShape(
      *     Iris and the headless executor do)
      */
     public PipelineShape withCull(boolean enabled) {
-        return new PipelineShape(id, vertexBindings, topology, depth, enabled, polygonMode, pushConstantSize, hostUniforms);
+        return new PipelineShape(id, vertexBindings, topology, depth, enabled, polygonMode, pushConstantSize, hostUniforms, hostBlend);
     }
 
     /**
@@ -86,7 +104,8 @@ public record PipelineShape(
      */
     public static Optional<PipelineShape> ofProfile(String profile, ProfileVertexFormats formats, PrimitiveTopology topology, DepthStencilState depth,
                                                     boolean cull) {
-        return formats.bindings(profile).map(bindings -> new PipelineShape(profile, bindings, topology, depth, cull, PolygonMode.FILL, 0, Map.of()));
+        return formats.bindings(profile).map(bindings -> new PipelineShape(profile, bindings, topology, depth, cull, PolygonMode.FILL, 0, Map.of(),
+            null));
     }
 
     /**
@@ -94,6 +113,6 @@ public record PipelineShape(
      *     (two triangles) generated from the vertex index, no buffers, no depth test
      */
     public static PipelineShape fullscreen() {
-        return new PipelineShape("fullscreen", List.of(), PrimitiveTopology.TRIANGLES, null, false, PolygonMode.FILL, 0, Map.of());
+        return new PipelineShape("fullscreen", List.of(), PrimitiveTopology.TRIANGLES, null, false, PolygonMode.FILL, 0, Map.of(), null);
     }
 }

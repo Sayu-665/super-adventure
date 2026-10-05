@@ -9,7 +9,9 @@ use crate::descriptors::BindContext;
 use crate::error::{RuntimeError, VkResultExt};
 use crate::executor::{ColorPair, Executor, ProgramState, default_clear};
 use crate::math::celestial;
-use crate::pipelines::{AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, dispatches_over_shadow_map, gl_blend_factor, output_blend, output_class};
+use crate::pipelines::{
+    AttachmentState, NULL_VERTEX_BINDING, Role, VariantKey, dispatch_size, dispatches_over_shadow_map, gl_blend_factor, output_blend, output_blend_over, output_class,
+};
 use crate::resources::{ImageDesc, ImageId, clear_color_value, full_barrier, host_read_barrier};
 use crate::scene::formats::{SODIUM_TERRAIN, VertexLayout};
 use crate::scene::sky;
@@ -332,8 +334,14 @@ impl Executor<'_> {
         for (i, p) in &self.targets.shadow_color {
             clear_pair(&self.arena, *i, p, true);
         }
+        // The attachments (main depth, the LOD depth `dhDepthTex0`, `shadowtex0`) every frame;
+        // the copies (`depthtex1`, `depthtex2`, `dhDepthTex1`, `shadowtex1`) only on the first
+        // frame: as in Iris, programs running before this frame's copy see the previous one.
         let depth_clear = vk::ClearDepthStencilValue { depth: self.depth.clear, stencil: 0 };
-        for img in self.targets.depth.iter().chain(&self.targets.dh_depth).chain(&self.targets.shadow) {
+        let attachments = [self.targets.depth[0], self.targets.dh_depth[0], self.targets.shadow[0]];
+        let copies = [self.targets.depth[1], self.targets.depth[2], self.targets.dh_depth[1], self.targets.shadow[1]];
+        let first = if frame == 0 { &copies[..] } else { &[] };
+        for img in attachments.iter().chain(first) {
             let i = self.arena.image(*img);
             unsafe { d.cmd_clear_depth_stencil_image(cmd, i.image, vk::ImageLayout::GENERAL, &depth_clear, &[i.full_range()]) };
         }
@@ -597,36 +605,30 @@ impl Executor<'_> {
         });
     }
 
-    /// Whether a terrain layer renders its back faces: `backFace.<layer>` (OptiFine; the
-    /// cutout layer also honours `backFace.cutoutMipped`, merged into cutout since
-    /// Minecraft 1.21.5). Minecraft culls every terrain layer by default; Iris 26.3 parses
-    /// these keys but ignores them.
-    fn back_faces(&self, keys: &[&str]) -> bool {
-        keys.iter().any(|k| self.dim.settings.back_face.get(*k).copied().unwrap_or(false))
-    }
-
     fn terrain_batches(&self, out: &mut Vec<Batch>, fs: &FrameState, shadow: bool, translucent: bool) {
         let mut s = self.base_state(fs, shadow);
         s.texture_size = [64, 64];
-        let mk = |g, what, mesh, st: i32, back_faces: bool| {
+        // Minecraft culls every terrain layer. `backFace.<layer>` (OptiFine) is not applied:
+        // Iris 26.3 parses it but ignores it, and so does the model (`Program::cull`).
+        let mk = |g, what, mesh, st: i32| {
             let mut state = s.clone();
             state.render_stage = st;
-            Batch { geometry: g, what, mesh, state, albedo: self.tex.atlas, depth_write: true, cull_back: !back_faces, shadow }
+            Batch { geometry: g, what, mesh, state, albedo: self.tex.atlas, depth_write: true, cull_back: true, shadow }
         };
         if translucent {
             if self.scene.water.is_some() {
                 let g = if shadow { GeometryProgram::ShadowWater } else { GeometryProgram::Water };
-                out.push(mk(g, "water", MeshRef::Water, stage::TERRAIN_TRANSLUCENT, self.back_faces(&["translucent"])));
+                out.push(mk(g, "water", MeshRef::Water, stage::TERRAIN_TRANSLUCENT));
             }
             return;
         }
         if self.scene.solid.is_some() {
             let g = if shadow { GeometryProgram::ShadowSolid } else { GeometryProgram::TerrainSolid };
-            out.push(mk(g, "terrain", MeshRef::Solid, stage::TERRAIN_SOLID, self.back_faces(&["solid"])));
+            out.push(mk(g, "terrain", MeshRef::Solid, stage::TERRAIN_SOLID));
         }
         if self.scene.cutout.is_some() {
             let g = if shadow { GeometryProgram::ShadowCutout } else { GeometryProgram::TerrainCutout };
-            out.push(mk(g, "leaves", MeshRef::Cutout, stage::TERRAIN_CUTOUT, self.back_faces(&["cutout", "cutoutMipped"])));
+            out.push(mk(g, "leaves", MeshRef::Cutout, stage::TERRAIN_CUTOUT));
         }
     }
 
@@ -739,6 +741,9 @@ impl Executor<'_> {
                 continue;
             }
             let outputs = prepared.output_classes();
+            // The slot's blend for programs that keep the blend of the geometry they draw
+            // (Iris: the vanilla pipeline's state), and the slot's alpha test reference.
+            let base_blend = slot.blend_for(program);
             // Terrain for programs translated for Sodium's mesh format comes from the
             // Sodium buffers.
             let mut mesh = b.mesh;
@@ -792,7 +797,7 @@ impl Executor<'_> {
                     self.warn(format!("{}: output {i} (target {t}) maps to attachment slot {loc}, which holds another target", program.name));
                 }
                 if let (Some(st), Some(m)) = (states.get_mut(loc), mapped.get_mut(loc)) {
-                    st.blend = output_blend(program, t);
+                    st.blend = output_blend_over(program, t, base_blend);
                     *m = true;
                 }
             }
@@ -814,8 +819,8 @@ impl Executor<'_> {
             };
             let mut batch = b.clone();
             batch.mesh = mesh;
-            batch.state.alpha_test_ref = program.alpha_test.map_or(0.0, |a| a.reference);
-            batch.state.blend_func = match program.blend {
+            batch.state.alpha_test_ref = slot.alpha_test_ref(program);
+            batch.state.blend_func = match base_blend {
                 Some(m) => [gl_blend_factor(m.src_color), gl_blend_factor(m.dst_color), gl_blend_factor(m.src_alpha), gl_blend_factor(m.dst_alpha)],
                 None => [0; 4],
             };
