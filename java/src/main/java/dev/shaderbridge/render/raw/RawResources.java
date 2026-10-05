@@ -142,7 +142,13 @@ final class RawResources implements AutoCloseable {
             warnings.accept(name + ": the device cannot sample " + upload.format() + " images; it is not created");
             return;
         }
-        VmaImage image = VmaImage.create(ctx, vkFormat, upload.dimensions(), upload.width(), upload.height(), upload.depth(), VmaImage.TEXTURE_USAGE);
+        VmaImage image;
+        try {
+            image = VmaImage.create(ctx, vkFormat, upload.dimensions(), upload.width(), upload.height(), upload.depth(), VmaImage.TEXTURE_USAGE);
+        } catch (RawVulkanException e) {
+            warnings.accept(name + " cannot be created: " + e.getMessage());
+            return;
+        }
         textures.put(upload.id(), new Texture(image, upload.format(), upload.linear(), upload.repeat()));
         texels.put(image, upload.texels());
         init.created(image, false);
