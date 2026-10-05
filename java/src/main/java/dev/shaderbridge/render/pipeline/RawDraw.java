@@ -18,12 +18,16 @@ import java.util.Optional;
  * @param drawUniforms   the {@code sb_Draw} block of the draw
  * @param colorAlt       per colortex index: its current contents are in the alternate texture
  * @param shadowColorAlt per shadowcolor index: its current contents are in the alternate texture
+ * @param viewport       the draw's viewport ({@code scale.<program>}); the scissor is the whole extent
  */
 public record RawDraw(List<Optional<GpuTextureView>> attachments, int width, int height, long frame, GpuBufferSlice frameUniforms,
-                      GpuBufferSlice drawUniforms, List<Boolean> colorAlt, List<Boolean> shadowColorAlt) {
+                      GpuBufferSlice drawUniforms, List<Boolean> colorAlt, List<Boolean> shadowColorAlt, ViewportRect viewport) {
     public RawDraw {
         attachments = List.copyOf(attachments);
         colorAlt = List.copyOf(colorAlt);
         shadowColorAlt = List.copyOf(shadowColorAlt);
+        if (viewport == null) {
+            viewport = new ViewportRect(0, 0, width, height);
+        }
     }
 }

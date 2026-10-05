@@ -4,20 +4,17 @@ import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import dev.shaderbridge.uniforms.DrawState;
 import dev.shaderbridge.uniforms.FrameState;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * The {@code sb_Draw} block of every kind of draw ({@link DrawKey}) in one frame. Buffers may only
- * be written outside render passes, but which kinds of draws occur is only known inside them, when
- * Minecraft binds its pipelines. So every kind seen so far gets its block written before the
- * frame's first pass ({@link #prepare}), and a kind seen for the first time draws with the frame's
- * default block (camera or shadow matrices, no alpha test, no blending) until the next frame.
- * Render thread only.
+ * The {@code sb_Draw} block of every kind of draw ({@link DrawKey}) in one frame. Which kinds of
+ * draws occur is only known inside render passes, when Minecraft binds its pipelines; the block of
+ * a kind is written the first time the kind is drawn in a frame, through a writer that may write
+ * inside a pass ({@code DrawUniforms} writes host-visible pages), and reused by the frame's later
+ * draws of the kind. Render thread only.
  */
 public final class DrawSlots {
-    /** Writes one block and returns the slice it will occupy once uploaded. */
+    /** Writes one block and returns the slice it occupies; callable inside render passes. */
     @FunctionalInterface
     public interface BlockWriter {
         /**
@@ -28,52 +25,54 @@ public final class DrawSlots {
         GpuBufferSlice push(FrameState frame, DrawState draw);
     }
 
-    /** At most this many kinds are remembered (a safety net against unbounded keys). */
+    /** At most this many kinds get blocks of their own per frame (a safety net against unbounded keys). */
     static final int MAX_KEYS = 4096;
 
-    private final Set<DrawKey> known = new LinkedHashSet<>();
     private final Map<DrawKey, GpuBufferSlice> slices = new HashMap<>();
     private final DrawState scratch = new DrawState();
+    private FrameState frame;
+    private BlockWriter writer;
     private GpuBufferSlice cameraDefault;
     private GpuBufferSlice shadowDefault;
 
     /**
-     * Writes the blocks of every known kind and the two defaults. Call before the frame's first
-     * render pass, then upload the written blocks.
+     * Starts a frame: forgets the previous frame's blocks and writes the two default blocks
+     * (camera and shadow matrices, no alpha test, no blending), used for kinds past
+     * {@link #MAX_KEYS}.
      *
      * @param frame  the frame, {@linkplain FrameState#update() updated}
      * @param writer the block writer of the frame
      */
     public void prepare(FrameState frame, BlockWriter writer) {
+        this.frame = frame;
+        this.writer = writer;
         slices.clear();
-        cameraDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, false, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
-        shadowDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, true, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
-        for (DrawKey key : known) {
-            slices.put(key, write(frame, writer, key));
-        }
+        cameraDefault = write(new DrawKey("", RenderStages.NONE, false, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
+        shadowDefault = write(new DrawKey("", RenderStages.NONE, true, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
     }
 
     /**
      * @param key a kind of draw
-     * @return its block, or the frame's default block when the kind is new (it gets its own block
-     *     from the next frame on)
+     * @return its block in this frame, written now if the kind was not drawn before in this frame
      * @throws IllegalStateException before the first {@link #prepare}
      */
     public GpuBufferSlice slice(DrawKey key) {
-        if (cameraDefault == null) {
+        if (writer == null) {
             throw new IllegalStateException("prepare() was not called");
         }
         GpuBufferSlice slice = slices.get(key);
         if (slice != null) {
             return slice;
         }
-        if (known.size() < MAX_KEYS) {
-            known.add(key);
+        if (slices.size() >= MAX_KEYS) {
+            return key.shadow() ? shadowDefault : cameraDefault;
         }
-        return key.shadow() ? shadowDefault : cameraDefault;
+        slice = write(key);
+        slices.put(key, slice);
+        return slice;
     }
 
-    private GpuBufferSlice write(FrameState frame, BlockWriter writer, DrawKey key) {
+    private GpuBufferSlice write(DrawKey key) {
         key.apply(frame, scratch);
         return writer.push(frame, scratch);
     }

@@ -21,7 +21,10 @@ import java.util.Optional;
  *   {@code DhApiBeforeFogRenderEvent};</li>
  *   <li>its SSAO is turned off and its frustum culling disabled through API config overrides;</li>
  *   <li>its translucent LOD pass is deferred ({@code setDeferTransparentRendering}), so its first
- *   pass hands over the opaque half only.</li>
+ *   pass hands over the opaque half only;</li>
+ *   <li>when ShaderBridge draws Distant Horizons' generic objects itself, its own generic rendering
+ *   is turned off through the API config ({@code genericRendering().renderingEnabled()}), so the
+ *   objects' per-frame callbacks run once, in ShaderBridge's replay.</li>
  * </ul>
  *
  * When the LODs cannot be handed over, Distant Horizons' rendering is switched off instead
@@ -40,6 +43,9 @@ final class DhApiControl {
     private static Boolean previousCulling;
     private static boolean previousDefer;
     private static Boolean previousRendering;
+    private static boolean holdingGeneric;
+    private static Boolean previousGeneric;
+    private static boolean genericWanted;
 
     private DhApiControl() {
     }
@@ -82,9 +88,11 @@ final class DhApiControl {
     /**
      * Takes Distant Horizons' output over (idempotent).
      *
+     * @param replayGeneric ShaderBridge draws the generic objects itself: switch Distant Horizons'
+     *                      own generic rendering off (remembering whether the player had it on)
      * @return whether the API was ready (Distant Horizons has finished starting up)
      */
-    static boolean takeOver() {
+    static boolean takeOver(boolean replayGeneric) {
         if (holding) {
             return true;
         }
@@ -103,9 +111,26 @@ final class DhApiControl {
         g.ambientOcclusion().enabled().setValue(false, CALLER);
         g.disableFrustumCulling().setValue(true, CALLER);
         DhApi.Delayed.renderProxy.setDeferTransparentRendering(true);
+        if (replayGeneric) {
+            IDhApiConfigValue<Boolean> generic = g.genericRendering().renderingEnabled();
+            genericWanted = Boolean.TRUE.equals(generic.getValue());
+            previousGeneric = generic.getApiValue();
+            generic.setValue(false, CALLER);
+            holdingGeneric = true;
+        } else {
+            genericWanted = false;
+        }
         suppressing = true;
         holding = true;
         return true;
+    }
+
+    /**
+     * @return whether the player has Distant Horizons' generic objects on, while ShaderBridge holds
+     *     its output and draws them itself
+     */
+    static boolean genericWanted() {
+        return holding && holdingGeneric && genericWanted;
     }
 
     /**
@@ -143,6 +168,10 @@ final class DhApiControl {
         IDhApiGraphicsConfig g = DhApi.Delayed.configs.graphics();
         restore(g.ambientOcclusion().enabled(), previousSsao);
         restore(g.disableFrustumCulling(), previousCulling);
+        if (holdingGeneric) {
+            holdingGeneric = false;
+            restore(g.genericRendering().renderingEnabled(), previousGeneric);
+        }
         DhApi.Delayed.renderProxy.setDeferTransparentRendering(previousDefer);
     }
 

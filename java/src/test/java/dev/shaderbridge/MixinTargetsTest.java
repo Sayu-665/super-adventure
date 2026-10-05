@@ -132,6 +132,11 @@ class MixinTargetsTest {
         Method target = matches.getFirst();
         Type[] handlerArgs = Type.getArgumentTypes(handler.desc);
         Type[] targetArgs = Type.getArgumentTypes(target);
+        if (handlerArgs.length == 1 && targetArgs.length > 0) {
+            // Mixin also accepts a handler that declares the callback info alone (one handler for several targets).
+            assertTrue(handlerArgs[0].getInternalName().startsWith(CALLBACK_INFO.substring(1)), where + ": the only parameter is the callback info");
+            return;
+        }
         assertTrue(handlerArgs.length == targetArgs.length + 1, where + ": handler takes the target's parameters and the callback info");
         for (int i = 0; i < targetArgs.length; i++) {
             assertEquals(targetArgs[i], handlerArgs[i], where + ": parameter " + i);

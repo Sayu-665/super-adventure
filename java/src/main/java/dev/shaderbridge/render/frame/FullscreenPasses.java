@@ -12,11 +12,12 @@ import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.shaderbridge.model.PassGroup;
 import dev.shaderbridge.model.Program;
-import dev.shaderbridge.model.ViewportScale;
+import dev.shaderbridge.render.draw.PassViewport;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.AttachmentPlan;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
 import dev.shaderbridge.render.pipeline.RawDraw;
+import dev.shaderbridge.render.pipeline.ViewportRect;
 import dev.shaderbridge.render.targets.ColorPair;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,8 +29,10 @@ import net.minecraft.client.renderer.RenderPipelines;
  * Draws composite-style programs: each in its own render pass over its output targets (the
  * {@link FlipState#write} textures, or Minecraft's main color target for {@code final}) as the
  * {@code fullscreen} profile's six vertices, with its inputs bound per {@code BindingUse.use_alt},
- * through renderpearl or, for programs only raw Vulkan can run, the raw path. The mipmaps a
- * program asks for are generated just before it ({@link MipGenerator}).
+ * through renderpearl or, for programs only raw Vulkan can run, the raw path, in the viewport
+ * its {@code scale.<program>} asks for ({@link ViewportRect}; renderpearl passes get it through
+ * {@link PassViewport} on the Vulkan backend). The mipmaps a program asks for are generated just
+ * before it ({@link MipGenerator}).
  * Also performs the copies around them: {@code colortex0} to the main target when no
  * {@code final} program drew, and the end-of-frame alt to main copies. Render thread only.
  */
@@ -65,9 +68,7 @@ final class FullscreenPasses {
         if (!(resolution instanceof ProgramResolution.Renderpearl) && !(resolution instanceof ProgramResolution.Raw)) {
             return FrameSteps.Drawn.NOTHING;
         }
-        if (!isDefault(program.viewport())) {
-            r.diagnostics.report(program.name() + ": viewport scale/offset (scale." + program.name() + ") is not supported; drawn over the whole target");
-        }
+        ViewportRect viewport = ViewportRect.of(program.viewport(), size[0], size[1]);
         for (int t : program.mipmapTargets()) {
             pair(t, shadow).ifPresent(pair -> r.mips.generate(pair, shadow ? flips.shadowRead(t) : flips.read(t)));
         }
@@ -80,13 +81,17 @@ final class FullscreenPasses {
             });
         }
         if (resolution instanceof ProgramResolution.Raw raw) {
-            return drawRaw(raw, program, slots, views, size, shadow, flips, frame);
+            return drawRaw(raw, program, slots, views, size, viewport, shadow, flips, frame);
         }
         ProgramResolution.Renderpearl pipeline = (ProgramResolution.Renderpearl) resolution;
         RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> "ShaderBridge " + program.name());
         views.forEach(descriptor::withColorAttachment);
         DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.NONE, false, AlbedoSize.NONE);
         try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build())) {
+            if (!viewport.covers(size[0], size[1]) && !PassViewport.set(pass, viewport)) {
+                r.diagnostics.report(program.name() + ": the viewport scale/offset (scale." + program.name()
+                    + ") cannot be set on this backend; drawn over the whole target");
+            }
             pass.setPipeline(pipeline.compiled());
             r.binder.bind(new OwnPassUniforms(pass), pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key),
                 r.host());
@@ -102,13 +107,13 @@ final class FullscreenPasses {
      * @return whether it drew, and the shadowcolor targets a {@code shadowcomp} program wrote
      */
     private FrameSteps.Drawn drawRaw(ProgramResolution.Raw raw, Program program, List<AttachmentSlot> slots, List<GpuTextureView> views,
-                                     int[] size, boolean shadow, FlipState flips, GpuBufferSlice frame) {
+                                     int[] size, ViewportRect viewport, boolean shadow, FlipState flips, GpuBufferSlice frame) {
         GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, false, AlbedoSize.NONE));
         List<Optional<GpuTextureView>> attachments = views.stream().map(Optional::of).toList();
         List<Boolean> wrote;
         try {
             wrote = r.raw.draw(raw.program(), new RawDraw(attachments, size[0], size[1], r.frameState.timer().frameCounter(), frame, draw,
-                flips.colorState(), flips.shadowState()));
+                flips.colorState(), flips.shadowState(), viewport));
         } catch (RuntimeException e) {
             r.diagnostics.report(program.name() + " was not drawn: " + e.getMessage());
             return FrameSteps.Drawn.NOTHING;
@@ -200,10 +205,6 @@ final class FullscreenPasses {
 
     private static boolean sized(Optional<ColorPair> pair, int[] size) {
         return pair.isPresent() && pair.get().spec().width() == size[0] && pair.get().spec().height() == size[1];
-    }
-
-    private static boolean isDefault(ViewportScale v) {
-        return v.scale() == 1 && v.offsetX() == 0 && v.offsetY() == 0;
     }
 
     /** Targets the program really writes: an attachment with a texture and a written slot. */

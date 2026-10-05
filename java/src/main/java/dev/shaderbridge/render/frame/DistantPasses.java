@@ -8,6 +8,7 @@ import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.api.pipeline.IndexType;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.textures.FilterMode;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.shaderbridge.dh.DhHostBlocks;
 import dev.shaderbridge.dh.DhMode;
 import dev.shaderbridge.dh.DistantHorizons;
@@ -18,6 +19,7 @@ import dev.shaderbridge.dh.LodUniforms;
 import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.GeometrySlot;
 import dev.shaderbridge.model.Program;
+import dev.shaderbridge.render.draw.PassRedirect;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.PipelineShape;
 import dev.shaderbridge.render.pipeline.ProfileVertexFormats;
@@ -76,8 +78,35 @@ final class DistantPasses {
      */
     void drawOpaque(FlipState flips, GpuBufferSlice frame) {
         current().ifPresent(lods -> draw(GeometryProgram.DH_TERRAIN, lods.opaque(), cameraClip(), false, flips, frame));
+        drawGeneric(flips, frame);
         r.distant.copyDepth(1);
         r.distant.copyDepth(0);
+    }
+
+    /**
+     * Draws Distant Horizons' generic objects (beacon beams, clouds, objects added through its
+     * API) after the opaque LODs, as Distant Horizons orders them: its generic renderer is
+     * replayed for the frame with every render pass it opens redirected to a gbuffers pass on the
+     * LOD depth, where its pipeline is swapped for the pack's {@code dh_generic} program. It binds
+     * its own {@code vertUniformBlock} and {@code uLightMap}.
+     */
+    private void drawGeneric(FlipState flips, GpuBufferSlice frame) {
+        if (!r.distant.mode().drawsLods() || !r.dim.geometry().containsKey(GeometryProgram.DH_GENERIC)) {
+            return;
+        }
+        if (!passes.sharesGbuffers()) {
+            r.diagnostics.report("dh_generic: the pack's geometry writes more targets than one render pass holds; Distant Horizons' generic "
+                + "objects are not drawn");
+            return;
+        }
+        GpuTextureView depth = r.distant.gbuffersDepth();
+        PassRedirect.Armed armed = PassRedirect.arm(requested -> passes.openDistantGeneric("ShaderBridge dh_generic", flips, frame, depth)
+            .orElseThrow());
+        try {
+            r.distant.dh().drawGeneric();
+        } finally {
+            armed.close();
+        }
     }
 
     /**

@@ -30,6 +30,8 @@
   "shaderbridge.status.ready": "%s is active",
   "shaderbridge.status.failed": "%s failed: %s",
   "shaderbridge.status.unsupported_features": "Requires unsupported features: %s",
+  "shaderbridge.status.compile_diagnostics": "Compile diagnostics:",
+  "shaderbridge.status.render_diagnostics": "Rendering diagnostics (%s):",
 
   "shaderbridge.message.compiled": "Compiled %s: %s",
   "shaderbridge.message.failed": "%s is not active: %s",

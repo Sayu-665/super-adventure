@@ -66,7 +66,7 @@ class DrawKeyTest {
     }
 
     @Test
-    void slotsOfNewKindsAreWrittenFromTheNextFrameOn() {
+    void slotsOfNewKindsAreWrittenWhenFirstDrawnInAFrame() {
         List<DrawState> written = new ArrayList<>();
         List<GpuBufferSlice> slices = new ArrayList<>();
         DrawSlots.BlockWriter writer = (frame, draw) -> {
@@ -85,14 +85,19 @@ class DrawKeyTest {
         FrameState frame = frame();
         slots.prepare(frame, writer);
         assertEquals(2, written.size(), "the camera and shadow defaults");
-        assertSame(slices.get(0), slots.slice(water));
-        assertSame(slices.get(1), slots.slice(shadow));
+        GpuBufferSlice waterSlice = slots.slice(water);
+        assertEquals(3, written.size(), "a new kind gets its block at once, in the frame it is first drawn");
+        assertSame(slices.get(2), waterSlice);
+        assertEquals(RenderStages.TERRAIN_TRANSLUCENT, written.get(2).renderStage);
+        assertSame(waterSlice, slots.slice(water), "later draws of the kind reuse the block");
+        GpuBufferSlice shadowSlice = slots.slice(shadow);
+        assertSame(slices.get(3), shadowSlice);
+        assertEquals(new Matrix4f(frame.shadowModelView()), written.get(3).modelViewMatrix);
+        assertEquals(4, written.size());
         slots.prepare(frame, writer);
-        assertEquals(6, written.size(), "defaults plus both kinds seen in the previous frame");
-        assertEquals(RenderStages.TERRAIN_TRANSLUCENT, written.get(4).renderStage);
-        assertSame(slices.get(4), slots.slice(water));
-        assertNotSame(slices.get(2), slots.slice(shadow));
-        assertEquals(new Matrix4f(frame.shadowModelView()), written.get(5).modelViewMatrix);
+        assertEquals(6, written.size(), "a new frame writes the defaults again and nothing else until a kind is drawn");
+        assertNotSame(waterSlice, slots.slice(water), "each frame writes its own blocks");
+        assertEquals(7, written.size());
     }
 
     @Test

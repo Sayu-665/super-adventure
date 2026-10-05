@@ -72,6 +72,11 @@ public final class RenderBridge {
     private static boolean mainTakeover;
     /** The opaque gbuffers pass handed to Minecraft's main pass, until it is closed. */
     private static RenderPass opaquePass;
+    /**
+     * The opaque gbuffers pass closed after a failure in it, until the main pass ends: Minecraft
+     * still holds it, and nothing more may be drawn into it.
+     */
+    private static RenderPass abandonedPass;
     private static boolean rebuildRequested;
     private static boolean projectionCaptured;
     private static RenderPass skyPassOpen;
@@ -124,6 +129,7 @@ public final class RenderBridge {
         preGeometryDone = false;
         mainTakeover = false;
         opaquePass = null;
+        abandonedPass = null;
         ShadowTransforms.stop();
         PackRenderer current = sync();
         if (current != null) {
@@ -227,6 +233,7 @@ public final class RenderBridge {
     public static void mainPassStarting(boolean improvedTransparency) {
         mainTakeover = false;
         opaquePass = null;
+        abandonedPass = null;
         if (!frameActive) {
             return;
         }
@@ -274,7 +281,12 @@ public final class RenderBridge {
         try {
             vanilla.accept(pass);
         } catch (RuntimeException e) {
-            closeOpaque();
+            abandonedPass = pass;
+            try {
+                closeOpaque();
+            } catch (RuntimeException closing) {
+                e.addSuppressed(closing);
+            }
             fail(e);
         }
     }
@@ -284,12 +296,15 @@ public final class RenderBridge {
      * closes the opaque gbuffers pass, runs the depth copies and the deferred passes and draws the
      * translucent LODs, lets Minecraft draw its translucent geometry into a new gbuffers pass, then
      * runs the composite passes and {@code final}, which end the pack frame. After a failure in
-     * the opaque pass, the translucent geometry is not drawn this frame.
+     * the opaque pass (which closed it), the translucent geometry is not drawn this frame.
      *
      * @param pass    the pass Minecraft draws into (the opaque gbuffers pass during a pack frame)
      * @param vanilla draws the translucent geometry into a pass
      */
     public static void drawTranslucent(RenderPass pass, Consumer<RenderPass> vanilla) {
+        if (pass != null && pass == abandonedPass) {
+            return;
+        }
         if (opaquePass == null || pass != opaquePass) {
             vanilla.accept(pass);
             return;
@@ -316,6 +331,7 @@ public final class RenderBridge {
 
     /** End of Minecraft's main pass: a pack frame must have ended by now. */
     public static void mainPassEnded() {
+        abandonedPass = null;
         if (opaquePass != null) {
             // The translucent hook did not run; Minecraft closed the pass itself.
             ActivePasses.close(opaquePass);

@@ -10,7 +10,6 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
 import net.minecraft.client.renderer.chunk.ChunkSectionsToRender;
 import net.minecraft.data.AtlasIds;
-import org.joml.Matrix4fc;
 
 /**
  * Renders the shadow pass by re-running Minecraft's terrain draw path into a ShaderBridge pass on
@@ -66,17 +65,17 @@ public final class ShadowRenderer {
     }
 
     /**
-     * @param level           the level renderer of the frame
-     * @param shadowModelView the shadow camera's model-view
-     * @param targets         the shadow targets
+     * @param level   the level renderer of the frame
+     * @param view    the shadow camera
+     * @param targets the shadow targets
      */
-    public void render(LevelRenderer level, Matrix4fc shadowModelView, ShadowTargets targets) {
+    public void render(LevelRenderer level, ShadowSections.ShadowView view, ShadowTargets targets) {
         if (plan.steps().isEmpty()) {
             return;
         }
         ChunkSectionsToRender chunks = null;
         if (needsTerrain()) {
-            chunks = sections.prepare(level, shadowModelView);
+            chunks = sections.prepare(level, view);
             // Preparing only records how many quad indices the sections need; Minecraft grows its
             // shared index buffer later in the frame (prepareTranslucents), after this pass.
             RenderSystem.resizeAllAutoStorageIndexBuffers();

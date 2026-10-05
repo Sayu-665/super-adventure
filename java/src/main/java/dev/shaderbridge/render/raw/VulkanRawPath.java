@@ -116,7 +116,7 @@ final class VulkanRawPath implements RawBackend.DimensionRawPath {
         RawUse use = new RawUse(model, draw.frame(), draw.frameUniforms(), draw.drawUniforms(), draw.colorAlt(), draw.shadowColorAlt());
         List<Long> views = draw.attachments().stream().map(v -> v.map(VulkanRawPath::vkView).orElse(VK10.VK_NULL_HANDLE)).toList();
         record(shader, objects, use, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline, Optional.empty(),
-            commands -> FullscreenRendering.draw(commands, views, draw.width(), draw.height()));
+            commands -> FullscreenRendering.draw(commands, views, draw.width(), draw.height(), draw.viewport()));
         return slots.stream().map(ColorStates.Slot::write).toList();
     }
 

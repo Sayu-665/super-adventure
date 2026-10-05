@@ -59,6 +59,19 @@ class DhInternalsTest {
     }
 
     @Test
+    void genericRendererHandlesResolveAgainstDistantHorizons334() throws ReflectiveOperationException {
+        DhGenericHandles generic = DhGenericHandles.resolve(DhInternalsTest.class.getClassLoader());
+        assertTrue(!generic.isParams("not render params"));
+        Class<?> renderer = Class.forName("com.seibel.distanthorizons.core.wrapperInterfaces.render.renderPass.IDhGenericRenderer", false,
+            DhInternalsTest.class.getClassLoader());
+        Method render = renderer.getMethod("render", Class.forName("com.seibel.distanthorizons.core.render.RenderParams", false,
+            DhInternalsTest.class.getClassLoader()), Class.forName("com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IProfilerWrapper", false,
+            DhInternalsTest.class.getClassLoader()), boolean.class);
+        assertEquals(void.class, render.getReturnType());
+        assertThrows(ClassNotFoundException.class, () -> DhGenericHandles.resolve(ClassLoader.getPlatformClassLoader()));
+    }
+
+    @Test
     void withoutDistantHorizonsResolutionNamesTheMissingClass() {
         ClassNotFoundException e = assertThrows(ClassNotFoundException.class, () -> DhInternals.resolve(ClassLoader.getPlatformClassLoader()));
         assertTrue(e.getMessage().contains("LodRenderer"), e.getMessage());

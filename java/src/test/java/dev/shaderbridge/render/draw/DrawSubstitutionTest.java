@@ -101,4 +101,35 @@ class DrawSubstitutionTest {
         assertInstanceOf(DrawSubstitution.Decision.Vanilla.class, s.decide(SOLID, false));
         assertEquals(1, programs.calls.size());
     }
+
+    @Test
+    void drawsOfAKnownSlotBypassTheTable() {
+        Programs programs = new Programs();
+        programs.next = READY;
+        List<RenderPipeline> routed = new ArrayList<>();
+        DrawSubstitution s = new DrawSubstitution(DIM, p -> {
+            routed.add(p);
+            return new PipelineMapping.Vanilla("not in the vanilla table");
+        }, programs);
+        DrawSubstitution.Decision.Pack generic = assertInstanceOf(DrawSubstitution.Decision.Pack.class,
+            s.decideFor(SOLID, GeometryProgram.DH_GENERIC, "dh_generic", false));
+        assertEquals(GeometryProgram.DH_GENERIC, generic.routed());
+        assertSame(DIM.programFor(GeometryProgram.DH_GENERIC).orElseThrow(), generic.program());
+        s.decideFor(SOLID, GeometryProgram.DH_GENERIC, "dh_generic", false);
+        assertEquals(List.of("dh_generic dh_generic cull"), programs.calls, "decided once");
+        assertEquals(List.of(), routed, "the vanilla table is not consulted");
+        assertInstanceOf(DrawSubstitution.Decision.Vanilla.class, s.decide(SOLID, false), "the table's decision is kept apart");
+    }
+
+    @Test
+    void particlesAndWeatherCastNoFeatureShadows() {
+        Programs programs = new Programs();
+        PipelineMapping.Mapped particles = new PipelineMapping.Mapped(GeometryProgram.PARTICLES, Optional.of(GeometryProgram.SHADOW), "vanilla_particle");
+        PipelineMapping.Mapped entities = new PipelineMapping.Mapped(GeometryProgram.ENTITIES, Optional.of(GeometryProgram.SHADOW_ENTITIES),
+            "vanilla_entity");
+        assertEquals(false, new DrawSubstitution(DIM, p -> particles, programs).castsFeatureShadow(SOLID));
+        assertEquals(true, new DrawSubstitution(DIM, p -> entities, programs).castsFeatureShadow(SOLID));
+        assertEquals(true, new DrawSubstitution(DIM, p -> new PipelineMapping.Vanilla("gui"), programs).castsFeatureShadow(SOLID),
+            "unmapped pipelines are decided by the shadow pass itself (they draw nothing there)");
+    }
 }

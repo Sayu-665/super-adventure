@@ -24,7 +24,10 @@ import org.slf4j.LoggerFactory;
  *   <li>its far fade, temporal anti-aliasing and vanilla fade renderers (no API controls them)
  *   are replaced by stand-ins that draw nothing, and the apply pass, fog, SSAO and frustum culling
  *   are switched off through its API ({@code DhApiControl});</li>
- *   <li>its LOD block atlas keeps being updated, as its terrain renderer would.</li>
+ *   <li>its LOD block atlas keeps being updated, as its terrain renderer would;</li>
+ *   <li>its generic objects (beacon beams, clouds, objects added through its API) are not drawn by
+ *   Distant Horizons (its generic rendering is switched off through the API); ShaderBridge replays
+ *   its generic renderer for the frame at the time the pack draws them ({@link #drawGeneric}).</li>
  * </ul>
  *
  * Everything is put back as soon as a frame renders without a pack. When the LODs cannot be
@@ -39,6 +42,11 @@ public final class DistantHorizons {
 
     private final boolean installed;
     private final DhInternals dh;
+    /** Handles on the generic object renderer, or null when its members differ (generic objects are then not drawn). */
+    private final DhGenericHandles generic;
+    private boolean genericBroken;
+    /** The generic renderer call Distant Horizons would have made this frame. */
+    private GenericCall genericCall;
     private final List<RendererSwap> swaps = new ArrayList<>();
     private String unavailable;
     /** The stand-ins are in place and Distant Horizons hands its LODs over. */
@@ -48,9 +56,21 @@ public final class DistantHorizons {
     private long frame;
     private LodFrame lods = LodFrame.EMPTY;
 
-    private DistantHorizons(boolean installed, DhInternals dh, String unavailable) {
+    /**
+     * The generic renderer of one frame and the arguments Distant Horizons renders it with.
+     *
+     * @param frame    the frame ({@link #frame()})
+     * @param renderer the level's {@code IDhGenericRenderer}
+     * @param params   the frame's {@code RenderParams}
+     * @param profiler the frame's {@code IProfilerWrapper}
+     */
+    private record GenericCall(long frame, Object renderer, Object params, Object profiler) {
+    }
+
+    private DistantHorizons(boolean installed, DhInternals dh, DhGenericHandles generic, String unavailable) {
         this.installed = installed;
         this.dh = dh;
+        this.generic = generic;
         this.unavailable = unavailable;
         if (dh != null) {
             swaps.add(fieldSwap(dh.terrainRenderer, dh.terrainRendererInterface, this::capture));
@@ -71,16 +91,25 @@ public final class DistantHorizons {
 
     private static DistantHorizons create() {
         if (!FabricLoader.getInstance().isModLoaded("distanthorizons")) {
-            return new DistantHorizons(false, null, "Distant Horizons is not installed");
+            return new DistantHorizons(false, null, null, "Distant Horizons is not installed");
         }
+        ClassLoader loader = DistantHorizons.class.getClassLoader();
+        DhInternals internals;
         try {
-            return new DistantHorizons(true, DhInternals.resolve(DistantHorizons.class.getClassLoader()), null);
+            internals = DhInternals.resolve(loader);
         } catch (ReflectiveOperationException | LinkageError e) {
             String reason = "this Distant Horizons version is not supported (" + e.getMessage() + "); LODs are not drawn with shader packs";
             LOGGER.error("Distant Horizons integration unavailable: {}", reason, e);
             PackNotifier.warning(reason);
-            return new DistantHorizons(true, null, reason);
+            return new DistantHorizons(true, null, null, reason);
         }
+        DhGenericHandles generic = null;
+        try {
+            generic = DhGenericHandles.resolve(loader);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            LOGGER.warn("Distant Horizons' generic objects (beacon beams, clouds) are not drawn with shader packs: {}", e.toString());
+        }
+        return new DistantHorizons(true, internals, generic, null);
     }
 
     private RendererSwap fieldSwap(Field field, Class<?> type, RendererSwap.Render render) {
@@ -127,7 +156,7 @@ public final class DistantHorizons {
                     giveBack();
                 }
                 switchedOff = DhApiControl.switchOff();
-            } else if (DhApiControl.takeOver()) {
+            } else if (DhApiControl.takeOver(generic != null && !genericBroken)) {
                 handedOver = true;
                 swaps.forEach(RendererSwap::install);
             }
@@ -148,6 +177,7 @@ public final class DistantHorizons {
     /** Restores Distant Horizons' renderers and API settings. */
     private void giveBack() {
         lods = LodFrame.EMPTY;
+        genericCall = null;
         if (!handedOver && !switchedOff) {
             return;
         }
@@ -215,11 +245,52 @@ public final class DistantHorizons {
                 collect(container, false, s, water);
             }
             lods = new LodFrame(frame, solid, water);
+            captureGeneric(args);
         } catch (RuntimeException e) {
             // Thrown into Distant Horizons, this would make it disable its renderer: stop the LODs instead
             // (from the next frame on, Distant Horizons is given back and switched off while packs render).
             lods = LodFrame.EMPTY;
             report("reading Distant Horizons' LOD buffers failed: " + e, e);
+        }
+    }
+
+    /** Remembers the generic renderer and the arguments of this frame (Distant Horizons does not call it while ShaderBridge holds its output). */
+    private void captureGeneric(Object[] args) {
+        genericCall = null;
+        if (generic == null || genericBroken || args.length < 4 || !generic.isParams(args[0])) {
+            return;
+        }
+        Object renderer = generic.renderer(args[0]);
+        if (renderer != null) {
+            genericCall = new GenericCall(frame, renderer, args[0], args[3]);
+        }
+    }
+
+    /**
+     * Draws Distant Horizons' generic objects of this frame (beacon beams, clouds, objects added
+     * through its API) by calling its generic renderer as Distant Horizons would: the box groups
+     * shaded with SSAO, then the others. Each group opens a render pass of its own, which the
+     * caller redirects to the pack's passes. Fails soft: a failure stops generic objects for the
+     * rest of the session.
+     *
+     * @return whether the renderer ran (the player has generic objects on and Distant Horizons
+     *     handed this frame's renderer over)
+     */
+    public boolean drawGeneric() {
+        GenericCall call = genericCall;
+        if (call == null || call.frame() != frame || genericBroken || unavailable != null || !DhApiControl.genericWanted()) {
+            return false;
+        }
+        try {
+            generic.render(call.renderer(), call.params(), call.profiler(), true);
+            generic.render(call.renderer(), call.params(), call.profiler(), false);
+            return true;
+        } catch (RuntimeException e) {
+            genericBroken = true;
+            genericCall = null;
+            LOGGER.error("Drawing Distant Horizons' generic objects failed; they are not drawn with shader packs from now on", e);
+            PackNotifier.warning("Distant Horizons' generic objects (beacon beams, clouds) could not be drawn with the shader pack: " + e);
+            return false;
         }
     }
 

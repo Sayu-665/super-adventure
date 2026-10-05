@@ -745,8 +745,11 @@ and jar) by reflection and through DH's API, without mixins, and fails soft:
 * **Failures.** If DH's internals do not match, or reading its render list
   fails, DH is given back and its rendering is switched off through its API
   while packs render, and the player is told once.
-* `dh_generic` programs are compiled but DH's generic objects (beacon beams,
-  clouds, API objects) are not drawn while a pack renders.
+* **Generic objects** (beacon beams, clouds, API objects). DH's own generic
+  rendering is switched off through its API while a pack renders; the Java mod
+  replays DH's generic renderer for the frame right after the opaque LODs, with
+  every render pass it opens redirected to a pass on the pack's gbuffers and the
+  LOD depth, where its pipelines draw with the `dh_generic` program.
 
 `sb-runtime` builds DH-format LOD terrain itself (4-block cells, one buffer per
 128×128-block region) for the full DH square with native programs, and outside

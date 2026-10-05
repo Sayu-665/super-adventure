@@ -30,8 +30,8 @@ implements are those of [ARCHITECTURE.md](ARCHITECTURE.md) §4–§7 and §9. Th
 | `render.mapping` | The table from vanilla pipelines to (geometry program, draw profile) (§4). |
 | `render.chunk` | The extended chunk vertex format (§4): chunk sections meshed with normals, block ids, mid-texture coordinates, tangents and `at_midBlock` while a pack renders, the pack's block id table, the extended clones of the terrain pipelines, and the format switch with its full chunk rebuild. |
 | `render.frame` | Frame orchestration: `RenderBridge` (entry from the mixins), `PackRenderer`, the frame plan and flips, geometry, fullscreen and compute passes, mipmaps, pass copies, DH passes. |
-| `render.draw` | Pipeline substitution inside ShaderBridge's passes: vanilla clones, uniform binding, the compiled-pipeline index. |
-| `render.shadow` | The shadow pass: a terrain re-render for the shadow camera. |
+| `render.draw` | Pipeline substitution inside ShaderBridge's passes: vanilla clones, uniform binding, the compiled-pipeline index; render pass redirection (`PassRedirect`) and viewports (`PassViewport`). |
+| `render.shadow` | The shadow pass: terrain re-rendered for the shadow camera (casters culled against the shadow frustum) and the frame's prepared entities and block entities drawn again with shadow-camera transforms. |
 | `render.raw` | The raw Vulkan path: compute and fullscreen programs on Mojang's `VkDevice`, extra device features, storage usage. |
 | `dh` | Distant Horizons takeover (reflection and API, no mixins). |
 | `compat.sodium` | The Sodium 0.9 integration (§9): its all-or-nothing target check, the extended Sodium terrain vertex and its encoder, the routing of Sodium's terrain pipelines, and Sodium's sections for the shadow pass. Its optional mixins are in `mixin.sodium`. |
@@ -42,7 +42,9 @@ implements are those of [ARCHITECTURE.md](ARCHITECTURE.md) §4–§7 and §9. Th
 Every target below is checked against `minecraft-merged-deobf-26.3.jar` by `MixinTargetsTest`
 (`@Inject` selectors and handler parameters), `MixinMembersTest` (`@Shadow`, `@Accessor`,
 `@Invoker`, `@ModifyVariable`, `@ModifyArg`, `@WrapOperation`), `RawMixinsTest`
-(`@WrapMethod`, `@ModifyReturnValue`) and `RedirectMixinsTest` (`@Redirect` of a constructor).
+(`@WrapMethod`, `@ModifyReturnValue`), `RedirectMixinsTest` (`@Redirect` of a constructor) and
+`ExpressionMixinsTest` (`@ModifyExpressionValue`, and the calls the main-pass takeover wraps: each
+made once in `lambda$addMainPass$0`, in the order the takeover assumes).
 
 Every injection uses `require = 0`. A hook that does not apply in another Minecraft version
 leaves vanilla rendering in place, or makes ShaderBridge refuse or disable the pack with a message.
@@ -53,16 +55,20 @@ disappears, the game fails at class load (see [Limitations](#11-known-limitation
 
 | Mixin | Target and point | Why |
 |---|---|---|
-| `LevelRendererMixin` | `LevelRenderer.render(...)` HEAD | Starts a pack frame (`RenderBridge.beginLevel`): sync the pack, poll pipelines, resize targets, fill uniforms, clear, run everything before the opaque geometry (setup/begin, shadow, shadowcomp, prepare). |
-| | `lambda$addSkyPass$0(GpuBufferSlice, SkyRenderState)` HEAD, cancellable | Runs `SkyRenderer.render` itself so the sky draws into a gbuffers pass. |
-| | `lambda$addMainPass$0(GpuBufferSlice, Z, ChunkSectionsToRender, PreparedFrame, Z, Z)` HEAD, cancellable | Replaces the main pass body during a pack frame (`MainPass`, §3). |
-| `LevelRendererAccess` | `@Invoker` `prepareTranslucents`, `executeSolid`, `executeClassicTransparency`, `executeOutline`, `executeSeeThrough`, `executeAlwaysOnTop`; `@Accessor` `chunkLayerSampler` | Vanilla's own drawing code runs inside ShaderBridge's passes. |
+| `LevelRendererMixin` | `LevelRenderer.render(...)` HEAD | Starts a pack frame (`RenderBridge.beginLevel`): sync the pack, poll pipelines, resize targets, fill uniforms, clear. |
+| | `@ModifyExpressionValue` of `FeatureRenderDispatcher.prepareFrame(SubmitNodeStorage)` in `render` | Takes the frame's prepared features and runs everything before the opaque geometry (setup/begin, the shadow pass, which draws those features for the shadow camera, shadowcomp, prepare). |
+| | `@WrapOperation` of `SkyRenderer.render(GpuBufferSlice, SkyRenderState)` in `lambda$addSkyPass$0` | Ends the sky's gbuffers pass (`SkyRendererMixin` opens it); a failure abandons the frame. |
+| | In `lambda$addMainPass$0(GpuBufferSlice, Z, ChunkSectionsToRender, PreparedFrame, Z, Z)`: HEAD; `@WrapOperation` of `CommandEncoder.createRenderPass(Supplier, GpuTextureView, Optional, GpuTextureView, OptionalDouble)`, of `executeSolid` and of `executeClassicTransparency`; RETURN | The main pass takeover (§3). Nothing of the body is cancelled: the pass it creates is ShaderBridge's opaque gbuffers pass, and the pack's passes run around the two calls. Other mods' hooks in the body, Fabric API's world render events (`END_MAIN` at RETURN included), still run. RETURN checks that the pack frame ended. |
 | `GameRendererMixin` | `useImprovedTransparency()` HEAD | Returns false while a pack is active: packs draw translucents in their gbuffers pass, never through vanilla OIT. |
 | | `@ModifyArg` in `renderLevel` at `ProjectionMatrixBuffer.getBuffer(Matrix4f)` | Captures the level projection (view bobbing and nausea applied) for `gbufferProjection`. |
 | `SkyRendererMixin` | `@WrapOperation` of `CommandEncoder.createRenderPass(Supplier, GpuTextureView, Optional, GpuTextureView, OptionalDouble)` in `SkyRenderer.render` | Hands the sky a gbuffers pass instead of the main target. |
-| `FrontendRenderPassMixin` | `@ModifyVariable` `setPipeline` HEAD, `@Inject` `setPipeline` RETURN | Pipeline substitution in ShaderBridge passes, then binds `sb_Frame`, `sb_Draw` and the pack samplers (§4). |
+| `FrontendRenderPassMixin` | `@WrapMethod` `setPipeline` | Pipeline substitution in ShaderBridge passes, then binds `sb_Frame`, `sb_Draw` and the pack samplers (§4). A pipeline that can be drawn in the pass in no form is not bound. |
+| | `@Inject` HEAD, cancellable, of every draw method (`draw*`, `multiDraw*`, `drawIndexed*`, `drawMultipleIndexed`) and `pushConstants` | Drops the draws of a pipeline that was not bound, until the next pipeline. |
+| | `@WrapMethod` `setUniform(String, GpuBufferSlice)` | Lets a ShaderBridge pass swap a uniform block as vanilla binds it: the feature shadow pass's `DynamicTransforms` (§6). |
 | | `@Inject` `setUniform(String, GpuTextureView, GpuSampler)` RETURN | When vanilla binds another `Sampler0` after the pipeline (as `PreparedRenderType` does), rebinds what depends on the albedo: `sb_Draw` with `gtextureSize`/`atlasSize`, and pack samplers that sample the atlas. |
 | | `@Inject` `close` HEAD; `@Shadow` `uniforms`, `backend`, `isClosed`, `pushedDebugGroups` | If vanilla code failed between `pushDebugGroup` and `popDebugGroup` in a ShaderBridge pass, pops the open groups. The pass then still ends and the failure reaches the frame's fail-soft handling. Without this, Mojang's single command encoder would stay "in a render pass" and the next pass (the GUI) would crash the game. |
+| `DynamicGpuDataMixin` | `DynamicGpuData.writeTransform(Transform)` and `writeTransforms(Transform[])` RETURN | While a pack frame prepares its features, records every `DynamicTransforms` block written, so the shadow pass can write shadow-camera copies of them (§6). |
+| `FrontendCommandEncoderMixin` | `FrontendCommandEncoder.createRenderPass(RenderPassDescriptor)` HEAD, cancellable (every other overload delegates to it) | While a redirection is armed (`PassRedirect`), returns a ShaderBridge pass instead: DH's generic object renderer draws into the pack's gbuffers (§8). |
 | `RenderSystemMixin` | `RenderSystem.getCompiledPipelineNullable(RenderPipeline)` RETURN | Records compiled pipeline → `RenderPipeline` (`CompiledPipelineIndex`), so draws can be routed by the vanilla pipeline's location. |
 | `GlslCompilerMixin` | `GlslCompiler.compileToSpv(String, String, ShaderType, ShaderDefines, ShaderSource)` HEAD, cancellable | Serves ShaderBridge's precompiled SPIR-V (`shaderbridge:spv/<n>` ids) as a `SPIRVModule` instead of running shaderc. |
 | `CameraMixin` | `@ModifyArg` index 1 of `Camera.setupPerspective(FFFFF)V` in `Camera.update` | Extends the level projection's far plane to the DH far plane for synthesized DH LODs (§8). |
@@ -137,32 +143,44 @@ The order is the one `sb-runtime`'s `record_frame` uses. `FramePlan` transcribes
 `FrameSequencerTraceTest` compares it with reference traces of the executor. The steps are:
 
 1. **`LevelRenderer.render` HEAD** (`PackRenderer.beginFrame`). Outside any pass:
-   1. Capture the game state and update `FrameState`.
-   2. Upload `sb_Frame`, then write and upload the `sb_Draw` blocks of every draw kind seen so far.
+   1. Capture the game state and update `FrameState` (`centerDepthSmooth` from the newest
+      finished centre-depth readback, below).
+   2. Upload `sb_Frame`; write the two default `sb_Draw` blocks into this frame's `sb_Draw` pages.
    3. Clear targets per `ColorTarget.clear`, and clear every target on its first frame.
    4. Start the DH frame.
-   5. Run `setup` (first frame only), `begin`, the **shadow pass** (§6) with its shadowcolor
-      mipmaps, `shadowcomp` and `prepare`. Each pass starts by adopting its `flip_state`, and the
-      flips follow `flips_after`.
-2. **Sky pass**:
+2. **Once Minecraft has prepared the frame's features** (`FeatureRenderDispatcher.prepareFrame`,
+   `PackRenderer.beforeGeometry`), still outside any pass: `setup` (first frame only), `begin`,
+   the **shadow pass** (§6) with its shadowcolor mipmaps, `shadowcomp` and `prepare`. Each pass
+   starts by adopting its `flip_state`, and the flips follow `flips_after`. (If the feature hook
+   did not apply, these run at the start of the sky or main pass, without entity shadows.)
+3. **Sky pass**:
    1. `SkyRenderer.render` opens its pass through the wrapped `createRenderPass`. ShaderBridge
       returns a gbuffers pass instead.
    2. The sky pipelines are substituted with `gbuffers_skybasic` and `gbuffers_skytextured`.
-3. **Main pass** (`MainPass`, replacing `lambda$addMainPass$0`):
+4. **Main pass** (`lambda$addMainPass$0`, run as Minecraft wrote it):
    1. Terrain fog, the chunk sampler and `prepareTranslucents`. DH hands over its LODs here.
-   2. The opaque DH LODs (`dh_terrain`), then the copy of the LOD depth to `dhDepthTex1` and
-      `dhDepthTex0`.
-   3. A **gbuffers pass**: the pack's `gbuffer_attachments` in their current textures plus
-      Minecraft's main depth. In it, vanilla `executeSolid` draws opaque terrain and opaque
-      features.
-   4. The `depthtex2` and `depthtex1` copies of the main depth, then `deferred`.
-   5. `dh_water`, then the `dhDepthTex0` copy.
-   6. Another gbuffers pass, in which vanilla `executeClassicTransparency` draws the translucent
-      features and terrain, clouds, weather and the world border.
-   7. `composite`, then `final` into Minecraft's main color target. Without a `final` program,
-      `colortex0` is blitted there. Then the `end_of_frame_copies` (alt → main).
-4. After the main pass, vanilla `executeOutline`, `executeSeeThrough` and `executeAlwaysOnTop`
-   run. They run whether or not the pack frame succeeded.
+   2. Where Minecraft creates its render pass: the opaque DH LODs (`dh_terrain`), DH's generic
+      objects (`dh_generic`, §8), then the copy of the LOD depth to `dhDepthTex1` and
+      `dhDepthTex0`. Minecraft gets a **gbuffers pass** instead of its own: the pack's
+      `gbuffer_attachments` in their current textures plus Minecraft's main depth.
+   3. In it, vanilla `executeSolid` draws opaque terrain and opaque features.
+   4. Before `executeClassicTransparency`: the gbuffers pass is closed; the centre texel of the
+      main depth is copied into a readback buffer (`CenterDepthProbe`); the `depthtex2` and
+      `depthtex1` copies; `deferred`; `dh_water` and the `dhDepthTex0` copy.
+   5. `executeClassicTransparency` draws the translucent features and terrain, clouds, weather and
+      the world border into another gbuffers pass.
+   6. `composite`, then `final` into Minecraft's main color target. Without a `final` program,
+      `colortex0` is blitted there. Then the `end_of_frame_copies` (alt → main). This ends the
+      pack frame.
+   7. Minecraft closes the pass it holds (already closed), and `executeOutline`,
+      `executeSeeThrough` and `executeAlwaysOnTop` draw into its main target. They, and the
+      rest of the body with other mods' injections, run whether or not the pack frame succeeded.
+
+`sb_Draw` blocks live in host-visible, coherent buffer pages, one set per frame in flight
+(`DrawUniforms`), each set reused only once the fence of its frame has signalled. A draw kind seen
+for the first time in a frame has its block written right away, through a buffer mapping, from
+inside the pass (a mapped write needs no transfer command), so new draw kinds take effect in the
+frame they first appear.
 
 Composite-style programs are fullscreen draws. Each runs in its own pass over its output targets
 (the textures `FlipState.write` selects), as six vertices of the `fullscreen` profile, and reads
@@ -176,13 +194,15 @@ shadow-pass computes are sized over the shadow map.
 The following abandon the frame, release the pack's render resources and show the error, after
 which Minecraft renders vanilla until another pack (or a recompile) is activated:
 
-* an exception anywhere in a pack frame, including inside a substituted vanilla draw;
-* a frame that never reached its main pass (a missing hook);
+* an exception anywhere in a pack frame, including inside a substituted vanilla draw (after a
+  failure in the opaque geometry, the translucent geometry of that frame is not drawn);
+* a frame that did not end with the main pass (a missing hook);
 * an inactive SPIR-V hook.
 
 Diagnostics that do not stop the pack go to the log through `PipelineDiagnostics`, which
 deduplicates them. Examples: programs that fall back or are skipped, unsupported features,
-missing resources.
+missing resources, draws that are skipped. The pack screen lists them ("Rendering diagnostics"),
+for the pack that renders or, after it stopped, with the reason it stopped.
 
 ## 4. Pipeline substitution
 
@@ -222,7 +242,9 @@ A program is **ineligible** for renderpearl, and goes to the raw path or falls b
 `ActivePasses` marks the one ShaderBridge pass vanilla code is drawing into. For every
 `setPipeline` there (`GeometryPasses.Draws`):
 
-1. Look up the vanilla `RenderPipeline` (`CompiledPipelineIndex`).
+1. Look up the vanilla `RenderPipeline` (`CompiledPipelineIndex`). A pipeline that did not come
+   from Minecraft's pipeline cache (another mod compiled it itself) is drawn as is if it fits the
+   pass; otherwise its draws are skipped, with a diagnostic (step 5).
 2. Route its location through the table below (`PipelineRouter` keeps a mapping only if the
    profile's vertex bindings match).
 3. Resolve the mapped slot's program for that profile along the fallback chain
@@ -238,8 +260,14 @@ A program is **ineligible** for renderpearl, and goes to the raw path or falls b
    * In the shadow pass, nothing is written.
 
    Clones are kept for the process, so Mojang's pipeline cache never accumulates copies. A
-   pipeline that cannot be adapted is bound as is only if it fits the pass. Otherwise the draw
-   fails with a clear message, and the frame fails soft.
+   pipeline that cannot be adapted is bound as is only if it fits the pass (never in the shadow
+   pass). Otherwise it is not bound and its draws and push constants are dropped until the next
+   `setPipeline`, with a diagnostic; the frame goes on without them.
+
+Two passes route differently. The feature shadow pass (§6) draws only what casts shadows
+(particles and weather do not) and swaps each `DynamicTransforms` block for its shadow-camera
+copy. The DH generic pass (§8) draws every pipeline with the `dh_generic` program, if the
+pipeline's vertex bindings match its draw profile.
 
 ### Vanilla pipeline table (`VanillaPipelineTable`)
 
@@ -381,20 +409,45 @@ the pack did not name (GL texture unit 0) is the draw's albedo in geometry progr
   * the albedo size (`gtextureSize`, and `atlasSize` when the albedo is one of Minecraft's texture
     atlases).
 
-  Buffers may not be written inside a pass, so a kind seen for the first time uses the frame's
-  default block until the next frame.
+  A kind's block is written when the kind is first drawn in a frame, into mapped pages of the
+  frame (§3); a frame with more kinds than `DrawSlots` holds gives the rest the default block.
+* `centerDepthSmooth`: after the opaque geometry the centre texel of the main depth is copied
+  into one of three small readback buffers (`CenterDepthProbe`); the newest copy the GPU has
+  finished (one or two frames old) is decoded (`CenterDepth`: `D32_FLOAT` or `D16_UNORM`,
+  reversed-Z turned into forward depth) and smoothed with `centerDepthHalflife`.
+* `heldItemId`/`heldItemId2` come from `item.properties` (the held stack's item model, else its
+  item id). `entityId` and `blockEntityId` stay -1 (see §11).
 * Host blocks (`Globals`, `Projection`, `Fog`, `DynamicTransforms`, `TerrainUniform`,
   `ChunkSection`, ...) are bound by the vanilla draw path itself.
 
 ### Shadow pass
 
-1. `ShadowRenderer` re-prepares the camera-visible chunk sections for the shadow camera
-   (`ShadowSections.CAMERA_VISIBLE`, MDI when the level uses it).
+1. `ShadowRenderer` prepares the shadow casters' chunk sections for the shadow camera through
+   Minecraft's own path (`prepareChunkRenders`, MDI when the level uses it). Casters are
+   culled against the shadow camera (`ShadowSections.SHADOW_FRUSTUM`, `ShadowCulling`): every
+   built section within the shadow render distance whose box intersects the
+   `shadowProjection * shadowModelView` frustum, seen by the player's camera or not. The distance
+   follows `shadowDistanceRenderMul` (negative: the render distance; positive:
+   `shadowDistance * shadowDistanceRenderMul`, at most the render distance); `shadow.culling=false`
+   culls by distance only. Minecraft's visible-section list is swapped for the casters during the
+   call and restored after it. With Sodium, Sodium's sections for the camera are drawn (§9).
 2. It grows Minecraft's shared quad index buffer to the requested count. Vanilla grows it only
    later in the frame, in `prepareTranslucents`.
-3. It draws opaque terrain, then the opaque DH LODs (`dh_shadow`), the `shadowtex0` →
-   `shadowtex1` copy, and translucent terrain. Each group is drawn in a pass on
-   `shadow_attachments` + `shadowtex0`.
+3. It runs the steps of `ShadowPlan`: opaque terrain; the **entities** step; the opaque DH LODs
+   (`dh_shadow`); the `shadowtex0` → `shadowtex1` copy; translucent terrain. Each group is drawn in
+   a pass on `shadow_attachments` + `shadowtex0`.
+
+**Entity shadows.** The shadow pass runs once Minecraft has prepared the frame's features
+(entities, block entities, the player and held items, all baked camera-relative, with each draw's
+transform in a `DynamicTransforms` block written at preparation). While they are prepared,
+`DynamicGpuDataMixin` records every block written (`ShadowTransforms`). The entities step writes
+a copy of each with `ModelViewMat = shadowModelView * inverse(gbufferModelView) * ModelViewMat`
+(the camera's view rotation undone, then the shadow camera's model-view: the matrix `sb-runtime`
+uses for entities in its shadow pass), then executes the prepared opaque features
+(`PreparedFrame.executeSolid`) into a shadow pass that swaps each block for its copy as the draws
+bind it. Particles and weather cast no shadows. The step runs when the pack enables any of
+`shadowEntities`, `shadowBlockEntities` and `shadowLightBlockEntities`. Translucent features cast no
+shadows. A failure in this step turns feature shadows off for the pack, with a diagnostic.
 
 Vanilla pipelines are substituted with the shadow programs; pipelines without one draw nothing.
 The shadow matrices come from `ShadowMatrices`, as in `sb-runtime`.
@@ -432,7 +485,14 @@ formats that support it.
 
 **Never on the raw path.** Geometry programs (`gbuffers_*`, `shadow*`, `dh_*`) cannot be recorded
 inside Minecraft's open passes. Geometry and tessellation programs are therefore rejected and fall
-back along their chain.
+back along their chain. The raw path builds fullscreen and compute pipelines only, and
+`GraphicsPipelines` refuses tessellation stages outright, so the
+`VkPipelineTessellationDomainOriginStateCreateInfo` (`LOWER_LEFT`) that `sb-runtime` chains for
+tessellated geometry (ARCHITECTURE §4) has no counterpart here. A future raw geometry path must
+chain it.
+
+**Viewport scale.** Raw fullscreen draws use the `scale.<program>` viewport (`ViewportRect`, as
+`sb-runtime` computes it; the scissor stays the whole target).
 
 ## 8. Distant Horizons (`dh`)
 
@@ -458,7 +518,20 @@ reflection and through the DH API, and fails soft.
 * The host blocks `vertSharedUniformBlock` and `vertUniqueUniformBlock` are written camera
   relative: `uModelOffset = minCorner - camera` in double, `uCameraPos = 0`.
 * Opaque LODs are drawn before vanilla opaque terrain, and `dh_water` before vanilla translucents,
-  as for Iris.
+  as for Iris (and `sb-runtime`).
+
+**Generic objects** (`dh_generic`: beacon beams, DH clouds, objects added through DH's API). While
+DH's output is held, DH's own generic rendering is switched off through its API config
+(`genericRendering().renderingEnabled()`, restored afterwards) and ShaderBridge replays DH's
+generic renderer for the frame instead (`DhGenericHandles`: the frame's `RenderParams.genericRenderer`,
+captured when DH hands over its LODs, and `IDhGenericRenderer.render(RenderParams, IProfilerWrapper,
+boolean)`, called for the SSAO groups and then the others). The replay runs after the opaque LODs,
+before the LOD depth copies, with `PassRedirect` armed: every render pass DH's renderer opens (one
+per box group, on DH's own textures) is replaced by a gbuffers pass on the LOD depth in which every
+pipeline draws with the `dh_generic` program (`GeometryPasses.openDistantGeneric`). DH binds its own
+`vertUniformBlock` and `uLightMap`. Nothing is replayed when the player has generic rendering off,
+the pack has no `dh_generic` program or no shared gbuffers attachments, or DH's members differ; a
+failure stops the replay for the session with a warning.
 
 **Modes** (`DhMode`):
 
@@ -594,23 +667,34 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
     profile, without the extension attributes.
 * **Block entities.** They draw with the entity programs. Iris tells them apart by rendering phase
   and uses `gbuffers_block`; Minecraft 26.3 batches both into the same feature draws.
-* **Entity shadows.** Entities, block entities and the player cast no shadows. The prepared
-  feature frame is baked for the camera and can be used once. Shadow culling uses the
-  camera-visible sections, not a shadow frustum (`ShadowSections` is the hook for one).
+* **Entity shadows** (§6). Casters are the features Minecraft prepared for the camera: entities
+  outside the camera's view, and the player in first person, cast no shadow (Iris renders
+  entities for the shadow camera separately). `shadowEntities`, `shadowPlayer`,
+  `shadowBlockEntities` and `shadowLightBlockEntities` cannot be told apart, since the features
+  come in one batch: any of the three non-player directives enables them all (the pack's
+  diagnostics say so). `entityShadowDistanceMul` is not applied. Translucent features cast no
+  shadows.
+* **Shadow terrain culling.** Only sections Minecraft has built cast shadows. Minecraft builds,
+  and rebuilds after changes, only the sections the camera sees, so terrain never yet seen, or
+  changed while out of view, casts no (or a stale) shadow. `shadow.culling=reversed`/`safe_zone`
+  culls like `true`. Multi-draw-indirect is chosen from the previous frame's setting.
 * **Hand.** Hand rendering stays vanilla and is drawn after `final`.
-* **Per-draw ids.** `entityId`, `blockEntityId` and `heldItemId` are -1, and `centerDepthSmooth`
-  is not sampled from depth.
-* **Composite passes.** Viewport scale and offset (`scale.<program>`) are not applied
-  (diagnostic). Gbuffer attachments with a scaled size are not drawn by geometry: they get sinks.
-* **New draw kinds.** `sb_Draw` values of a draw kind seen for the first time take effect one
-  frame late.
+* **Per-draw ids.** `entityId` and `blockEntityId` are -1: Minecraft 26.3 batches the draws of
+  many entities and block entities into one prepared feature draw, so no draw belongs to a single
+  one (Iris carries the id in an extra vertex attribute of its own entity vertex format).
+  `centerDepthSmooth` follows the depth one or two frames late (readback without a stall).
+* **Composite passes.** On the OpenGL backend, viewport scale and offset (`scale.<program>`) are
+  not applied (diagnostic): the viewport is set through the Vulkan render pass's command buffer.
+  Gbuffer attachments with a scaled size are not drawn by geometry: they get sinks.
 * **Without `independentBlend`.** Vanilla fallback draws in a multi-attachment gbuffers pass write
   depth only, and pack programs that leave attachments untouched fall back or are skipped.
 * **Feedback copies.** Which programs draw in a pass is unknown in advance, so the targets sampled
   by any geometry program of the pass kind are copied before every such pass. Programs that
   sample a target they also write read its contents from before the pass.
-* **Fabric API.** Fabric API's world-render `END_MAIN` event (an injection at
-  `lambda$addMainPass$0` RETURN) does not fire while a pack frame replaces the main pass.
+* **Fabric API.** Fabric API's world render events fire during pack frames. Those inside the main
+  pass (`START_MAIN` to `AFTER_TRANSLUCENT_FEATURES`) see ShaderBridge's gbuffers pass as
+  the main pass; what other mods draw there is substituted like vanilla draws. `END_MAIN` fires
+  after `final`.
 * **Vanilla mipmap blit.** Mip levels are generated with a 2×2 box (bilinear) downsample,
   point-sampled for formats without guaranteed linear filtering (32-bit floats, 16-bit
   normalized).
@@ -638,8 +722,10 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
     for packs whose tag entry precedes a block entry matching the same state.
   * `layer.*` render-layer overrides of `block.properties` are not applied.
 * **Distant Horizons:**
-  * DH generic objects (`dh_generic`: beacons, clouds, API objects) are not drawn while a pack
-    renders.
+  * DH generic objects (`dh_generic`, §8) are drawn by replaying DH's generic renderer through
+    reflection on `RenderParams.genericRenderer` and `IDhGenericRenderer.render`; another DH
+    version that changes them stops generic objects (with a log warning), not the LODs. Generic
+    objects cast no shadows.
   * Shadow LODs use the previous frame's list.
   * Synthesized LODs overlap vanilla terrain in sections crossing the vanilla edge.
   * `reduceOverdrawWithFastMovement` is not reproduced in `dhNearPlane`.
@@ -647,7 +733,7 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * The unified projection takes effect one frame after it is requested.
 * **Raw path:**
   * GL backend: no raw path.
-  * Raw fullscreen draws ignore viewport scale and generate no mipmaps.
+  * Raw fullscreen draws generate no mipmaps.
   * Cube, array and multisampled images, runtime arrays and more than 4 descriptor sets are
     rejected.
   * Synchronization is a full barrier around every use.
@@ -656,16 +742,17 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
 
 * **Depth modes.** Only `REVERSED_ZERO_TO_ONE` on devices with [0, 1] clip depth renders. On
   OpenGL without `GL_ARB_clip_control` (macOS) packs are refused.
-* **Hard mixin targets.** Accessors, invokers and `@Shadow` fields (`LevelRendererAccess`,
-  `FrontendGpuDeviceAccess`, `VulkanDeviceAccess`, the `@Shadow` fields of
-  `FrontendRenderPassMixin`) are hard requirements of Mixin. If a future Minecraft version renames
+* **Hard mixin targets.** Accessors, invokers and `@Shadow` fields (`FrontendGpuDeviceAccess`,
+  `VulkanDeviceAccess`, the `@Shadow` fields of `FrontendRenderPassMixin`) are hard requirements
+  of Mixin. If a future Minecraft version renames
   them, the game fails at start-up rather than disabling shaders. All injections are optional.
   The Sodium mixins have no such members, and their targets are checked before they are applied
   (§9).
-* **Unadaptable pipelines.** A vanilla pipeline drawn in a ShaderBridge pass that neither came
-  from Minecraft's pipeline cache nor fits the pass (another mod's custom pipeline) fails the
-  frame, and the pack is disabled with a message.
-* **Diagnostics** are logged and summarized in toasts or chat. There is no in-game list.
+* **Unadaptable pipelines.** A pipeline drawn in a ShaderBridge pass that can be drawn there in no
+  form (another mod's custom pipeline that neither came from Minecraft's pipeline cache nor fits
+  the pass) is skipped with its draws, with a diagnostic; that mod's geometry is missing while
+  the pack renders.
+* **Diagnostics** are logged, summarized in toasts or chat, and listed in the pack screen.
 
 ## Verification
 
@@ -678,14 +765,17 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * `PassAttachmentsTest`: sinks in every missing slot.
   * `ColorReadsTest`, `ImageChoiceTest`: main and alt selection, including unnamed samplers.
   * `DispatchSizeTest`.
-  * `DrawKeyTest`: albedo sizes.
+  * `DrawKeyTest`: albedo sizes; `sb_Draw` blocks written when a kind is first drawn in a frame.
+  * `CenterDepthTest`: centre-depth decoding (formats, reversed-Z); `ViewportRectTest`:
+    `scale.<program>` viewports and the Vulkan pass member they are set through.
   * `FeedbackReadsTest`: copies of attached targets; `DepthSupportTest`: the depth-mode gate.
   * `MipGeneratorTest`.
 * **Pipelines.**
   * `PackPipelineFactoryTest`, including SPIR-V capability rejection.
   * `AttachmentPlannerTest`, `PipelinePartsTest`, `SpirvReflectorTest`, `ProgramResolverTest`,
     `PackPipelineCacheTest` (with fake devices), `GeometryChainTest`, `ProfileVertexFormatsTest`,
-    `OnDemandVariantsTest`.
+    `OnDemandVariantsTest`, `CompiledVariantsTest` (the slot's variants by draw profile).
+  * `RawAdmissionTest`, including that tessellated programs never reach the raw path.
 * **Terrain vertices.** `TerrainVertexEncoderTest` (normals and tangents of every cube face, mirrored and
   rotated mappings, degenerate quads, `SNORM8` and `at_midBlock` packing, in-place encoding),
   `BlockIdMappingTest` (entry grammar, Iris precedence, property filters, unknown blocks),
@@ -696,18 +786,22 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   extended routes in `VanillaPipelineTableTest`.
 * **Substitution.** `VanillaPipelineTableTest` (against every 26.3 pipeline), `DrawSubstitutionTest`,
   `VanillaClonesTest` (process-wide clones, the fit check, blit clones), `UniformBinderTest`
-  (albedo rebinding), `ActivePassesTest`.
+  (albedo rebinding), `ActivePassesTest` (skipped pipelines, swapped uniform blocks),
+  `PassRedirectTest`.
 * **Targets.** `TargetPlannerTest`, `PackTargetsTest` (fake device, including level views),
   `PackTexturesTest`, `SamplerChoiceTest` (integer targets at their base level),
   `TextureDataTest`, `PackFilesTest`.
-* **Shadow.** `ShadowPlanTest`.
+* **Shadow.** `ShadowPlanTest` (including the entities step), `ShadowTransformsTest` (recorded
+  transforms and their shadow-camera model-view), `ShadowCullingTest` (shadow render distance,
+  section radius, column range, frustum test against an orthographic shadow camera).
 * **Raw path.** `DescriptorPlannerTest`, `RawAdmissionTest`, `SpirvCapabilitiesTest`,
   `RawTextureDataTest`, `CommandPlanTest`, `ResourceSizesTest`, `ComputeLimitsTest`,
   `ColorStatesTest`, `StorageUsageTest`, `StorageTargetsTest`, `RawFeatureTest`,
   `SpirvBlockSizesTest`.
 * **Distant Horizons.** `DhHostBlocksTest`, `DhPlanesTest`, `DhModeTest`, `LodSelectionTest`,
   `LodUniformsTest`, `DhDepthTargetsTest`, `RendererSwapTest`, `DhInternalsTest` (against the DH
-  3.3.4 jar), `CameraFarPlaneTest`, `DistantBindingsTest`.
+  3.3.4 jar, including the generic renderer handles), `CameraFarPlaneTest`, `DistantBindingsTest`.
+* **Metadata.** `ModMetadataTest`: the Distant Horizons `suggests`/`breaks` ranges.
 * **Sodium** (against the Sodium 0.9.3-alpha.1 jar on the test class path).
   * `SodiumTargetsTest`: every member the integration needs exists; a missing method, call site,
     class or static modifier is named; the all-or-nothing decision.
@@ -721,16 +815,18 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
     `SodiumPipelinesTest`, `MeshPlanTest`, `SodiumCompatTest`.
   * Rust: `crates/sb-transform/tests/sodium_profile.rs` pins the profile to Sodium's vertex,
     push constants, `u_Globals` and samplers.
-* **Mixin targets.** `MixinTargetsTest`, `MixinMembersTest`, `RawMixinsTest`, `RedirectMixinsTest`, `GameTargetsTest`.
+* **Mixin targets.** `MixinTargetsTest`, `MixinMembersTest`, `RawMixinsTest`, `RedirectMixinsTest`, `ExpressionMixinsTest`, `GameTargetsTest`.
 * **Native library.** The native smoke tests (`nativeTest`) load the Rust library and compile
   corpus packs.
 
 ### Compile-verified only (no GPU, no game)
 
-* **Frame orchestration.** `RenderBridge`, `PackRenderer`, `MainPass`, `GeometryPasses`,
+* **Frame orchestration.** `RenderBridge`, `PackRenderer`, `GeometryPasses`, `CenterDepthProbe`,
+  `DrawUniforms` (mapped pages and fences), `PassViewport`,
   `FullscreenPasses`, `ComputeDispatcher`, `DistantPasses`/`DistantFrame`, `MipGenerator.generate`,
   `PassCopies`, `SinkTextures`, `AtlasTextures`, `MinecraftHost`.
-* **Shadow pass.** `ShadowRenderer`, `ShadowSections`.
+* **Shadow pass.** `ShadowRenderer`, `ShadowSections` (the caster walk over the view area), the
+  feature shadow pass.
 * **Chunk mesh format in a running game.** `ChunkMeshFormat`'s switch and rebuild, the block id
   table against the live registries and tags, and meshing through the section compiler hooks.
 * **Pipeline compilation on a real `GpuDevice`.** `PackPipelineCache` and `ProgramResolver` with
@@ -738,7 +834,8 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
 * **Every Vulkan call of the raw path.** `VulkanContext`, `VmaImage`/`VmaBuffer`,
   `PipelineObjects`, `GraphicsPipelines`, `DescriptorAllocator`, `CommandRecorder`,
   `FullscreenRendering`, `RawResources`, `RawBindings`, `RawShaderProgram`, `VulkanRawPath`.
-* **The DH takeover in a running game.** `DistantHorizons`, `DhApiControl`.
+* **The DH takeover in a running game.** `DistantHorizons`, `DhApiControl`, the generic object
+  replay (`DhGenericHandles` calls, `FrontendCommandEncoderMixin` redirection).
 * **The Sodium integration in a running game.** `SodiumMixinPlugin` under Mixin, the vertex
   switch and Sodium reloads (`SodiumTerrain`), the block id table against the live registries and
   tags, the meshing hooks on Sodium's worker threads, the shadow-pass sections, and every Sodium

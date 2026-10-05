@@ -7,6 +7,7 @@ import dev.shaderbridge.model.Severity;
 import dev.shaderbridge.natives.NativeLibrary;
 import dev.shaderbridge.pack.LoadedPack;
 import dev.shaderbridge.pack.PackEntry;
+import dev.shaderbridge.render.frame.RenderBridge;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -28,8 +29,10 @@ import net.minecraft.util.FormattedCharSequence;
 
 /**
  * Lists the packs in {@code shaderpacks/}: select one and apply it, enable or disable shaders,
- * open the pack's options or the folder, reload, and read the native library and compile
- * diagnostics in the panel on the right.
+ * open the pack's options or the folder, reload, and read the native library status, the
+ * rendering diagnostics of the active pack (programs that fall back or are skipped, unsupported
+ * features, draws that cannot be shaded, why it stopped rendering) and its compile diagnostics in
+ * the panel on the right.
  */
 public final class ShaderPackScreen extends Screen {
     private static final int FOOTER_HEIGHT = 60;
@@ -106,7 +109,7 @@ public final class ShaderPackScreen extends Screen {
     /** Rebuilds the info panel and button states when anything they show has changed. */
     private void refresh() {
         Object state = List.of(String.valueOf(bridge().status()), String.valueOf(selected), bridge().config().get(),
-            String.valueOf(optionsError), loadingOptions, bridge().activePack().map(System::identityHashCode).orElse(0));
+            String.valueOf(optionsError), loadingOptions, bridge().activePack().map(System::identityHashCode).orElse(0), RenderBridge.diagnostics());
         if (state.equals(shownState)) {
             return;
         }
@@ -169,12 +172,20 @@ public final class ShaderPackScreen extends Screen {
                 lines.add(Component.translatable("shaderbridge.status.unsupported_features", String.join(", ", active.model().info().featuresUnsupported()))
                     .withStyle(ChatFormatting.RED));
             }
-            active.diagnostics().stream()
+            List<String> rendering = RenderBridge.diagnostics();
+            if (!rendering.isEmpty()) {
+                lines.add(Component.translatable("shaderbridge.status.render_diagnostics", rendering.size()).withStyle(ChatFormatting.GOLD));
+                rendering.stream().limit(MAX_DIAGNOSTICS).map(m -> Component.literal("- " + m).withStyle(ChatFormatting.YELLOW)).forEach(lines::add);
+            }
+            List<Diagnostic> compile = active.diagnostics().stream()
                 .filter(d -> d.severity() != Severity.INFO)
                 .sorted((a, b) -> b.severity().compareTo(a.severity()))
                 .limit(MAX_DIAGNOSTICS)
-                .map(ShaderPackScreen::diagnosticLine)
-                .forEach(lines::add);
+                .toList();
+            if (!compile.isEmpty()) {
+                lines.add(Component.translatable("shaderbridge.status.compile_diagnostics").withStyle(ChatFormatting.GOLD));
+                compile.stream().map(ShaderPackScreen::diagnosticLine).forEach(lines::add);
+            }
         }
         return lines;
     }

@@ -55,7 +55,7 @@ public final class DrawSubstitution {
         }
     }
 
-    private record Key(RenderPipeline vanilla, boolean shadow) {
+    private record Key(RenderPipeline vanilla, boolean shadow, GeometryProgram slot, String profile) {
     }
 
     /** Feature geometry Iris keeps out of the shadow map. */
@@ -84,12 +84,35 @@ public final class DrawSubstitution {
      * @return how to draw it
      */
     public Decision decide(RenderPipeline vanilla, boolean shadow) {
-        Key key = new Key(vanilla, shadow);
+        Key key = new Key(vanilla, shadow, null, null);
         Decision known = settled.get(key);
         if (known != null) {
             return known;
         }
         Optional<Decision> decision = resolve(vanilla, shadow);
+        decision.ifPresent(d -> settled.put(key, d));
+        return decision.orElseGet(Decision.Vanilla::new);
+    }
+
+    /**
+     * Decides how to draw a pipeline that is not routed through the vanilla table because its
+     * draws are known to belong to one geometry slot (Distant Horizons' generic objects, drawn
+     * with {@code dh_generic}). The caller has checked that the pipeline's vertex data matches the
+     * profile.
+     *
+     * @param vanilla the pipeline bound
+     * @param slot    the geometry slot its draws belong to
+     * @param profile the draw profile of its vertex data and host bindings
+     * @param shadow  the draw is in the shadow pass
+     * @return how to draw it
+     */
+    public Decision decideFor(RenderPipeline vanilla, GeometryProgram slot, String profile, boolean shadow) {
+        Key key = new Key(vanilla, shadow, slot, profile);
+        Decision known = settled.get(key);
+        if (known != null) {
+            return known;
+        }
+        Optional<Decision> decision = resolve(vanilla, slot, slot, profile, shadow);
         decision.ifPresent(d -> settled.put(key, d));
         return decision.orElseGet(Decision.Vanilla::new);
     }
@@ -116,11 +139,15 @@ public final class DrawSubstitution {
         if (slot.isEmpty()) {
             return Optional.of(new Decision.Vanilla());
         }
+        return resolve(vanilla, slot.get(), mapped.gbuffers(), mapped.profile(), shadow);
+    }
+
+    private Optional<Decision> resolve(RenderPipeline vanilla, GeometryProgram slot, GeometryProgram routed, String profile, boolean shadow) {
         PipelineShape shape = shadow ? PipelineShape.of(vanilla).withCull(false) : PipelineShape.of(vanilla);
-        ProgramResolver.GeometryResolution r = programs.geometry(slot.get(), mapped.profile(), shape, shadow);
+        ProgramResolver.GeometryResolution r = programs.geometry(slot, profile, shape, shadow);
         return switch (r.resolution()) {
             case ProgramResolution.Renderpearl rp -> dim.programFor(r.program())
-                .<Decision>map(p -> new Decision.Pack(mapped.gbuffers(), p, rp))
+                .<Decision>map(p -> new Decision.Pack(routed, p, rp))
                 .or(() -> Optional.of(new Decision.Vanilla()));
             case ProgramResolution.Pending p -> Optional.empty();
             case ProgramResolution.Raw raw -> Optional.of(new Decision.Vanilla());

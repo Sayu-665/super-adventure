@@ -1,5 +1,6 @@
 package dev.shaderbridge.render.raw;
 
+import dev.shaderbridge.render.pipeline.ViewportRect;
 import java.util.List;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRDynamicRendering;
@@ -13,9 +14,9 @@ import org.lwjgl.vulkan.VkViewport;
 /**
  * Records a fullscreen draw in a render pass of its own, with dynamic rendering as Minecraft's
  * passes ({@code VK_KHR_dynamic_rendering}): each color attachment loaded and stored in
- * {@code GENERAL} (slots without a view discard their writes), a viewport and scissor over the
- * whole extent (positive height, the host convention), and the {@code fullscreen} profile's six
- * vertices.
+ * {@code GENERAL} (slots without a view discard their writes), the program's viewport (positive
+ * height, the host convention; {@code scale.<program>} makes it smaller than the extent) and a
+ * scissor over the whole extent, and the {@code fullscreen} profile's six vertices.
  */
 final class FullscreenRendering {
     /** Vertices of the {@code fullscreen} profile's quad, two triangles generated from the vertex index. */
@@ -27,10 +28,11 @@ final class FullscreenRendering {
     /**
      * @param cb     the command buffer, with the pipeline and descriptor sets bound
      * @param views  the {@code VkImageView} of each color attachment, {@code VK_NULL_HANDLE} where there is none
-     * @param width  width of the attachments
-     * @param height height of the attachments
+     * @param width    width of the attachments
+     * @param height   height of the attachments
+     * @param viewport the draw's viewport
      */
-    static void draw(VkCommandBuffer cb, List<Long> views, int width, int height) {
+    static void draw(VkCommandBuffer cb, List<Long> views, int width, int height, ViewportRect viewport) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkRenderingAttachmentInfo.Buffer attachments = VkRenderingAttachmentInfo.calloc(views.size(), stack);
             for (int i = 0; i < views.size(); i++) {
@@ -46,9 +48,9 @@ final class FullscreenRendering {
             area.extent().set(width, height);
             VkRenderingInfo info = VkRenderingInfo.calloc(stack).sType$Default().renderArea(area).layerCount(1).pColorAttachments(attachments);
             KHRDynamicRendering.vkCmdBeginRenderingKHR(cb, info);
-            VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
-            viewport.get(0).width(width).height(height).minDepth(0).maxDepth(1);
-            VK10.vkCmdSetViewport(cb, 0, viewport);
+            VkViewport.Buffer vp = VkViewport.calloc(1, stack);
+            vp.get(0).x(viewport.x()).y(viewport.y()).width(viewport.width()).height(viewport.height()).minDepth(0).maxDepth(1);
+            VK10.vkCmdSetViewport(cb, 0, vp);
             VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
             scissor.get(0).extent().set(width, height);
             VK10.vkCmdSetScissor(cb, 0, scissor);

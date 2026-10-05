@@ -44,8 +44,27 @@ class ShadowPlanTest {
     }
 
     @Test
-    void entityCastersAreReportedAsMissing() {
+    void entitiesAreOpaqueCastersAfterTheTerrain() {
+        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.ENTITIES, ShadowPlan.Step.DISTANT_TERRAIN, ShadowPlan.Step.COPY_DEPTH,
+            ShadowPlan.Step.TRANSLUCENT_TERRAIN), ShadowPlan.of(with(true, true, true, true), true).steps(),
+            "terrain, entities, LODs (the headless executor's order), all before the shadowtex1 copy");
         assertTrue(ShadowPlan.of(with(true, true, true, false), false).notes().isEmpty());
-        assertEquals(1, ShadowPlan.of(with(true, true, true, true), false).notes().size());
+        assertEquals(1, ShadowPlan.of(with(true, true, true, true), false).notes().size(), "how entity shadows differ from Iris is reported");
+    }
+
+    @Test
+    void blockEntitiesAloneStillDrawTheFeatures() {
+        ShadowSettings s = BASE;
+        ShadowSettings blockEntities = new ShadowSettings(true, s.resolution(), s.fov(), s.distance(), s.nearPlane(), s.farPlane(), s.distanceRenderMul(),
+            s.entityDistanceMul(), s.intervalSize(), s.voxelDistance(), s.hardwareFiltering(), s.mipmap(), s.nearest(), s.colorMipmap(), s.colorNearest(),
+            s.culling(), true, false, false, false, true, false, s.dhShadowEnabled());
+        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.ENTITIES, ShadowPlan.Step.COPY_DEPTH),
+            ShadowPlan.of(blockEntities, false).steps());
+        ShadowSettings playerOnly = new ShadowSettings(true, s.resolution(), s.fov(), s.distance(), s.nearPlane(), s.farPlane(), s.distanceRenderMul(),
+            s.entityDistanceMul(), s.intervalSize(), s.voxelDistance(), s.hardwareFiltering(), s.mipmap(), s.nearest(), s.colorMipmap(), s.colorNearest(),
+            s.culling(), true, false, false, true, false, false, s.dhShadowEnabled());
+        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.COPY_DEPTH), ShadowPlan.of(playerOnly, false).steps(),
+            "the player alone cannot be drawn: it is prepared in one batch with the other entities");
+        assertEquals(1, ShadowPlan.of(playerOnly, false).notes().size());
     }
 }

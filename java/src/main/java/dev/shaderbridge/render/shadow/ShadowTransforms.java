@@ -43,6 +43,19 @@ public final class ShadowTransforms {
         RECORDED.clear();
     }
 
+    /** @return how many blocks are recorded (tests) */
+    static int recordedCount() {
+        return RECORDED.size();
+    }
+
+    /**
+     * @param slice a recorded block
+     * @return the values recorded for it, or null (tests)
+     */
+    static DynamicGpuData.Transform recorded(GpuBufferSlice slice) {
+        return RECORDED.get(slice);
+    }
+
     /** @return whether blocks are being recorded */
     public static boolean recording() {
         return recording;

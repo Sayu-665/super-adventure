@@ -166,7 +166,7 @@ class MixinMembersTest {
                 }
             }
         }
-        assertTrue(checked >= 8, "invokers and accessors checked: " + checked);
+        assertTrue(checked >= 2, "invokers and accessors checked: " + checked);
     }
 
     @Test

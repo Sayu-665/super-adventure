@@ -9,9 +9,11 @@ import dev.shaderbridge.dh.DhMode;
 import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
+import dev.shaderbridge.model.ShadowSettings;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.PipelineDiagnostics;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
+import dev.shaderbridge.render.shadow.ShadowCulling;
 import dev.shaderbridge.render.shadow.ShadowPlan;
 import dev.shaderbridge.render.shadow.ShadowRenderer;
 import dev.shaderbridge.render.shadow.ShadowSections;
@@ -26,6 +28,7 @@ import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
+import org.joml.Vector3d;
 import org.joml.Vector4f;
 
 /**
@@ -83,7 +86,7 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         ShadowPlan plan = ShadowPlan.of(resources.dim.targets().shadow(),
             DhMode.castsShadows(resources.dim.distantHorizons(), resources.dim.targets().shadow()));
         plan.notes().forEach(n -> resources.diagnostics.report(resources.dim.folder() + ": " + n));
-        this.shadows = new ShadowRenderer(plan, ShadowSections.CAMERA_VISIBLE);
+        this.shadows = new ShadowRenderer(plan, ShadowSections.SHADOW_FRUSTUM);
         if (TERRAIN_SLOTS.stream().anyMatch(resources.dim.geometry()::containsKey)) {
             resources.diagnostics.report(resources.dim.folder() + ": " + TERRAIN_VERTEX_NOTE);
         }
@@ -117,13 +120,16 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         }
         r.atlases.refresh();
         gameState.capture(r.frameState, camera, projection, partialTick);
+        float centerDepth = r.centerDepth.latest();
+        if (Float.isFinite(centerDepth)) {
+            r.frameState.centerDepth = centerDepth;
+        }
         r.frameState.update();
         CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
         r.frameUniforms.fill(r.frameState, r.frameState.timer().frameTime());
         frameSlice = r.frameUniforms.upload(encoder);
-        r.drawUniforms.beginFrame();
+        r.drawUniforms.beginFrame(encoder);
         r.drawSlots.prepare(r.frameState, r.drawUniforms::push);
-        r.drawUniforms.flush(encoder);
         r.targets.clear(encoder, new Rgba(fogColor.x, fogColor.y, fogColor.z, 1), r.depthMode);
         r.distant.beginFrame(encoder, r.frameState.dhActive);
         RenderSystem.setShaderFog(terrainFog);
@@ -202,6 +208,8 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     void afterOpaque() {
         CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        // centerDepthSmooth: the centre depth after the opaque geometry, read back for a later frame.
+        r.centerDepth.sample(encoder, main.getDepthTexture());
         r.targets.copyMainDepth(encoder, main.getDepthTexture(), 2);
         r.targets.copyMainDepth(encoder, main.getDepthTexture(), 1);
         r.sequencer.runUntil(PassGroup.GBUFFERS_TRANSLUCENT, this);
@@ -210,6 +218,7 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     /** The translucent geometry is drawn: runs the composite passes and {@code final}, and ends the frame. */
     void finishFrame() {
         r.sequencer.finish(this);
+        r.drawUniforms.endFrame(RenderSystem.getDevice().createCommandEncoder());
         level = null;
     }
 
@@ -268,7 +277,7 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
 
     @Override
     public void shadow(FlipState flips) {
-        shadows.render(level, r.frameState.shadowModelView(), new ShadowRenderer.ShadowTargets() {
+        shadows.render(level, shadowView(), new ShadowRenderer.ShadowTargets() {
             @Override
             public RenderPass open(String label) {
                 return geometry.openShadow(label, flips, frameSlice);
@@ -297,6 +306,15 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         if (r.dim.targets().shadow().enabled()) {
             r.targets.shadowColorTargets().forEach(pair -> r.mips.generate(pair, flips.shadowRead(pair.spec().index())));
         }
+    }
+
+    /** @return the frame's shadow camera, for culling the shadow pass's terrain */
+    private ShadowSections.ShadowView shadowView() {
+        ShadowSettings settings = r.dim.targets().shadow();
+        Vector3d camera = r.frameState.cameraPosition;
+        double distance = ShadowCulling.renderDistance(settings.distance(), settings.distanceRenderMul(), r.frameState.renderDistanceBlocks);
+        return new ShadowSections.ShadowView(new Matrix4f(r.frameState.shadowModelView()), new Matrix4f(r.frameState.shadowProjection()),
+            camera.x, camera.y, camera.z, distance, ShadowSections.ShadowView.culls(settings.culling()));
     }
 
     /**

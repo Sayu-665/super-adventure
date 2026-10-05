@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
@@ -41,6 +42,38 @@ class ActivePassesTest {
         }
         assertNull(ActivePasses.substitute(ours, requested));
         assertFalse(ActivePasses.owns(ours), "a closed pass is no longer ShaderBridge's");
+    }
+
+    @Test
+    void undrawablePipelinesAreSkippedAndUniformsReplacedOnlyInTheirPass() {
+        RenderPass ours = pass();
+        RenderPass other = pass();
+        GpuBufferSlice camera = new GpuBufferSlice(null, 0, 160);
+        GpuBufferSlice shadow = new GpuBufferSlice(null, 256, 160);
+        ActivePasses.open(ours, new ActivePasses.PassDraws() {
+            @Override
+            public ActivePasses.Substitution substitute(CompiledRenderPipeline requested) {
+                return ActivePasses.Substitution.skip();
+            }
+
+            @Override
+            public GpuBufferSlice uniform(String name, GpuBufferSlice value) {
+                return "DynamicTransforms".equals(name) && value.equals(camera) ? shadow : value;
+            }
+        });
+        try {
+            ActivePasses.Substitution skip = ActivePasses.substitute(ours, VanillaClonesTest.compiled());
+            assertTrue(skip.skipped());
+            assertNull(skip.pipeline());
+            assertFalse(ActivePasses.Substitution.unchanged(VanillaClonesTest.compiled()).skipped());
+            assertSame(shadow, ActivePasses.uniform(ours, "DynamicTransforms", camera));
+            assertSame(camera, ActivePasses.uniform(ours, "Projection", camera), "other uniforms are kept");
+            assertSame(camera, ActivePasses.uniform(other, "DynamicTransforms", camera), "other passes are untouched");
+            assertNull(ActivePasses.uniform(ours, "DynamicTransforms", null));
+        } finally {
+            ActivePasses.close(ours);
+        }
+        assertSame(camera, ActivePasses.uniform(ours, "DynamicTransforms", camera), "a closed pass replaces nothing");
     }
 
     @Test

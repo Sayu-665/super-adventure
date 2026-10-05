@@ -9,7 +9,9 @@ import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
 import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
+import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.ResourceRef;
 import dev.shaderbridge.render.draw.ActivePasses;
 import dev.shaderbridge.render.draw.CompiledPipelineIndex;
@@ -17,6 +19,7 @@ import dev.shaderbridge.render.draw.DrawSubstitution;
 import dev.shaderbridge.render.draw.UniformTarget;
 import dev.shaderbridge.render.draw.VanillaClones;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
+import dev.shaderbridge.render.pipeline.ProfileVertexFormats;
 import dev.shaderbridge.render.targets.ColorPair;
 import dev.shaderbridge.render.targets.TextureBinding;
 import java.util.List;
@@ -74,6 +77,11 @@ final class GeometryPasses {
         this.shadowReads = FeedbackReads.of(r.dim, true, targets(shadow));
     }
 
+    /** @return whether the pack's geometry shares one set of gbuffers attachments (else geometry draws unshaded into {@code fallback_tex}) */
+    boolean sharesGbuffers() {
+        return gbuffersShared;
+    }
+
     /**
      * Opens the gbuffers pass.
      *
@@ -84,7 +92,7 @@ final class GeometryPasses {
      */
     RenderPass openGbuffers(String label, FlipState flips, GpuBufferSlice frame) {
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        return open(label, gbuffers, false, flips, frame, main.width, main.height, main.getDepthTextureView(), null);
+        return open(label, gbuffers, false, flips, frame, main.width, main.height, main.getDepthTextureView(), null, null);
     }
 
     /**
@@ -128,7 +136,7 @@ final class GeometryPasses {
      */
     RenderPass openShadow(String label, FlipState flips, GpuBufferSlice frame) {
         GpuTextureView depth = r.targets.shadowDepthView(0);
-        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, null);
+        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, null, null);
     }
 
     /**
@@ -145,7 +153,26 @@ final class GeometryPasses {
      */
     RenderPass openShadowFeatures(String label, FlipState flips, GpuBufferSlice frame, Map<GpuBufferSlice, GpuBufferSlice> transforms) {
         GpuTextureView depth = r.targets.shadowDepthView(0);
-        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, transforms);
+        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, transforms, null);
+    }
+
+    /**
+     * Opens a gbuffers pass for Distant Horizons' generic objects (its generic renderer draws into
+     * it through a pass redirection): every pipeline bound in it is drawn with the pack's
+     * {@code dh_generic} program (or adapted like a vanilla draw when the pack has none that can
+     * run).
+     *
+     * @param label debug label
+     * @param flips the frame's flip state
+     * @param frame the frame's {@code sb_Frame} slice
+     * @param depth the depth attachment of the LOD passes (screen-sized)
+     * @return the open pass, or empty when the pack's geometry has no shared attachments
+     */
+    Optional<RenderPass> openDistantGeneric(String label, FlipState flips, GpuBufferSlice frame, GpuTextureView depth) {
+        if (!gbuffersShared) {
+            return Optional.empty();
+        }
+        return Optional.of(open(label, gbuffers, false, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, null, GeometryProgram.DH_GENERIC));
     }
 
     /**
@@ -158,11 +185,11 @@ final class GeometryPasses {
     }
 
     private RenderPass open(String label, AttachmentLayout layout, boolean shadowPass, FlipState flips, GpuBufferSlice frame, int width, int height,
-                            GpuTextureView depth, Map<GpuBufferSlice, GpuBufferSlice> transforms) {
+                            GpuTextureView depth, Map<GpuBufferSlice, GpuBufferSlice> transforms, GeometryProgram fixedSlot) {
         MinecraftHost host = hostFor(shadowPass, flips);
         RenderPass pass = create(label, layout, shadowPass, flips, width, height, depth);
         RenderSystem.bindDefaultUniforms(pass);
-        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame, host, transforms));
+        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame, host, transforms, fixedSlot));
         return pass;
     }
 
@@ -232,9 +259,11 @@ final class GeometryPasses {
         private final MinecraftHost host;
         /** Feature transform blocks to their shadow-camera copies (the feature shadow pass), else null. */
         private final Map<GpuBufferSlice, GpuBufferSlice> transforms;
+        /** The slot every draw of the pass belongs to (Distant Horizons' generic objects), else null: routed by the table. */
+        private final GeometryProgram fixedSlot;
 
         Draws(AttachmentLayout layout, boolean shadowPass, boolean packPrograms, FlipState flips, GpuBufferSlice frame, MinecraftHost host,
-              Map<GpuBufferSlice, GpuBufferSlice> transforms) {
+              Map<GpuBufferSlice, GpuBufferSlice> transforms, GeometryProgram fixedSlot) {
             this.layout = layout;
             this.shadowPass = shadowPass;
             this.packPrograms = packPrograms;
@@ -242,6 +271,7 @@ final class GeometryPasses {
             this.frame = frame;
             this.host = host;
             this.transforms = transforms;
+            this.fixedSlot = fixedSlot;
         }
 
         @Override
@@ -250,6 +280,9 @@ final class GeometryPasses {
             if (vanilla == null) {
                 return asIsOrSkip(requested, "a pipeline that did not come from Minecraft's pipeline cache (" + name(requested) + ")");
             }
+            if (fixedSlot != null) {
+                return fixed(requested, vanilla);
+            }
             boolean casts = transforms == null || r.substitution.castsFeatureShadow(vanilla);
             if (casts && packPrograms && r.substitution.decide(vanilla, shadowPass) instanceof DrawSubstitution.Decision.Pack p) {
                 return new ActivePasses.Substitution(p.resolution().compiled(), Optional.of(new PackDraw(p)));
@@ -257,6 +290,28 @@ final class GeometryPasses {
             Optional<CompiledRenderPipeline> clone = shadowPass ? r.clones.discard(vanilla, layout)
                 : r.clones.fallback(vanilla, layout, r.dim.settings().fallbackTex());
             return clone.map(ActivePasses.Substitution::unchanged).orElseGet(() -> asIsOrSkip(requested, "pipeline " + vanilla.getLocation()));
+        }
+
+        /** A draw of the fixed slot: its program for the slot's own draw profile, if the vertex data fits it. */
+        private ActivePasses.Substitution fixed(CompiledRenderPipeline requested, RenderPipeline vanilla) {
+            String profile = r.dim.programFor(fixedSlot).map(p -> p.drawProfile()).orElse(null);
+            Optional<List<VertexFormat>> bindings = profile == null ? Optional.empty() : ProfileVertexFormats.get().bindings(profile);
+            if (bindings.isEmpty()) {
+                r.diagnostics.report(fixedSlot.fileName() + ": the pack has no program with a known vertex layout; " + vanilla.getLocation()
+                    + " is not drawn");
+                return ActivePasses.Substitution.skip();
+            }
+            List<String> problems = ProfileVertexFormats.compatibility(bindings.get(), vanilla.getVertexFormatBindings());
+            if (!problems.isEmpty()) {
+                r.diagnostics.report(fixedSlot.fileName() + ": " + vanilla.getLocation() + " does not match draw profile " + profile + " ("
+                    + String.join("; ", problems) + "); it is not drawn");
+                return ActivePasses.Substitution.skip();
+            }
+            if (r.substitution.decideFor(vanilla, fixedSlot, profile, shadowPass) instanceof DrawSubstitution.Decision.Pack p) {
+                return new ActivePasses.Substitution(p.resolution().compiled(), Optional.of(new PackDraw(p)));
+            }
+            return r.clones.fallback(vanilla, layout, r.dim.settings().fallbackTex()).map(ActivePasses.Substitution::unchanged)
+                .orElseGet(() -> asIsOrSkip(requested, "pipeline " + vanilla.getLocation()));
         }
 
         @Override
