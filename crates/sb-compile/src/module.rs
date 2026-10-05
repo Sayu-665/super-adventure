@@ -82,6 +82,63 @@ pub fn header(words: &[u32]) -> Result<Header, String> {
     Ok(Header { version: words[1], generator: words[2], bound: words[3] })
 }
 
+/// `OpExtInstImport` opcode.
+const OP_EXT_INST_IMPORT: u32 = 11;
+/// `OpExtInst` opcode.
+const OP_EXT_INST: u32 = 12;
+/// GLSL.std.450 `FMin`, `FMax`, `FClamp` and their NaN-tolerant counterparts `NMin`,
+/// `NMax`, `NClamp`.
+const NAN_TOLERANT: [(u32, u32); 3] = [(37, 79), (40, 80), (43, 81)];
+
+/// Rewrite every GLSL.std.450 `FMin` / `FMax` / `FClamp` to `NMin` / `NMax` /
+/// `NClamp`, in place, and return how many instructions changed.
+///
+/// GLSL leaves `min(x, NaN)` undefined and SPIR-V's `FMin` follows it, so a Vulkan
+/// driver may return either operand. NVIDIA and AMD hardware returns the non-NaN
+/// operand, and shader packs are tuned on those GPUs: some feed NaNs from `0/0`,
+/// `normalize(vec3(0))` or `sqrt(-x)` through `clamp`/`max` and rely on them being
+/// flushed. `NMin(x, NaN)` is defined as `x`, `NMax` likewise, and `NClamp(NaN, lo, hi)`
+/// as `lo`, which reproduces that behaviour on every conformant driver. Every result
+/// `NMin` defines is one `FMin` may return, so no defined result changes. The operand
+/// types are unchanged (both forms take the same scalar or vector floating-point
+/// operands), so the module stays valid.
+///
+/// Integer `SMin`/`UMin`/... are not touched. Malformed modules are reported as errors
+/// without being modified.
+pub fn nan_tolerant_min_max(spirv: &mut [u32]) -> Result<usize, String> {
+    // Validate the whole module first, so that an error leaves it untouched.
+    let mut glsl_sets: Vec<u32> = Vec::new();
+    let mut sites: Vec<usize> = Vec::new();
+    {
+        let (_, instrs) = parse(spirv)?;
+        let mut offset = HEADER_WORDS;
+        for ins in &instrs {
+            if ins.opcode == OP_EXT_INST_IMPORT
+                && let Some(&id) = ins.operands.first()
+                && literal_string(&ins.operands[1..]).0 == "GLSL.std.450"
+            {
+                glsl_sets.push(id);
+            }
+            // Operands: result type, result id, set, instruction, operands.
+            if ins.opcode == OP_EXT_INST
+                && let (Some(set), Some(inst)) = (ins.word(2), ins.word(3))
+                && glsl_sets.contains(&set)
+                && NAN_TOLERANT.iter().any(|(from, _)| *from == inst)
+            {
+                // Word index of the `instruction` operand: leading word + 3 operands.
+                sites.push(offset + 4);
+            }
+            offset += ins.operands.len() + 1;
+        }
+    }
+    for &i in &sites {
+        if let Some((_, to)) = NAN_TOLERANT.iter().find(|(from, _)| *from == spirv[i]) {
+            spirv[i] = *to;
+        }
+    }
+    Ok(sites.len())
+}
+
 /// Decode a literal string operand (NUL-terminated, little-endian packed).
 /// Returns the string and the number of words it occupies.
 pub(crate) fn literal_string(words: &[u32]) -> (String, usize) {

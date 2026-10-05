@@ -673,6 +673,21 @@
             "resource": {
               "type": "white"
             }
+          },
+          {
+            "name": "shadowtex1",
+            "set": 1,
+            "binding": 3,
+            "kind": {
+              "type": "sampler",
+              "dim": "2d",
+              "shadow": false,
+              "sample_type": "float"
+            },
+            "resource": {
+              "type": "shadow_tex",
+              "value": 1
+            }
           }
         ]
       },
@@ -751,7 +766,18 @@
               "stages": [
                 "vertex",
                 "fragment"
-              ]
+              ],
+              "shadow_emulated": false
+            },
+            {
+              "name": "shadowtex1",
+              "set": 1,
+              "binding": 3,
+              "use_alt": false,
+              "stages": [
+                "fragment"
+              ],
+              "shadow_emulated": true
             }
           ],
           "vertex_inputs": [
@@ -948,15 +974,21 @@
       "geometry": {
         "terrain": {
           "program": 0,
-          "resolved_from": "terrain"
+          "resolved_from": "terrain",
+          "variants": {
+            "sodium_terrain": 3,
+            "vanilla_entity": 2
+          }
         },
         "damaged_block": {
           "program": 0,
-          "resolved_from": "terrain"
+          "resolved_from": "terrain",
+          "variants": {}
         },
         "dh_terrain": {
           "program": 1,
-          "resolved_from": "dh_terrain"
+          "resolved_from": "dh_terrain",
+          "variants": {}
         }
       },
       "passes": [

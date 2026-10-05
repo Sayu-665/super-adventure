@@ -126,7 +126,7 @@ const MUTATIONS: &[Mutation] = &[
         dim(p).geometry.shift_remove(&GeometryProgram::DhTerrain);
     }),
     ("geometry slot pointing at a compute program", |p, _| {
-        dim(p).geometry.insert(GeometryProgram::Entities, GeometrySlot { program: 7, resolved_from: GeometryProgram::Entities });
+        dim(p).geometry.insert(GeometryProgram::Entities, GeometrySlot { program: 7, resolved_from: GeometryProgram::Entities, variants: Default::default() });
     }),
     ("stage blobs missing or swapped", |p, b| {
         let d = dim(p);

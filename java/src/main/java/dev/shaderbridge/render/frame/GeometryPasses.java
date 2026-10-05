@@ -24,7 +24,9 @@ import net.minecraft.client.Minecraft;
  * and registers them with {@link ActivePasses} so that every vanilla pipeline bound in them is
  * substituted: a pack pipeline with its descriptors, or the vanilla pipeline adapted to the pass.
  * When a pack's geometry writes more targets than one pass can hold, the gbuffers pass holds only
- * {@code fallback_tex} and all geometry draws vanilla. Render thread only.
+ * {@code fallback_tex} and all geometry draws vanilla. The same attachments also host
+ * ShaderBridge's own geometry (Distant Horizons LODs) in passes that are not registered for
+ * substitution ({@link #openOwnGbuffers}, {@link #openOwnShadow}). Render thread only.
  */
 final class GeometryPasses {
     private final PackResources r;
@@ -60,6 +62,35 @@ final class GeometryPasses {
     }
 
     /**
+     * Opens a pass on the shared gbuffers attachments for ShaderBridge's own draws (Distant
+     * Horizons LODs): not registered for pipeline substitution, nothing bound.
+     *
+     * @param label debug label
+     * @param flips the frame's flip state
+     * @param depth the depth attachment (screen-sized)
+     * @return the open pass, or empty when the pack's geometry has no shared attachments
+     */
+    Optional<RenderPass> openOwnGbuffers(String label, FlipState flips, GpuTextureView depth) {
+        if (!gbuffersShared) {
+            return Optional.empty();
+        }
+        return Optional.of(create(label, gbuffers, false, flips, depth.getWidth(0), depth.getHeight(0), depth));
+    }
+
+    /**
+     * Opens a pass on the shadow attachments and {@code shadowtex0} for ShaderBridge's own draws
+     * (Distant Horizons LODs): not registered for pipeline substitution, nothing bound.
+     *
+     * @param label debug label
+     * @param flips the frame's flip state
+     * @return the open pass
+     */
+    RenderPass openOwnShadow(String label, FlipState flips) {
+        GpuTextureView depth = r.targets.shadowDepthView(0);
+        return create(label, shadow, true, flips, depth.getWidth(0), depth.getHeight(0), depth);
+    }
+
+    /**
      * Opens the shadow pass.
      *
      * @param label debug label
@@ -83,6 +114,13 @@ final class GeometryPasses {
 
     private RenderPass open(String label, AttachmentLayout layout, boolean shadowPass, FlipState flips, GpuBufferSlice frame, int width, int height,
                             GpuTextureView depth) {
+        RenderPass pass = create(label, layout, shadowPass, flips, width, height, depth);
+        RenderSystem.bindDefaultUniforms(pass);
+        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame));
+        return pass;
+    }
+
+    private RenderPass create(String label, AttachmentLayout layout, boolean shadowPass, FlipState flips, int width, int height, GpuTextureView depth) {
         List<Integer> targets = layout.attachments().stream().map(AttachmentLayout.Attachment::target).toList();
         List<AttachmentSlot> slots = PassAttachments.geometry(targets, shadowPass, flips, t -> sized(pair(t, shadowPass), width, height));
         RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> label);
@@ -94,10 +132,7 @@ final class GeometryPasses {
             }
         }
         descriptor.withDepthAttachment(depth);
-        RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build());
-        RenderSystem.bindDefaultUniforms(pass);
-        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame));
-        return pass;
+        return RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build());
     }
 
     private Optional<ColorPair> pair(int target, boolean shadowPass) {
@@ -115,7 +150,7 @@ final class GeometryPasses {
         private final boolean packPrograms;
         private final FlipState flips;
         private final GpuBufferSlice frame;
-        private final MinecraftHost host = MinecraftHost.blockAtlas();
+        private final MinecraftHost host = r.host();
 
         Draws(AttachmentLayout layout, boolean shadowPass, boolean packPrograms, FlipState flips, GpuBufferSlice frame) {
             this.layout = layout;

@@ -7,14 +7,18 @@ import java.util.List;
  * One compute dispatch requested from the {@link RawPath}.
  *
  * @param workGroups     work group counts {@code [x, y, z]} (Iris' {@code workGroups} /
- *                       {@code workGroupsRender} rules), each at least 1
+ *                       {@code workGroupsRender} rules), each at least 1; ignored by an indirect
+ *                       dispatch
+ * @param frame          identifies the frame being rendered (changes from one frame to the next)
  * @param frameUniforms  the frame's {@code sb_Frame} block
+ * @param drawUniforms   the {@code sb_Draw} block of the dispatch
  * @param colorAlt       per colortex index: its current contents are in the alternate texture
  *                       (geometry-pass computes read and write the current textures; composite-pass
  *                       computes read per {@code BindingUse.use_alt})
  * @param shadowColorAlt per shadowcolor index: its current contents are in the alternate texture
  */
-public record RawDispatch(List<Integer> workGroups, GpuBufferSlice frameUniforms, List<Boolean> colorAlt, List<Boolean> shadowColorAlt) {
+public record RawDispatch(List<Integer> workGroups, long frame, GpuBufferSlice frameUniforms, GpuBufferSlice drawUniforms, List<Boolean> colorAlt,
+                          List<Boolean> shadowColorAlt) {
     public RawDispatch {
         workGroups = List.copyOf(workGroups);
         colorAlt = List.copyOf(colorAlt);

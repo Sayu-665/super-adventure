@@ -66,7 +66,7 @@ public final class TextureResolver {
      * @return what to bind
      */
     public TextureBinding resolve(ResourceRef ref, boolean useAlt, Program program, HostTextures host) {
-        SamplerSpec sampler = SamplerChoice.of(ref, dim, program, specs);
+        SamplerSpec sampler = samplerSpec(ref, program);
         return switch (ref) {
             case ResourceRef.ColorTex c -> color(c.index(), useAlt, sampler);
             case ResourceRef.ColorImage c -> color(c.index(), useAlt, sampler);
@@ -90,6 +90,16 @@ public final class TextureResolver {
             case ResourceRef.Ssbo s -> missing("SSBO " + s.index() + " cannot be bound as a sampler");
             case ResourceRef.UniformBlock b -> missing("uniform block " + b.name() + " cannot be bound as a sampler");
         };
+    }
+
+    /**
+     * @param ref     a sampled resource
+     * @param program the program that samples it
+     * @return the filtering and addressing the pack asks for it (the raw Vulkan path builds its
+     *     comparison samplers from it)
+     */
+    public SamplerSpec samplerSpec(ResourceRef ref, Program program) {
+        return SamplerChoice.of(ref, dim, program, specs);
     }
 
     private TextureBinding color(int index, boolean alt, SamplerSpec sampler) {

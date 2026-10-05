@@ -195,7 +195,7 @@ fn tricky_types_laid_out_by_glslang_rules() {
         unset("t_dmat3", t("dmat3")),
         unset("u_int", t("int")),
         unset("v_uvec4", t("uvec4")),
-        // A type conflict: the second declaration gets `worldTime__float`.
+        // A type conflict: the second declaration gets `sb_as_float_worldTime`.
         UniformDecl::from_registry("worldTime", t("int")),
         UniformDecl::from_registry("worldTime", t("float")),
         UniformDecl::from_registry("entityColor", t("vec4")),
@@ -209,7 +209,7 @@ fn tricky_types_laid_out_by_glslang_rules() {
     let (layout, index, _) = b.build();
     assert_eq!(
         index.member_name("worldTime", t("float")),
-        Some("worldTime__float")
+        Some("sb_as_float_worldTime")
     );
     check(&layout, "tricky");
 }

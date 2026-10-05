@@ -3,13 +3,19 @@
   "package": "dev.shaderbridge.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "CameraMixin",
+    "FrontendGpuDeviceAccess",
     "FrontendRenderPassMixin",
     "GameRendererMixin",
     "GlslCompilerMixin",
     "LevelRendererAccess",
     "LevelRendererMixin",
     "RenderSystemMixin",
-    "SkyRendererMixin"
+    "SkyRendererMixin",
+    "VulkanDeviceAccess",
+    "VulkanDeviceMixin",
+    "VulkanFeatureSetsMixin",
+    "VulkanGpuTextureMixin"
   ],
   "injectors": { "defaultRequire": 1 }
 }

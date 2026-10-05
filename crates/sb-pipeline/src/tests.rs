@@ -3,7 +3,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use sb_core::PassGroup;
-use sb_core::model::{DhStrategy, OutputTarget, ResourceRef};
+use sb_core::model::{DhStrategy, OutputTarget, ResourceKind, ResourceRef};
 
 const TERRAIN_VSH: &str = "#version 120\nvarying vec2 uv;\nvarying vec4 color;\nvoid main() {\n    gl_Position = ftransform();\n    uv = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;\n    color = gl_Color;\n}\n";
 const TERRAIN_FSH: &str = "#version 120\nuniform sampler2D texture;\nuniform sampler2D gaux1;\nvarying vec2 uv;\nvarying vec4 color;\n/* RENDERTARGETS: 0,2 */\nvoid main() {\n    gl_FragData[0] = texture2D(texture, uv) * color;\n    gl_FragData[1] = texture2D(gaux1, uv);\n}\n";
@@ -359,6 +359,9 @@ fn compile_variant_and_cache() {
     assert_eq!(extra.len(), 1);
     let idx = dim.programs.iter().position(|p| std::ptr::eq(p, extra[0])).unwrap() as u32;
     assert!(dim.geometry.values().all(|slot| slot.program != idx));
+    // ... and is listed as a variant of the slots gbuffers_terrain draws.
+    assert_eq!(dim.geometry[&GeometryProgram::Terrain].variants.get("vanilla_particle"), Some(&idx));
+    assert_eq!(dim.geometry[&GeometryProgram::TerrainCutout].variants.get("vanilla_particle"), Some(&idx));
     let mut session = PackSession::new(&pack, s);
     assert!(compile_variant(&mut session, "", GeometryProgram::Terrain, "vanilla_particle").is_ok());
 
@@ -451,18 +454,227 @@ fn fallback_programs_compile_for_every_slot() {
     assert!(out.pack.diagnostics.iter().any(|d| d.code == "pipeline.fallback-program"));
 }
 
+/// A session recompile reuses every variant whose inputs are unchanged (no transform,
+/// no glslang) and produces exactly what a fresh compile produces.
 #[test]
-fn probe_variant_profiles() {
+fn session_reuses_unchanged_variants() {
+    let mut files = base_files();
+    files.retain(|(n, _)| n != "composite1.fsh");
+    files.push((
+        "composite1.fsh".into(),
+        "#version 120\n#define BRIGHT\nuniform sampler2D colortex0;\nvarying vec2 texcoord;\nvoid main() {\n#ifdef BRIGHT\n    gl_FragData[0] = texture2D(colortex0, texcoord) * 2.0;\n#else\n    gl_FragData[0] = texture2D(colortex0, texcoord);\n#endif\n}\n".into(),
+    ));
+    let pack = pack_of(&files);
+    let mut session = PackSession::new(&pack, vulkan_only());
+    let cold = session.compile();
+    assert!(errors(&cold).is_empty(), "{:#?}", errors(&cold));
+    assert_eq!(cold.stats.variants_cached, 0);
+    assert!(cold.pack.options.options.iter().any(|o| o.name == "BRIGHT"));
+
+    // Unchanged settings: everything comes from the cache, the output is identical.
+    session.set_settings(vulkan_only());
+    let warm = session.compile();
+    assert!(warm.stats.variants_cached >= warm.stats.programs_ok && warm.stats.programs_ok > 0, "{:?}", warm.stats);
+    assert_eq!(warm.pack, cold.pack);
+    assert_eq!(warm.blobs.blobs, cold.blobs.blobs);
+    assert_eq!(warm.stats.programs_ok, cold.stats.programs_ok);
+
+    // One option that only composite1 reads: only that program is translated again.
+    let mut settings = vulkan_only();
+    settings.option_values = OptionValues::from_pairs([("BRIGHT", "false")]);
+    session.set_settings(settings.clone());
+    let changed = session.compile();
+    assert_eq!(changed.stats.variants_cached, warm.stats.variants_cached - 1, "{:?}", changed.stats);
+    let fresh = compile_pack(&pack, &settings);
+    assert_eq!(changed.pack, fresh.pack);
+    assert_eq!(changed.blobs.blobs, fresh.blobs.blobs);
+    assert_ne!(changed.blobs.blobs, warm.blobs.blobs);
+
+    // The cache follows compile settings that change translations (depth mode).
+    let mut reversed = settings.clone();
+    reversed.env.depth_mode = sb_core::model::DepthMode::ReversedZeroToOne;
+    session.set_settings(reversed.clone());
+    let rev = session.compile();
+    assert_eq!(rev.stats.variants_cached, 0, "{:?}", rev.stats);
+    let fresh = compile_pack(&pack, &reversed);
+    assert_eq!(rev.blobs.blobs, fresh.blobs.blobs);
+}
+
+/// A directory pack edited on disk between two compiles of a session: the recompile sees
+/// the edit (the session caches are keyed by the pack contents).
+#[test]
+fn session_sees_pack_edits_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let shaders = dir.path().join("shaders");
+    std::fs::create_dir_all(shaders.join("lib")).unwrap();
+    for (name, text) in base_files() {
+        std::fs::write(shaders.join(name), text).unwrap();
+    }
+    let final_fsh = "#version 120\n#include \"/lib/tint.glsl\"\nuniform sampler2D colortex0;\nvarying vec2 texcoord;\nvoid main() { gl_FragColor = texture2D(colortex0, texcoord) * TINT; }\n";
+    std::fs::write(shaders.join("final.fsh"), final_fsh).unwrap();
+    std::fs::write(shaders.join("lib/tint.glsl"), "#define TINT 0.5\n").unwrap();
+    let pack = ShaderPack::open(dir.path()).unwrap();
+    let mut session = PackSession::new(&pack, vulkan_only());
+    let glsl_of_final = |out: &CompileOutput| {
+        let fin = program(&out.pack.dimensions[0], "final");
+        let fs = fin.stages.iter().find(|s| s.stage == sb_core::ShaderStage::Fragment).unwrap();
+        out.blobs.get_str(fs.glsl_vulkan.unwrap()).unwrap().to_string()
+    };
+    let first = session.compile();
+    assert!(glsl_of_final(&first).contains("0.5"), "{}", glsl_of_final(&first));
+    // Only an included file changes.
+    std::fs::write(shaders.join("lib/tint.glsl"), "#define TINT 0.25\n").unwrap();
+    session.set_settings(vulkan_only());
+    let second = session.compile();
+    let glsl = glsl_of_final(&second);
+    assert!(glsl.contains("0.25") && !glsl.contains("0.5"), "{glsl}");
+    let fresh = compile_pack(&pack, &vulkan_only());
+    assert_eq!(second.pack, fresh.pack);
+    assert_eq!(second.blobs.blobs, fresh.blobs.blobs);
+    // Every other variant was reused; only final was translated again.
+    assert!(second.stats.programs_failed.is_empty(), "{:?}", second.stats);
+    assert_eq!(second.stats.variants_cached, second.stats.programs_ok - 1, "{:?}", second.stats);
+}
+
+/// `compile_variant` works for every built-in draw profile (their builtins and host
+/// resources are always part of the folder layout) and every slot, including DH slots
+/// synthesized from gbuffers programs.
+#[test]
+fn compile_variant_for_every_builtin_profile() {
     let mut files = base_files();
     files.push(("shadow.vsh".into(), TERRAIN_VSH.into()));
     files.push(("shadow.fsh".into(), "#version 120\nvarying vec2 uv;\nvarying vec4 color;\nvoid main() { gl_FragData[0] = color; }\n".into()));
     let pack = pack_of(&files);
     let mut session = PackSession::new(&pack, vulkan_only());
-    session.compile();
+    let out = session.compile();
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    let slots = [GeometryProgram::TerrainSolid, GeometryProgram::Water, GeometryProgram::ShadowSolid, GeometryProgram::Entities, GeometryProgram::DhTerrain];
     for p in sb_transform::builtin_profiles() {
-        for g in [GeometryProgram::TerrainSolid, GeometryProgram::Water, GeometryProgram::ShadowSolid, GeometryProgram::Entities, GeometryProgram::DhTerrain] {
-            let r = compile_variant(&mut session, "", g, &p.name);
-            eprintln!("PROBE {:28} {:?}: {}", p.name, g, match &r { Ok(_) => "ok".to_string(), Err(d) => d.iter().filter(|x| x.is_error()).map(|x| x.to_string()).next().unwrap_or_default() });
+        for g in slots {
+            let (program, blobs) = compile_variant(&mut session, "", g, &p.name)
+                .unwrap_or_else(|d| panic!("{} for {g:?}: {:?}", p.name, d.iter().map(|x| x.to_string()).collect::<Vec<_>>()));
+            assert_eq!(program.draw_profile.as_deref(), Some(p.name.as_str()));
+            assert!(program.stages.iter().all(|s| s.spirv.and_then(|b| blobs.get_spirv(b)).is_some()), "{} {g:?}", p.name);
+            if g == GeometryProgram::DhTerrain {
+                // Synthesized from gbuffers_terrain, as the pack's own dh_terrain.
+                assert_eq!(program.name, "dh_terrain");
+                assert_eq!(program.synthesized_from.as_deref(), Some("gbuffers_terrain"));
+            }
+        }
+    }
+    // Without Distant Horizons there is no DH program to make a variant of.
+    let mut s = vulkan_only();
+    s.env.distant_horizons = false;
+    let mut session = PackSession::new(&pack, s);
+    let e = compile_variant(&mut session, "", GeometryProgram::DhTerrain, "dh_terrain").unwrap_err();
+    assert!(e.iter().any(|d| d.code == "pipeline.no-program"), "{e:?}");
+}
+
+/// Variants are listed per slot with the `use_alt` of the slot's pass: a program drawn
+/// before and after a `deferred` pass that flips a buffer it reads gets one copy per state,
+/// for its own profile and for every variant, and `compile_variant` agrees.
+#[test]
+fn slot_variants_follow_the_flip_state() {
+    let mut files = base_files();
+    files.push(("deferred.vsh".into(), QUAD_VSH.into()));
+    files.push(("deferred.fsh".into(), composite_fsh("colortex4", "4")));
+    let mut settings = vulkan_only();
+    settings.profile_overrides.insert(GeometryProgram::Terrain, vec!["sodium_terrain".into()]);
+    settings.profile_overrides.insert(GeometryProgram::Water, vec!["sodium_terrain".into()]);
+    settings.profile_overrides.insert(GeometryProgram::DhTerrain, vec!["dh_terrain".into()]);
+    let pack = pack_of(&files);
+    let out = compile_pack(&pack, &settings);
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    let dim = &out.pack.dimensions[0];
+    let alt = |idx: u32| {
+        let p = &dim.programs[idx as usize];
+        p.bindings_used.iter().find(|b| dim.bindings.get(&b.name).is_some_and(|e| e.resource == ResourceRef::ColorTex(4))).map(|b| b.use_alt)
+    };
+    let terrain = &dim.geometry[&GeometryProgram::Terrain];
+    let water = &dim.geometry[&GeometryProgram::Water];
+    let (t, w) = (terrain.variants["sodium_terrain"], water.variants["sodium_terrain"]);
+    assert_ne!(t, w);
+    for idx in [t, w] {
+        let p = &dim.programs[idx as usize];
+        assert_eq!((p.name.as_str(), p.draw_profile.as_deref()), ("gbuffers_terrain", Some("sodium_terrain")));
+    }
+    assert_eq!((alt(terrain.program), alt(t)), (Some(false), Some(false)));
+    assert_eq!((alt(water.program), alt(w)), (Some(true), Some(true)));
+    // Variants other slots needed are listed too: gbuffers_block draws gbuffers_terrain
+    // with the entity profile.
+    let block = dim.geometry[&GeometryProgram::Block].program;
+    assert_eq!(dim.programs[block as usize].draw_profile.as_deref(), Some("vanilla_entity"));
+    assert_eq!(terrain.variants.get("vanilla_entity"), Some(&block));
+    assert_eq!(alt(water.variants["vanilla_entity"]), Some(true));
+    assert!(!terrain.variants.contains_key("vanilla_terrain"), "the slot's own profile is not a variant");
+    // A DH override follows the synthesis of its slot (here: the native DH vertex format
+    // instead of the synthesized programs' vanilla-lightmap variant).
+    let dh = &dim.geometry[&GeometryProgram::DhTerrain];
+    assert_eq!(dim.programs[dh.program as usize].draw_profile.as_deref(), Some(sb_transform::DH_SYNTH_PROFILE));
+    let native = &dim.programs[dh.variants["dh_terrain"] as usize];
+    assert_eq!((native.name.as_str(), native.synthesized_from.as_deref()), ("dh_terrain", Some("gbuffers_terrain")));
+    // compile_variant produces the same programs.
+    let mut session = PackSession::new(&pack, settings);
+    for (g, idx) in [(GeometryProgram::Terrain, t), (GeometryProgram::Water, w)] {
+        let (p, _) = compile_variant(&mut session, "", g, "sodium_terrain").unwrap();
+        assert_eq!(p.bindings_used, dim.programs[idx as usize].bindings_used, "{g:?}");
+    }
+}
+
+/// The model's binding table describes what the SPIR-V declares (rectangle samplers as
+/// 2D, emulated comparison samplers as plain samplers), and emulated uses are flagged.
+#[test]
+fn binding_kinds_match_the_spirv() {
+    let mut files = base_files();
+    files.retain(|(n, _)| n != "composite1.fsh");
+    files.push((
+        "composite1.fsh".into(),
+        "#version 130\nuniform sampler2DShadow shadowtex0;\nuniform sampler2DRect colortex5;\nuniform usampler2DRect colortex6;\nuniform sampler2DRectShadow depthtex1;\nin vec2 texcoord;\nvoid main() {\n    float s = shadow2D(shadowtex0, vec3(texcoord, 0.5)).r + texture(depthtex1, vec3(texcoord * 4.0, 0.5));\n    gl_FragData[0] = vec4(s) + texture2DRect(colortex5, texcoord * 4.0) + vec4(texelFetch(colortex6, ivec2(1)));\n}\n".into(),
+    ));
+    let pack = pack_of(&files);
+    for comparison_samplers in [true, false] {
+        let mut settings = vulkan_only();
+        settings.env.device.comparison_samplers = comparison_samplers;
+        let out = compile_pack(&pack, &settings);
+        assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+        let dim = &out.pack.dimensions[0];
+        let kind = |n: &str| dim.bindings.get(n).unwrap_or_else(|| panic!("no binding {n}")).kind.clone();
+        let sampler = |dim: &str, shadow: bool, st: &str| ResourceKind::Sampler { dim: dim.into(), shadow, sample_type: st.into() };
+        assert_eq!(kind("shadowtex0"), sampler("2d", comparison_samplers, "float"));
+        assert_eq!(kind("depthtex1"), sampler("2d", comparison_samplers, "float"));
+        assert_eq!(kind("colortex5"), sampler("2d", false, "float"));
+        assert_eq!(kind("colortex6"), sampler("2d", false, "uint"));
+        let c1 = program(dim, "composite1");
+        for name in ["shadowtex0", "depthtex1", "colortex5", "colortex6"] {
+            let used = c1.bindings_used.iter().find(|b| b.name == name).unwrap();
+            assert_eq!(used.shadow_emulated, !comparison_samplers && name != "colortex5" && name != "colortex6", "{name}");
+        }
+        assert_reflection_matches(&out);
+    }
+}
+
+/// Every descriptor of every SPIR-V module has a binding-table entry at its set/binding
+/// whose kind is the reflected kind.
+fn assert_reflection_matches(out: &CompileOutput) {
+    for dim in &out.pack.dimensions {
+        for p in &dim.programs {
+            for st in &p.stages {
+                let Some(words) = st.spirv.and_then(|b| out.blobs.get_spirv(b)) else { continue };
+                let refl = sb_compile::reflect(&words).unwrap();
+                for d in &refl.descriptors {
+                    let Some(reflected) = resource_kind_of(&d.kind) else { continue };
+                    if matches!(reflected, ResourceKind::UniformBuffer) {
+                        continue;
+                    }
+                    let e = dim.bindings.entries.iter().find(|e| e.set == d.set && e.binding == d.binding);
+                    let e = e.unwrap_or_else(|| panic!("{}: no entry for {} at {}/{}", p.name, d.name, d.set, d.binding));
+                    let strip = |k: &ResourceKind| match k {
+                        ResourceKind::StorageImage { dim, sample_type, .. } => format!("image {dim} {sample_type}"),
+                        k => format!("{k:?}"),
+                    };
+                    assert_eq!(strip(&e.kind), strip(&reflected), "{}: `{}`", p.name, e.name);
+                }
+            }
         }
     }
 }

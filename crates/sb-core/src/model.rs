@@ -365,9 +365,19 @@ pub struct DimensionPipeline {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeometrySlot {
+    /// Index into `programs` of the program drawing this geometry with the slot's default
+    /// draw profile.
     pub program: u32,
     /// The program actually used (may be a fallback).
     pub resolved_from: GeometryProgram,
+    /// The same program (same name and kind) translated for other draw profiles: draw
+    /// profile id -> index into `programs`. Lists every other profile the compile produced
+    /// it for (the variants other slots needed and the `profile_overrides` the host
+    /// requested), each with the `use_alt` of this slot's pass, so a host drawing this
+    /// geometry through another draw path (Sodium, a moving-block renderer, ...) finds its
+    /// program here. Variants compiled later on demand (`compile_variant`) are not listed.
+    #[serde(default)]
+    pub variants: IndexMap<String, u32>,
 }
 
 /// Render target configuration (from const directives + shaders.properties).
@@ -742,15 +752,25 @@ pub struct BindingEntry {
     pub resource: ResourceRef,
 }
 
+/// Descriptor kind of a binding.
+///
+/// In a compiled pack's [`BindingTable`] it describes what the translated shaders
+/// declare, i.e. what the host must bind: rectangle samplers (`sampler2DRect`, ...) are
+/// declared as 2D samplers (dim `2d`, Vulkan has no rectangle textures), and comparison
+/// samplers the translator emulates (`sampler2DShadow` with
+/// [`DeviceCaps::comparison_samplers`] false) are plain samplers (`shadow` false, see
+/// [`BindingUse::shadow_emulated`]). The SPIR-V reflection of every module agrees with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ResourceKind {
     /// Combined image sampler.
     Sampler {
-        /// `1d`, `1d_array`, `2d`, `2d_array`, `3d`, `cube`, `cube_array`, `2d_rect`,
-        /// `buffer`, `2d_ms`, `2d_ms_array`.
+        /// `1d`, `1d_array`, `2d`, `2d_array`, `3d`, `cube`, `cube_array`, `buffer`,
+        /// `2d_ms`, `2d_ms_array` (and `2d_rect` for declarations before translation).
         dim: String,
-        /// Shadow (comparison) sampler.
+        /// Depth-comparison sampler: the shaders declare a `sampler*Shadow` and the host
+        /// binds a sampler with comparison enabled (compare op of the depth mode). False
+        /// means a plain, non-comparison sampler, also for emulated comparisons.
         shadow: bool,
         /// `float`, `int`, `uint`.
         sample_type: String,
@@ -898,6 +918,15 @@ pub struct BindingUse {
     /// (true) or main (false) according to the static flip schedule.
     pub use_alt: bool,
     pub stages: Vec<ShaderStage>,
+    /// The pack declares this sampler as a depth-comparison sampler (`sampler2DShadow`,
+    /// `sampler2DRectShadow`) but the program compares in the shader because the host has
+    /// no comparison samplers ([`DeviceCaps::comparison_samplers`] false): the translated
+    /// shaders declare a plain `sampler2D` (a 2×2 percentage-closer filter over
+    /// `textureGather`), so the host binds the depth texture with a plain, non-comparison
+    /// sampler. The binding's [`ResourceKind::Sampler`] has `shadow: false` accordingly;
+    /// this flag only records why. False in models written before emulation existed.
+    #[serde(default)]
+    pub shadow_emulated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1012,5 +1041,24 @@ mod tests {
         assert_eq!(j, r#"{"type":"noise"}"#);
         let j = serde_json::to_string(&UniformSource::Builtin("frameTimeCounter".into())).unwrap();
         assert_eq!(j, r#"{"type":"builtin","name":"frameTimeCounter"}"#);
+    }
+
+    /// Fields added after the first model release default when absent.
+    #[test]
+    fn added_fields_default_when_absent() {
+        let slot: GeometrySlot = serde_json::from_str(r#"{"program":3,"resolved_from":"terrain"}"#).unwrap();
+        assert_eq!(slot, GeometrySlot { program: 3, resolved_from: GeometryProgram::Terrain, variants: IndexMap::new() });
+        let mut with = slot.clone();
+        with.variants.insert("sodium_terrain".into(), 7);
+        let j = serde_json::to_string(&with).unwrap();
+        assert_eq!(j, r#"{"program":3,"resolved_from":"terrain","variants":{"sodium_terrain":7}}"#);
+        assert_eq!(serde_json::from_str::<GeometrySlot>(&j).unwrap(), with);
+
+        let used: BindingUse = serde_json::from_str(r#"{"name":"shadowtex0","set":1,"binding":4,"use_alt":false,"stages":["fragment"]}"#).unwrap();
+        assert!(!used.shadow_emulated);
+        let emulated = BindingUse { shadow_emulated: true, ..used };
+        let j = serde_json::to_string(&emulated).unwrap();
+        assert!(j.ends_with(r#""shadow_emulated":true}"#), "{j}");
+        assert_eq!(serde_json::from_str::<BindingUse>(&j).unwrap(), emulated);
     }
 }

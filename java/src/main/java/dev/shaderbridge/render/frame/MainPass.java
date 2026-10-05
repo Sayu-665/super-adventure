@@ -21,8 +21,9 @@ import net.minecraft.client.renderer.state.level.LevelRenderState;
  * ShaderBridge's replacement of the body of Minecraft's main level pass
  * ({@code LevelRenderer.addMainPass}'s {@code executes} lambda) while a pack frame is active. It
  * does what the vanilla body does before drawing (fog, chunk sampler, translucent preparation,
- * level lighting), then lets Minecraft draw the opaque geometry and the classic (non-OIT)
- * transparency into two gbuffers passes, running the pack's deferred passes between them and its
+ * where Distant Horizons hands over its LODs, level lighting), then lets Minecraft draw the opaque
+ * geometry and the classic (non-OIT) transparency into two gbuffers passes, each preceded by the
+ * matching Distant Horizons LODs, running the pack's deferred passes between them and its
  * composite and final passes after them. The outline, see-through and always-on-top features that
  * follow in the vanilla body are left to the caller, which runs them whether or not this
  * succeeded.
@@ -45,6 +46,8 @@ final class MainPass {
         updateChunkSampler(level, gameRenderer.gameRenderState().levelRenderState, gameRenderer.gameRenderState().optionsRenderState);
         level.shaderbridge$prepareTranslucents();
         gameRenderer.lighting().setupFor(Lighting.Entry.LEVEL);
+        // Distant Horizons handed its LODs over in prepareTranslucents.
+        renderer.drawDistantOpaque();
         RenderPass opaque = renderer.openGbuffers("ShaderBridge gbuffers (opaque)");
         try (opaque) {
             level.shaderbridge$executeSolid(chunks, features, opaque);
@@ -52,6 +55,7 @@ final class MainPass {
             renderer.closed(opaque);
         }
         renderer.afterOpaque();
+        renderer.drawDistantWater();
         RenderPass translucent = renderer.openGbuffers("ShaderBridge gbuffers (translucent)");
         try (translucent) {
             level.shaderbridge$executeClassicTransparency(chunks, features, translucent);

@@ -24,7 +24,8 @@
 //! The same canonical name declared with incompatible kinds (e.g. `sampler2D` and
 //! `sampler2DShadow`, or `sampler2D` and `usampler2D`), or resolving to different
 //! resources, gets separate entries: the first keeps the name, the others are named
-//! `<name>__<suffix>` (`shadowtex1__shadow`, `colortex2__uint`, `colortex0__3d`), with a
+//! [`conflict_name`]`(name, suffix)` = `sb_as_<suffix>_<name>` (`sb_as_shadow_shadowtex1`,
+//! `sb_as_uint_colortex2`, `sb_as_3d_colortex0`; see [`crate::naming`]), with a
 //! `binding.kind-conflict` / `binding.resource-conflict` warning. Use the name returned
 //! by [`BindingTableBuilder::add`], or [`find_binding`], to find the entry for a
 //! declaration. Storage-image declarations of the same name are merged: memory
@@ -36,6 +37,7 @@
 //! [`canonicalize`]: crate::resources::canonicalize
 
 use crate::layout::UNIFORM_SET;
+use crate::naming::{conflict_name, is_derived_name, uniquified_name};
 use crate::resources::{Canonical, MAX_COLOR_TEX, MAX_DEPTH_TEX, MAX_SHADOW_COLOR, indexed};
 use indexmap::IndexMap;
 use sb_core::model::{BindingEntry, BindingTable, ResourceKind, ResourceRef};
@@ -121,7 +123,8 @@ impl BindingTableBuilder {
     }
 
     /// Register a resource under its canonical `name` and return the binding name the
-    /// declaration must use (`name`, or `name__<suffix>` on a conflict). Invalid names
+    /// declaration must use (`name`, or [`conflict_name`]`(name, suffix)` =
+    /// `sb_as_<suffix>_<name>` on a conflict). Invalid names
     /// and SSBO indices above [`MAX_SSBO_INDEX`] are rejected with an error diagnostic
     /// (the name is returned unchanged and gets no binding).
     pub fn add(&mut self, name: &str, kind: ResourceKind, resource: ResourceRef) -> String {
@@ -161,30 +164,30 @@ impl BindingTableBuilder {
         let base = match group.first() {
             None => name.to_string(),
             Some(primary) => {
-                let suffix = variant_suffix(primary, &kind, &resource);
+                let variant = conflict_name(name, &variant_suffix(primary, &kind, &resource));
                 let kind_conflict = kind_key(&primary.kind) != key;
                 diagnostics.push(Diagnostic::warning(
                     if kind_conflict { "binding.kind-conflict" } else { "binding.resource-conflict" },
                     if kind_conflict {
                         format!(
-                            "`{name}` is declared as {} and as {}; the second gets its own binding `{name}__{suffix}`",
+                            "`{name}` is declared as {} and as {}; the second gets its own binding `{variant}`",
                             describe(&primary.kind),
                             describe(&kind)
                         )
                     } else {
                         format!(
-                            "`{name}` refers to {:?} and to {:?}; the second gets its own binding `{name}__{suffix}`",
+                            "`{name}` refers to {:?} and to {:?}; the second gets its own binding `{variant}`",
                             primary.resource, resource
                         )
                     },
                 ));
-                format!("{name}__{suffix}")
+                variant
             }
         };
         let mut binding_name = base.clone();
         let mut n = 2;
         while used_names.contains(&binding_name) {
-            binding_name = format!("{base}_{n}");
+            binding_name = uniquified_name(&base, n);
             n += 1;
         }
         used_names.insert(binding_name.clone());
@@ -300,8 +303,8 @@ impl BindingTableBuilder {
 
 /// Find the entry for a declaration of `canonical` with `kind`: the entry with the
 /// canonical name, or one of the names [`BindingTableBuilder::add`] derives from it
-/// (`<name>__<suffix>` conflict variants and `_<n>` uniquified names), that has the
-/// same resource and a compatible kind.
+/// (`sb_as_<suffix>_<name>` conflict variants and `_<n>` uniquified names, see
+/// [`is_derived_name`]), that has the same resource and a compatible kind.
 pub fn find_binding<'a>(
     table: &'a BindingTable,
     canonical: &Canonical,
@@ -314,22 +317,9 @@ pub fn find_binding<'a>(
         .filter(|e| {
             e.resource == canonical.resource
                 && kind_key(&e.kind) == key
-                && e.name
-                    .strip_prefix(canonical.name.as_str())
-                    .is_some_and(is_derived_suffix)
+                && is_derived_name(&e.name, &canonical.name)
         })
         .min_by_key(|e| (e.name != canonical.name, e.name.len(), e.name.as_str()))
-}
-
-/// Whether `rest` is what [`BindingTableBuilder::add`] may append to a canonical name:
-/// nothing, `__<suffix>` (conflict variant, optionally uniquified), or `_<n>`
-/// (uniquified).
-fn is_derived_suffix(rest: &str) -> bool {
-    if rest.is_empty() || rest.starts_with("__") {
-        return true;
-    }
-    rest.strip_prefix('_')
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Position of a well-known resource name in the canonical binding order.
@@ -635,11 +625,11 @@ mod tests {
         assert_eq!(b.add("shadowtex1", s2d(), R::ShadowTex(1)), "shadowtex1");
         assert_eq!(
             b.add("shadowtex1", shadow.clone(), R::ShadowTex(1)),
-            "shadowtex1__shadow"
+            "sb_as_shadow_shadowtex1"
         );
         assert_eq!(
             b.add("shadowtex1", shadow.clone(), R::ShadowTex(1)),
-            "shadowtex1__shadow"
+            "sb_as_shadow_shadowtex1"
         );
         assert_eq!(b.add("shadowtex1", s2d(), R::ShadowTex(1)), "shadowtex1");
         assert_eq!(b.diagnostics().len(), 1);
@@ -650,13 +640,13 @@ mod tests {
             layout(&t),
             vec![
                 ("shadowtex1".into(), 1, 0),
-                ("shadowtex1__shadow".into(), 1, 1)
+                ("sb_as_shadow_shadowtex1".into(), 1, 1)
             ]
         );
         let c = Canonical::new("shadowtex1", R::ShadowTex(1));
         assert_eq!(
             find_binding(&t, &c, &shadow).unwrap().name,
-            "shadowtex1__shadow"
+            "sb_as_shadow_shadowtex1"
         );
         assert_eq!(find_binding(&t, &c, &s2d()).unwrap().name, "shadowtex1");
         assert!(find_binding(&t, &c, &sampler_kind("usampler2D").unwrap()).is_none());
@@ -673,7 +663,7 @@ mod tests {
                 sampler_kind("usampler2D").unwrap(),
                 R::ColorTex(2)
             ),
-            "colortex2__uint"
+            "sb_as_uint_colortex2"
         );
         assert_eq!(
             b.add(
@@ -681,7 +671,7 @@ mod tests {
                 sampler_kind("sampler3D").unwrap(),
                 R::ColorTex(2)
             ),
-            "colortex2__3d"
+            "sb_as_3d_colortex2"
         );
         assert_eq!(
             b.add(
@@ -689,16 +679,16 @@ mod tests {
                 image_kind("image2D", None, false, false).unwrap(),
                 R::ColorTex(2)
             ),
-            "colortex2__image"
+            "sb_as_image_colortex2"
         );
-        assert_eq!(b.add("colortex2", s2d(), R::Atlas), "colortex2__atlas");
+        assert_eq!(b.add("colortex2", s2d(), R::Atlas), "sb_as_atlas_colortex2");
         assert_eq!(
             b.add(
                 "colortex2",
                 sampler_kind("isampler3D").unwrap(),
                 R::ColorTex(2)
             ),
-            "colortex2__3d_int"
+            "sb_as_3d_int_colortex2"
         );
         let codes: Vec<&str> = b.diagnostics().iter().map(|d| d.code.as_str()).collect();
         assert_eq!(
@@ -714,19 +704,19 @@ mod tests {
         // A canonical name that equals an existing variant name is made unique.
         assert_eq!(
             b.add(
-                "colortex2__uint",
+                "sb_as_uint_colortex2",
                 s2d(),
-                R::Unknown("colortex2__uint".into())
+                R::Unknown("sb_as_uint_colortex2".into())
             ),
-            "colortex2__uint_2"
+            "sb_as_uint_colortex2_2"
         );
         let t = b.build();
         let names: HashSet<&str> = t.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names.len(), t.entries.len());
         // Variants stay next to their primary in the canonical order.
         assert_eq!(t.get("colortex2").unwrap().binding, 0);
-        assert_eq!(t.get("colortex2__uint").unwrap().binding, 1);
-        assert_eq!(t.get("colortex2__image").unwrap().set, STORAGE_SET);
+        assert_eq!(t.get("sb_as_uint_colortex2").unwrap().binding, 1);
+        assert_eq!(t.get("sb_as_image_colortex2").unwrap().set, STORAGE_SET);
     }
 
     #[test]
@@ -811,26 +801,51 @@ mod tests {
         assert_eq!(b.add("foo", s2d(), R::Unknown("foo".into())), "foo");
         assert_eq!(
             b.add("foo", u2d.clone(), R::Unknown("foo".into())),
-            "foo__uint"
+            "sb_as_uint_foo"
         );
-        let odd = Canonical::new("foo__uint", R::Unknown("foo__uint".into()));
-        assert_eq!(b.add_canonical(&odd, s2d()), "foo__uint_2");
+        // Pack samplers keep `sb_*` names (they are the interface), so one can spell a
+        // variant name.
+        let odd = Canonical::new("sb_as_uint_foo", R::Unknown("sb_as_uint_foo".into()));
+        assert_eq!(b.add_canonical(&odd, s2d()), "sb_as_uint_foo_2");
         let odd_variant = b.add_canonical(&odd, u2d.clone());
-        assert_eq!(odd_variant, "foo__uint__uint");
+        assert_eq!(odd_variant, "sb_as_uint_sb_as_uint_foo");
         let t = b.build();
-        assert_eq!(find_binding(&t, &odd, &s2d()).unwrap().name, "foo__uint_2");
+        assert_eq!(find_binding(&t, &odd, &s2d()).unwrap().name, "sb_as_uint_foo_2");
         assert_eq!(find_binding(&t, &odd, &u2d).unwrap().name, odd_variant);
         let foo = Canonical::new("foo", R::Unknown("foo".into()));
         assert_eq!(find_binding(&t, &foo, &s2d()).unwrap().name, "foo");
-        assert_eq!(find_binding(&t, &foo, &u2d).unwrap().name, "foo__uint");
+        assert_eq!(find_binding(&t, &foo, &u2d).unwrap().name, "sb_as_uint_foo");
         // Other names that merely share the prefix are not derived names.
-        assert!(is_derived_suffix(""));
-        assert!(is_derived_suffix("__shadow"));
-        assert!(is_derived_suffix("_2"));
-        assert!(!is_derived_suffix("_"));
-        assert!(!is_derived_suffix("_a"));
-        assert!(!is_derived_suffix("x"));
-        assert!(!is_derived_suffix("2"));
+        let mut b = BindingTableBuilder::new();
+        b.add("foo", u2d.clone(), R::Unknown("foo".into()));
+        b.add("foo_a", s2d(), R::Unknown("foo".into()));
+        b.add("foox", s2d(), R::Unknown("foo".into()));
+        b.add("sb_as_uint_foo_x", s2d(), R::Unknown("foo".into()));
+        assert!(find_binding(&b.build(), &foo, &s2d()).is_none());
+    }
+
+    /// Regression (#52): conflict variants were named `<name>__<suffix>`, and GLSL
+    /// reserves identifiers containing `__` (glslang warns about each one).
+    #[test]
+    fn conflict_variants_avoid_reserved_double_underscores() {
+        let mut b = BindingTableBuilder::new();
+        let shadow = sampler_kind("sampler2DShadow").unwrap();
+        let mut declared = Vec::new();
+        for name in ["shadowtex1", "_tmp", "tmp_", "a"] {
+            let resource = if name == "shadowtex1" { R::ShadowTex(1) } else { R::Unknown(name.into()) };
+            let c = Canonical::new(name, resource);
+            b.add_canonical(&c, s2d());
+            let variant = b.add_canonical(&c, shadow.clone());
+            assert!(variant.starts_with(crate::CONFLICT_PREFIX), "{variant}");
+            assert!(!variant.contains("__"), "{variant}");
+            declared.push((c, variant));
+        }
+        let t = b.build();
+        for (c, variant) in &declared {
+            assert_eq!(&find_binding(&t, c, &shadow).unwrap().name, variant);
+            assert_eq!(find_binding(&t, c, &s2d()).unwrap().name, c.name);
+        }
+        assert!(t.entries.iter().all(|e| !e.name.contains("__")));
     }
 
     /// Regression: huge `bufferObject` indices used to saturate the image bindings

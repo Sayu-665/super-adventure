@@ -41,6 +41,31 @@ public interface RawPath {
         throw new UnsupportedOperationException("the raw Vulkan path does not dispatch compute programs");
     }
 
+    /**
+     * Draws an admitted composite-style program in its own render pass, between two of
+     * Minecraft's passes, with full memory barriers around it. Called by the frame orchestration
+     * on the render thread, outside any render pass, for programs this path
+     * {@linkplain #admit admitted} and reports {@linkplain RawProgram.State.Ready ready}. A raw
+     * path that admits composite-style programs must override this; the default refuses, which
+     * the caller reports and skips.
+     *
+     * @param program the prepared program
+     * @param draw    the attachments and the frame state the draw sees
+     * @return per attachment slot, whether the draw wrote it
+     * @throws UnsupportedOperationException if this raw path does not draw composite-style programs
+     */
+    default List<Boolean> draw(RawProgram program, RawDraw draw) {
+        throw new UnsupportedOperationException("the raw Vulkan path does not draw composite-style programs");
+    }
+
+    /**
+     * @return the largest work group counts {@code [x, y, z]} a dispatch may have; the default is
+     *     the minimum every Vulkan device supports
+     */
+    default int[] maxWorkGroups() {
+        return new int[] {65535, 65535, 65535};
+    }
+
     /** Outcome of {@link #admit}. */
     sealed interface Admission {
         /** @param program the program being prepared; the caller owns it */

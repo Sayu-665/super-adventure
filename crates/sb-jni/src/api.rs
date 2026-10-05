@@ -224,8 +224,10 @@ pub fn parse_geometry_program(name: &str) -> Result<GeometryProgram> {
 
 /// Compile one extra (geometry program, draw profile) variant of a compiled folder: the
 /// program the folder resolves for `geometry_program` (following its fallback chain past
-/// programs that fail) translated for `profile`. The profile must be built in or have been
-/// registered before the last compile. Returns `{"program": Program, "blobs": [BlobInfo]}`;
+/// programs that fail; for a Distant Horizons slot of a pack without DH programs, the
+/// program synthesized from its gbuffers source) translated for `profile`, with the
+/// `use_alt` of the slot's pass. Every built-in profile works, and every profile
+/// registered before the last compile (a later registration needs a recompile). Returns `{"program": Program, "blobs": [BlobInfo]}`;
 /// the blob offsets index the buffer of [`variant_blob_size`] / [`with_variant_blob_data`],
 /// kept until the next variant or compile. Runs on the worker thread.
 pub fn compile_variant(session: u64, folder: &str, geometry_program: &str, profile: &str) -> Result<String> {

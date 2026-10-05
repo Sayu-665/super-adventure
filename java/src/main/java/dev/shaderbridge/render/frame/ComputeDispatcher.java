@@ -19,14 +19,12 @@ import net.minecraft.client.Minecraft;
 /**
  * Dispatches the compute programs of a pass on the raw Vulkan path, between Minecraft's render
  * passes. Computes of {@code shadowcomp} and of shadow geometry passes cover the shadow map, all
- * others the screen. Programs still being prepared are skipped this frame; programs the raw path
- * cannot run were reported once by the program resolver and are skipped. Render thread only,
- * outside any render pass.
+ * others the screen, within the device's work group limits; each gets the {@code sb_Draw} block
+ * of its program (camera or shadow defaults, its alpha test and blend). Programs still being
+ * prepared are skipped this frame; programs the raw path cannot run were reported once by the
+ * program resolver and are skipped. Render thread only, outside any render pass.
  */
 final class ComputeDispatcher {
-    /** Work group counts every Vulkan device supports in each dimension. */
-    static final int[] MIN_MAX_WORK_GROUPS = {65535, 65535, 65535};
-
     private static final Set<GeometryProgram> SHADOW_SLOTS = EnumSet.of(GeometryProgram.SHADOW, GeometryProgram.SHADOW_SOLID,
         GeometryProgram.SHADOW_CUTOUT, GeometryProgram.SHADOW_WATER, GeometryProgram.SHADOW_ENTITIES, GeometryProgram.SHADOW_LIGHTNING,
         GeometryProgram.SHADOW_BLOCK, GeometryProgram.DH_SHADOW);
@@ -48,13 +46,17 @@ final class ComputeDispatcher {
             if (!(r.programs.program(index, AttachmentLayout.fullscreen(r.dim, program)) instanceof ProgramResolution.Raw raw)) {
                 continue;
             }
-            int[] extent = coversShadowMap(program) ? shadowExtent() : screenExtent();
-            int[] groups = DispatchSize.of(program.compute(), extent[0], extent[1], MIN_MAX_WORK_GROUPS);
-            if (Arrays.stream(groups).anyMatch(g -> g == 0)) {
+            boolean shadow = coversShadowMap(program);
+            int[] extent = shadow ? shadowExtent() : screenExtent();
+            int[] groups = DispatchSize.of(program.compute(), extent[0], extent[1], r.raw.maxWorkGroups());
+            boolean indirect = program.compute() != null && program.compute().indirect() != null;
+            if (!indirect && Arrays.stream(groups).anyMatch(g -> g == 0)) {
                 continue;
             }
+            GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, shadow));
             try {
-                r.raw.dispatch(raw.program(), new RawDispatch(Arrays.stream(groups).boxed().toList(), frame, flips.colorState(), flips.shadowState()));
+                r.raw.dispatch(raw.program(), new RawDispatch(Arrays.stream(groups).boxed().toList(), r.frameState.timer().frameCounter(), frame, draw,
+                    flips.colorState(), flips.shadowState()));
             } catch (RuntimeException e) {
                 r.diagnostics.report(program.name() + " was not dispatched: " + e.getMessage());
             }

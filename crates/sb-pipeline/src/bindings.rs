@@ -245,6 +245,43 @@ pub fn refine_storage_images(table: &mut BindingTable, reflections: &[&sb_compil
     changed
 }
 
+/// Whether the translated shaders declare a binding of `kind` as a plain sampler although
+/// the pack declares a comparison sampler: `sb-transform` emulates `sampler2DShadow` (and
+/// `sampler2DRectShadow`, which it lowers to `sampler2DShadow` first) when the host has no
+/// comparison samplers (`emulate`). Other comparison samplers stay comparison samplers.
+pub fn shadow_emulated(kind: &ResourceKind, emulate: bool) -> bool {
+    emulate && matches!(kind, ResourceKind::Sampler { dim, shadow: true, .. } if dim == "2d" || dim == "2d_rect")
+}
+
+/// The kind the translated shaders declare for a binding the pack declares as `kind`
+/// (ARCHITECTURE §5.2): rectangle samplers become 2D samplers (Vulkan has no rectangle
+/// textures; `sb-transform` converts their texel coordinates) and emulated comparison
+/// samplers ([`shadow_emulated`]) plain samplers. Everything else is unchanged.
+pub fn declared_kind(kind: &ResourceKind, emulate: bool) -> ResourceKind {
+    match kind {
+        ResourceKind::Sampler { dim, shadow, sample_type } => ResourceKind::Sampler {
+            dim: if dim == "2d_rect" { "2d".to_string() } else { dim.clone() },
+            shadow: *shadow && !shadow_emulated(kind, emulate),
+            sample_type: sample_type.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// The binding table of the model: the folder's table (whose kinds are the pack's
+/// declarations, which the translator looks bindings up with) with every kind replaced by
+/// its [`declared_kind`], so that it describes what the host binds and agrees with the
+/// SPIR-V reflection of every module.
+pub fn declared_table(table: &BindingTable, emulate: bool) -> BindingTable {
+    BindingTable {
+        entries: table
+            .entries
+            .iter()
+            .map(|e| sb_core::model::BindingEntry { kind: declared_kind(&e.kind, emulate), ..e.clone() })
+            .collect(),
+    }
+}
+
 /// Whether a resource reads a shadow map (decides the default of `shadow.enabled`).
 pub fn is_shadow_resource(r: &ResourceRef) -> bool {
     matches!(r, ResourceRef::ShadowTex(_) | ResourceRef::ShadowTexHw(_) | ResourceRef::ShadowColor(_) | ResourceRef::ShadowColorImage(_))
@@ -316,6 +353,39 @@ mod tests {
         // Geometry programs never drop overrides.
         let c = resource_context(ProgramClass::Gbuffers, "gbuffers", &props, false, &[4].into());
         assert!(c.custom_textures.contains_key("gaux1"));
+    }
+
+    /// Rectangle samplers are 2D samplers in the model, emulated comparison samplers plain
+    /// ones; other kinds are unchanged.
+    #[test]
+    fn declared_kinds() {
+        let s = |dim: &str, shadow: bool, st: &str| ResourceKind::Sampler { dim: dim.into(), shadow, sample_type: st.into() };
+        assert_eq!(declared_kind(&s("2d_rect", false, "uint"), false), s("2d", false, "uint"));
+        assert_eq!(declared_kind(&s("2d_rect", true, "float"), false), s("2d", true, "float"));
+        assert_eq!(declared_kind(&s("2d_rect", true, "float"), true), s("2d", false, "float"));
+        assert_eq!(declared_kind(&s("2d", true, "float"), true), s("2d", false, "float"));
+        assert_eq!(declared_kind(&s("2d", true, "float"), false), s("2d", true, "float"));
+        // Only sampler2DShadow is emulated.
+        assert_eq!(declared_kind(&s("2d_array", true, "float"), true), s("2d_array", true, "float"));
+        assert_eq!(declared_kind(&s("cube", true, "float"), true), s("cube", true, "float"));
+        assert!(shadow_emulated(&s("2d_rect", true, "float"), true));
+        assert!(!shadow_emulated(&s("2d", true, "float"), false));
+        assert!(!shadow_emulated(&s("2d", false, "float"), true));
+        let image = ResourceKind::StorageImage { dim: "2d".into(), format: None, sample_type: "float".into(), readonly: false, writeonly: false };
+        assert_eq!(declared_kind(&image, true), image);
+        let table = BindingTable {
+            entries: vec![sb_core::model::BindingEntry {
+                name: "shadowtex0".into(),
+                set: 1,
+                binding: 5,
+                kind: s("2d", true, "float"),
+                resource: ResourceRef::ShadowTex(0),
+            }],
+        };
+        let declared = declared_table(&table, true);
+        assert_eq!(declared.entries[0].kind, s("2d", false, "float"));
+        assert_eq!((declared.entries[0].set, declared.entries[0].binding), (1, 5));
+        assert_eq!(declared_table(&table, false), table);
     }
 
     #[test]

@@ -630,6 +630,14 @@ fn pack() -> CompiledPack {
                 kind: ResourceKind::Sampler { dim: "2d".into(), shadow: false, sample_type: "float".into() },
                 resource: ResourceRef::White,
             },
+            // An emulated comparison sampler: declared as a plain sampler.
+            BindingEntry {
+                name: "shadowtex1".into(),
+                set: 1,
+                binding: 3,
+                kind: ResourceKind::Sampler { dim: "2d".into(), shadow: false, sample_type: "float".into() },
+                resource: ResourceRef::ShadowTex(1),
+            },
         ],
     };
 
@@ -659,13 +667,24 @@ fn pack() -> CompiledPack {
     terrain.alpha_test = Some(AlphaTest { func: AlphaFunc::Greater, reference: 0.1 });
     terrain.viewport = ViewportScale { scale: 0.5, offset_x: 0.25, offset_y: 0.0 };
     terrain.mipmap_targets = vec![1];
-    terrain.bindings_used = vec![BindingUse {
-        name: "colortex0".into(),
-        set: 1,
-        binding: 0,
-        use_alt: true,
-        stages: vec![ShaderStage::Vertex, ShaderStage::Fragment],
-    }];
+    terrain.bindings_used = vec![
+        BindingUse {
+            name: "colortex0".into(),
+            set: 1,
+            binding: 0,
+            use_alt: true,
+            stages: vec![ShaderStage::Vertex, ShaderStage::Fragment],
+            shadow_emulated: false,
+        },
+        BindingUse {
+            name: "shadowtex1".into(),
+            set: 1,
+            binding: 3,
+            use_alt: false,
+            stages: vec![ShaderStage::Fragment],
+            shadow_emulated: true,
+        },
+    ];
     terrain.vertex_inputs = vec![
         VertexInput { location: 0, name: "Position".into(), ty: "vec3".into(), semantic: Some("position".into()) },
         VertexInput { location: 5, name: "mc_Entity".into(), ty: "vec4".into(), semantic: None },
@@ -700,9 +719,12 @@ fn pack() -> CompiledPack {
     let fin = base_program("world0/final", ProgramKind::Composite { group: PassGroup::Final, index: 0 });
 
     let mut geometry = IndexMap::new();
-    geometry.insert(GeometryProgram::Terrain, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain });
-    geometry.insert(GeometryProgram::DamagedBlock, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain });
-    geometry.insert(GeometryProgram::DhTerrain, GeometrySlot { program: 1, resolved_from: GeometryProgram::DhTerrain });
+    let mut terrain_variants = IndexMap::new();
+    terrain_variants.insert("sodium_terrain".to_string(), 3);
+    terrain_variants.insert("vanilla_entity".to_string(), 2);
+    geometry.insert(GeometryProgram::Terrain, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain, variants: terrain_variants });
+    geometry.insert(GeometryProgram::DamagedBlock, GeometrySlot { program: 0, resolved_from: GeometryProgram::Terrain, variants: IndexMap::new() });
+    geometry.insert(GeometryProgram::DhTerrain, GeometrySlot { program: 1, resolved_from: GeometryProgram::DhTerrain, variants: IndexMap::new() });
 
     let world0 = DimensionPipeline {
         folder: "world0".into(),

@@ -87,13 +87,14 @@ fn renderpearl_target_has_no_set_or_binding() {
 #[test]
 fn draw_block_members_and_type_conflicts() {
     // `worldTime` is an int builtin; another program of this pack declares it first (as
-    // an int): the first type wins, this program reads its own `worldTime__float` member.
+    // an int): the first type wins, this program reads its own `sb_as_float_worldTime` member.
     let fs = "#version 130\nuniform float worldTime;\nuniform int entityId;\nvarying vec2 uv;\nvoid main() { gl_FragData[0] = vec4(worldTime, float(entityId), uv); }\n";
     let other = "#version 130\nuniform int worldTime;\nvoid main() { gl_FragData[0] = vec4(float(worldTime)); }\n";
     let out = T::new("vanilla_entity").other(ShaderStage::Fragment, other, ProgramClass::Gbuffers).vs(VS).fs(fs).run();
     let f = out.fs();
     let renamed = out.pack.members.member_name("worldTime", sb_core::GlslType::FLOAT).unwrap().to_string();
-    assert_ne!(renamed, "worldTime");
+    assert_eq!(renamed, "sb_as_float_worldTime");
+    assert!(!f.contains("__"), "GLSL reserves names containing `__`:\n{f}");
     contains_all(f, &[&format!("float {renamed};"), &format!("vec4({renamed}, float(entityId), uv)"), "uniform sb_Draw {", "int entityId;"]);
     assert!(out.prog.draw_members_used.contains(&"entityId".to_string()));
 }

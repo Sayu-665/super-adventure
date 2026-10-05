@@ -1,16 +1,19 @@
 package dev.shaderbridge.render.frame;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import dev.shaderbridge.ShaderBridge;
+import dev.shaderbridge.compat.sodium.SodiumCompat;
+import dev.shaderbridge.dh.CameraFarPlane;
+import dev.shaderbridge.dh.DistantHorizons;
 import dev.shaderbridge.gui.PackNotifier;
 import dev.shaderbridge.mixin.LevelRendererAccess;
 import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.pack.LoadedPack;
 import dev.shaderbridge.render.draw.ActivePasses;
-import dev.shaderbridge.render.pipeline.PipelineCapabilities;
-import dev.shaderbridge.render.pipeline.RawPath;
+import dev.shaderbridge.render.raw.RawBackend;
 import java.util.Optional;
 import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
@@ -82,18 +85,20 @@ public final class RenderBridge {
         }
         frameActive = false;
         PackRenderer current = sync();
-        if (current == null) {
-            return;
+        if (current != null) {
+            try {
+                float partialTick = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.worldPartialTicks;
+                Matrix4fc projection = projectionCaptured ? PROJECTION : camera.projectionMatrix;
+                frameActive = current.beginFrame(level, camera, projection, partialTick, fogColor, terrainFog, ShaderBridge.get().gameState());
+            } catch (RuntimeException e) {
+                fail(e);
+            } finally {
+                projectionCaptured = false;
+            }
         }
-        try {
-            float partialTick = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.worldPartialTicks;
-            Matrix4fc projection = projectionCaptured ? PROJECTION : camera.projectionMatrix;
-            frameActive = current.beginFrame(level, camera, projection, partialTick, fogColor, terrainFog, ShaderBridge.get().gameState());
-        } catch (RuntimeException e) {
-            fail(e);
-        } finally {
-            projectionCaptured = false;
-        }
+        // Distant Horizons renders later in this frame: hand its LODs to the pack only while the pack renders.
+        DistantHorizons.get().beginFrame(frameActive);
+        CameraFarPlane.request(frameActive ? renderer.unifiedFarPlane() : Float.NaN);
     }
 
     /**
@@ -185,10 +190,12 @@ public final class RenderBridge {
         rebuildRequested = true;
     }
 
-    /** The world was left or the client stops: release the renderer. */
+    /** The world was left or the client stops: release the renderer and give Distant Horizons its output back. */
     public static void release() {
         closeRenderer();
         failedPack = null;
+        DistantHorizons.get().release();
+        CameraFarPlane.request(Float.NaN);
     }
 
     /** @return the renderer of the active pack in the current dimension, created on demand, or null */
@@ -200,6 +207,14 @@ public final class RenderBridge {
             return null;
         }
         LoadedPack pack = active.get();
+        Optional<String> blocked = SodiumCompat.blocker();
+        if (blocked.isPresent()) {
+            closeRenderer();
+            failedPack = pack;
+            LOGGER.warn("Shader pack {} is not rendered: {}", pack.name(), blocked.get());
+            PackNotifier.error(pack.name(), blocked.get());
+            return null;
+        }
         Optional<DimensionPipeline> dim = DimensionSelector.select(pack.model(), world.dimension().identifier().toString());
         if (dim.isEmpty()) {
             closeRenderer();
@@ -211,7 +226,7 @@ public final class RenderBridge {
         closeRenderer();
         rebuildRequested = false;
         try {
-            renderer = new PackRenderer(new PackResources(pack, dim.get(), RawPath.NONE, PipelineCapabilities.baseline()));
+            renderer = new PackRenderer(new PackResources(pack, dim.get(), RawBackend.of(RenderSystem.getDevice())));
             rendererPack = pack;
             rendererFolder = dim.get().folder();
             LOGGER.info("Rendering with {} ({})", pack.name(), dim.get().folder().isEmpty() ? "pack root" : dim.get().folder());

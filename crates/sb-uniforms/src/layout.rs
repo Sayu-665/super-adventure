@@ -11,8 +11,9 @@
 //!
 //! Declarations are deduplicated by name. When the same name is declared with
 //! different types, the **first** type keeps the plain name and every other type gets
-//! its own member `<name>__<type>` (for example `worldTime__float`, `lights__vec3_8` for
-//! `vec3[8]`), with a `uniform.type-conflict` warning. [`MemberIndex`] maps each
+//! its own member [`conflict_name`]`(name, type)` = `sb_as_<type>_<name>` (for example
+//! `sb_as_float_worldTime`, `sb_as_vec3_8_lights` for `vec3[8]`), with a
+//! `uniform.type-conflict` warning. [`MemberIndex`] maps each
 //! `(declared name, declared type)` pair to its member so the transformer can rename
 //! references.
 //!
@@ -35,6 +36,7 @@
 //! are rounded up to 16 bytes, with a minimum of 16 so that hosts never create an empty
 //! buffer.
 
+use crate::naming::{conflict_name, uniquified_name};
 use crate::registry::{self, Frequency};
 use indexmap::IndexMap;
 use sb_core::model::{BlockLayout, BlockMember, UniformLayout, UniformSource};
@@ -151,7 +153,8 @@ pub fn component_count(ty: GlslType) -> u64 {
 pub struct MemberRef {
     /// `sb_Frame` or `sb_Draw`.
     pub block: Frequency,
-    /// GLSL member name (the declared name, or `<name>__<type>` for a conflicting type).
+    /// GLSL member name (the declared name, or [`conflict_name`]`(name, type)` =
+    /// `sb_as_<type>_<name>` for a conflicting type).
     pub member: String,
     /// std140 byte offset in the block.
     pub offset: u32,
@@ -339,12 +342,11 @@ impl LayoutBuilder {
         self.diagnostics.push(decl.diag(Diagnostic::warning(
             "uniform.type-conflict",
             format!(
-                "uniform `{}` is declared as {} here but as {} elsewhere; this declaration gets its own member `{}__{}`",
+                "uniform `{}` is declared as {} here but as {} elsewhere; this declaration gets its own member `{}`",
                 decl.name,
                 decl.ty,
                 first,
-                decl.name,
-                type_suffix(decl.ty)
+                conflict_name(&decl.name, &type_suffix(decl.ty))
             ),
         )));
     }
@@ -362,18 +364,18 @@ impl LayoutBuilder {
         } = self;
 
         // 1. Member names: the first type keeps the name, the others get a unique
-        //    `<name>__<type>` (both blocks share the GLSL namespace).
+        //    `sb_as_<type>_<name>` (both blocks share the GLSL namespace).
         let mut taken: HashSet<String> = entries.keys().cloned().collect();
         let mut member_names: Vec<Vec<String>> = Vec::with_capacity(entries.len());
         for (name, entry) in &entries {
             let mut names = Vec::with_capacity(entry.variants.len());
             names.push(name.clone());
             for v in &entry.variants[1..] {
-                let base = format!("{name}__{}", type_suffix(v.ty));
+                let base = conflict_name(name, &type_suffix(v.ty));
                 let mut candidate = base.clone();
                 let mut n = 2;
                 while taken.contains(&candidate) {
-                    candidate = format!("{base}_{n}");
+                    candidate = uniquified_name(&base, n);
                     n += 1;
                 }
                 taken.insert(candidate.clone());
@@ -923,17 +925,17 @@ mod tests {
         let float = idx.get("worldTime", GlslType::FLOAT).unwrap();
         assert_eq!(int.member, "worldTime");
         assert_eq!(int.source, UniformSource::Builtin("worldTime".into()));
-        assert_eq!(float.member, "worldTime__float");
+        assert_eq!(float.member, "sb_as_float_worldTime");
         assert_eq!(float.source, UniformSource::Unset);
         assert_eq!(
             idx.member_name("worldTime", GlslType::FLOAT),
-            Some("worldTime__float")
+            Some("sb_as_float_worldTime")
         );
         assert!(idx.get("worldTime", GlslType::VEC2).is_none());
         assert_eq!(idx.variants("worldTime").len(), 2);
         assert_eq!(l.frame.members.len(), 2);
         assert_eq!(
-            l.frame.member("worldTime__float").unwrap().ty,
+            l.frame.member("sb_as_float_worldTime").unwrap().ty,
             GlslType::FLOAT
         );
         assert_valid(&l);
@@ -949,27 +951,57 @@ mod tests {
         assert_eq!(idx.member_name("foo", GlslType::VEC2), Some("foo"));
         assert_eq!(
             idx.member_name("foo", GlslType::VEC3.with_array(8)),
-            Some("foo__vec3_8")
+            Some("sb_as_vec3_8_foo")
         );
     }
 
     #[test]
     fn variant_names_never_collide() {
+        // Pack uniforms keep their names even when they use our `sb_as_` prefix (the
+        // translator only renames non-uniform `sb_*` identifiers); variants then get a
+        // counter.
         let decls = [
-            unset("worldTime__float", GlslType::VEC4),
+            unset("sb_as_float_worldTime", GlslType::VEC4),
             UniformDecl::from_registry("worldTime", GlslType::INT),
             UniformDecl::from_registry("worldTime", GlslType::FLOAT),
-            unset("worldTime__float_2", GlslType::INT),
+            unset("sb_as_float_worldTime_2", GlslType::INT),
         ];
         let (l, idx, _) = build_uniform_layout(decls, []);
         assert_eq!(
             idx.member_name("worldTime", GlslType::FLOAT),
-            Some("worldTime__float_3")
+            Some("sb_as_float_worldTime_3")
         );
         assert_eq!(
-            idx.member_name("worldTime__float", GlslType::VEC4),
-            Some("worldTime__float")
+            idx.member_name("sb_as_float_worldTime", GlslType::VEC4),
+            Some("sb_as_float_worldTime")
         );
+        assert_valid(&l);
+    }
+
+    /// Regression (#52): conflict members used `<name>__<type>`, and GLSL reserves
+    /// identifiers containing `__` (glslang warns about every one).
+    #[test]
+    fn conflict_members_avoid_reserved_double_underscores() {
+        let decls = [
+            unset("tint_", GlslType::VEC3),
+            unset("tint_", GlslType::VEC4),
+            unset("_tint", GlslType::VEC3),
+            unset("_tint", GlslType::VEC4),
+            unset("tint", GlslType::FLOAT.with_array(4)),
+            unset("tint", GlslType::INT),
+        ];
+        let (l, idx, d) = build_uniform_layout(decls, []);
+        assert_eq!(d.iter().filter(|d| d.code == "uniform.type-conflict").count(), 3);
+        for (name, ty) in [("tint_", GlslType::VEC4), ("_tint", GlslType::VEC4), ("tint", GlslType::INT)] {
+            let member = idx.member_name(name, ty).unwrap();
+            assert!(member.starts_with(crate::CONFLICT_PREFIX), "{member}");
+            assert!(!member.contains("__"), "{member}");
+            assert!(crate::is_derived_name(member, name), "{member}");
+        }
+        // Underscores at the edges of the pack name fold into the separators.
+        assert_eq!(idx.member_name("_tint", GlslType::VEC4), Some("sb_as_vec4_tint"));
+        assert_eq!(idx.member_name("tint_", GlslType::VEC4), Some("sb_as_vec4_tint_"));
+        assert_eq!(idx.member_name("tint", GlslType::INT), Some("sb_as_int_tint"));
         assert_valid(&l);
     }
 
@@ -989,7 +1021,7 @@ mod tests {
             UniformSource::Builtin("hideGUI".into())
         );
         let b = idx.get("hideGUI", GlslType::BOOL).unwrap();
-        assert_eq!(b.member, "hideGUI__bool");
+        assert_eq!(b.member, "sb_as_bool_hideGUI");
         assert_eq!(b.source, UniformSource::Builtin("hideGUI".into()));
     }
 

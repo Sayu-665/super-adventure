@@ -111,6 +111,8 @@ impl Executor<'_> {
             }
             self.gpu.submit_and_wait(cmd)?;
             self.stats.frames = frame + 1;
+            // Iris' previous-frame uniforms report what the frame before reported.
+            self.previous_frame = Some(fs.as_previous());
             if let Some(m) = self.arena.buffer(self.center_buffer).mapped_ref() {
                 let d = f32::from_le_bytes([m[0], m[1], m[2], m[3]]);
                 self.center_depth = self.depth.gl_depth(d);
@@ -140,6 +142,7 @@ impl Executor<'_> {
             dh: self.dh_enabled,
             unified_projection: self.unified,
             center_depth: self.center_depth,
+            previous: self.previous_frame,
         })
     }
 

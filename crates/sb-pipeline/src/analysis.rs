@@ -5,7 +5,7 @@
 //! [`crate::PackSession`] recompiling after an option change only re-parses stages whose
 //! code changed.
 
-use crate::directives::{self, PackDirectiveState};
+use crate::directives::{self, ConstDirective, PackDirectiveState};
 use crate::resolve::{FolderPlan, StageSource, Unit};
 use rayon::prelude::*;
 use sb_core::model::{ProgramKind, WorkGroups};
@@ -49,6 +49,64 @@ impl<V: Clone> Memo<V> {
     }
 }
 
+/// A two-generation cache: the entries the current compile used and those of the
+/// previous compile. [`Generations::rotate`] starts a compile: the previous generation is
+/// dropped and the current one becomes the previous one; an entry found in the previous
+/// generation moves back into the current one. Memory therefore stays bounded by what two
+/// consecutive compiles use, however many recompiles a long-lived session runs, and a
+/// recompile reuses everything the compile before it produced.
+#[derive(Debug)]
+pub struct Generations<V> {
+    inner: Mutex<GenerationMaps<V>>,
+}
+
+#[derive(Debug)]
+struct GenerationMaps<V> {
+    current: HashMap<Key, V>,
+    previous: HashMap<Key, V>,
+}
+
+impl<V> Default for Generations<V> {
+    fn default() -> Self {
+        Self { inner: Mutex::new(GenerationMaps { current: HashMap::new(), previous: HashMap::new() }) }
+    }
+}
+
+impl<V: Clone> Generations<V> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, GenerationMaps<V>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The entry for `k` (moved into the current generation if it was in the previous one).
+    pub fn get(&self, k: &Key) -> Option<V> {
+        let mut g = self.lock();
+        if let Some(v) = g.current.get(k) {
+            return Some(v.clone());
+        }
+        let v = g.previous.remove(k)?;
+        g.current.insert(*k, v.clone());
+        Some(v)
+    }
+
+    /// Store an entry in the current generation.
+    pub fn insert(&self, k: Key, v: V) {
+        self.lock().current.insert(k, v);
+    }
+
+    /// Start a new generation (see the type docs).
+    pub fn rotate(&self) {
+        let mut g = self.lock();
+        g.previous = std::mem::take(&mut g.current);
+    }
+
+    /// Entries in both generations.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        let g = self.lock();
+        g.current.len() + g.previous.len()
+    }
+}
+
 /// Analysis outcome of one stage.
 pub type AnalysisResult = Result<Arc<AnalyzedStage>, Diagnostics>;
 
@@ -58,6 +116,11 @@ pub struct StageAnalysis {
     pub stage: ShaderStage,
     pub source: StageSource,
     pub pre: Arc<Preprocessed>,
+    /// Content key of the analysis (identifies `analyzed`; see [`analysis_key`]).
+    pub key: Key,
+    /// Const directives of the preprocessed code (fragment and compute stages only; empty
+    /// for the others, whose directives Iris ignores).
+    pub consts: Arc<Vec<ConstDirective>>,
     pub analyzed: AnalysisResult,
 }
 
@@ -77,6 +140,12 @@ impl FolderAnalysis {
         stages.iter().map(|s| s.analyzed.as_ref().ok().map(|a| (**a).clone())).collect()
     }
 
+    /// The analysis keys of the stages of unit `u` (with their stages), which identify
+    /// the analyzed stages [`FolderAnalysis::stages_of`] returns.
+    pub fn stage_keys(&self, u: usize) -> Vec<(ShaderStage, Key)> {
+        self.units.get(u).map(|stages| stages.iter().map(|s| (s.stage, s.key)).collect()).unwrap_or_default()
+    }
+
     /// Whether unit `u` analyzed successfully.
     pub fn ok(&self, u: usize) -> bool {
         self.units.get(u).is_some_and(|s| !s.is_empty() && s.iter().all(|x| x.analyzed.is_ok()))
@@ -88,6 +157,7 @@ impl FolderAnalysis {
     }
 }
 
+/// Content key of the analysis of a preprocessed stage.
 fn analysis_key(stage: ShaderStage, file: &str, pre: &Preprocessed) -> Key {
     let mut h = blake3::Hasher::new();
     h.update(b"sb-analysis-v1\0");
@@ -127,12 +197,66 @@ pub fn tag(diags: impl IntoIterator<Item = Diagnostic>, program: &str, stage: Op
         .collect()
 }
 
-/// Preprocess and analyze every stage of `plan` in parallel.
+/// A preprocessed stage with what is derived from its text alone.
+#[derive(Debug, Clone)]
+pub struct PreprocessedStage {
+    pub pre: Arc<Preprocessed>,
+    /// [`analysis_key`] of `pre`.
+    pub key: Key,
+    /// Const directives (fragment and compute stages).
+    pub consts: Arc<Vec<ConstDirective>>,
+}
+
+/// Session caches [`analyze_folder`] uses.
+pub struct AnalysisCaches<'a> {
+    /// Preprocessed stages, keyed by [`preprocess_key`] (whose sources fingerprint covers
+    /// the pack contents, so edits on disk between compiles are picked up).
+    pub preprocessed: &'a Generations<PreprocessedStage>,
+    /// Analysis results by [`analysis_key`] (content-addressed).
+    pub analysis: &'a Memo<AnalysisResult>,
+    /// Fingerprint of the option edits the sources apply ([`sources_fingerprint`]).
+    pub sources: Key,
+}
+
+/// Fingerprint of the sources a compile preprocesses: the pack's contents
+/// ([`sb_pack::ShaderPack::content_hash`], which changes when a directory pack is edited
+/// on disk between two compiles of a session), the discovered options and the option
+/// values whose lines the sources edit.
+pub fn sources_fingerprint(pack_content_hash: &str, options: &sb_pack::DiscoveredOptions, values: &sb_pack::OptionValues) -> Key {
+    let mut h = blake3::Hasher::new();
+    h.update(b"sb-sources-v1\0");
+    h.update(pack_content_hash.as_bytes());
+    h.update(b"\0");
+    // Derived `Debug` shows every field; the maps are ordered.
+    h.update(format!("{options:?}").as_bytes());
+    h.update(b"\0");
+    h.update(values.to_settings_file().as_bytes());
+    *h.finalize().as_bytes()
+}
+
+/// Key of one preprocessed stage: the sources' fingerprint, the preprocessor options
+/// (macros) and the stage source (path, or virtual path and text).
+fn preprocess_key(sources: &Key, options: &str, stage: ShaderStage, src: &StageSource) -> Key {
+    let mut h = blake3::Hasher::new();
+    h.update(b"sb-preprocess-v1\0");
+    h.update(sources);
+    h.update(&(options.len() as u64).to_le_bytes());
+    h.update(options.as_bytes());
+    h.update(stage.name().as_bytes());
+    h.update(b"\0");
+    h.update(format!("{src:?}").as_bytes());
+    *h.finalize().as_bytes()
+}
+
+/// Preprocess and analyze every stage of `plan` in parallel. Preprocessing results come
+/// from `caches.preprocessed` when the same stage was preprocessed with the same macros
+/// and option values before (a recompile), analyses from `caches.analysis` when the
+/// preprocessed code is unchanged.
 pub fn analyze_folder(
     plan: &FolderPlan,
     sources: &dyn SourceProvider,
     macros: &PreprocessOptions,
-    memo: &Memo<AnalysisResult>,
+    caches: &AnalysisCaches<'_>,
     diags: &mut Diagnostics,
 ) -> FolderAnalysis {
     let jobs: Vec<(usize, ShaderStage, &StageSource)> = plan
@@ -141,26 +265,39 @@ pub fn analyze_folder(
         .enumerate()
         .flat_map(|(u, unit)| unit.stages.iter().map(move |(st, src)| (u, *st, src)))
         .collect();
+    let macro_text = format!("{macros:?}");
     let results: Vec<(usize, StageAnalysis, Vec<Diagnostic>)> = jobs
         .par_iter()
         .map_init(
             || Preprocessor::new(sources),
             |pp, &(u, stage, src)| {
-                let pre = match src {
-                    StageSource::File(path) => pp.preprocess(path, macros),
-                    StageSource::SynthesizedVertex { virtual_path } => {
-                        pp.preprocess_source(virtual_path, sb_transform::DEFAULT_VERTEX_SHADER, macros)
-                    }
-                    StageSource::Fallback { virtual_path, source } => pp.preprocess_source(virtual_path, source, macros),
-                };
-                let pre = Arc::new(pre);
                 let path = src.path();
-                let key = analysis_key(stage, path, &pre);
-                let analyzed = match memo.get(&key) {
+                let pkey = preprocess_key(&caches.sources, &macro_text, stage, src);
+                let PreprocessedStage { pre, key, consts } = match caches.preprocessed.get(&pkey) {
+                    Some(hit) => hit,
+                    None => {
+                        let pre = match src {
+                            StageSource::File(path) => pp.preprocess(path, macros),
+                            StageSource::SynthesizedVertex { virtual_path } => {
+                                pp.preprocess_source(virtual_path, sb_transform::DEFAULT_VERTEX_SHADER, macros)
+                            }
+                            StageSource::Fallback { virtual_path, source } => pp.preprocess_source(virtual_path, source, macros),
+                        };
+                        let key = analysis_key(stage, path, &pre);
+                        let consts = match stage {
+                            ShaderStage::Fragment | ShaderStage::Compute => directives::find_const_directives(&pre.code),
+                            _ => Vec::new(),
+                        };
+                        let entry = PreprocessedStage { pre: Arc::new(pre), key, consts: Arc::new(consts) };
+                        caches.preprocessed.insert(pkey, entry.clone());
+                        entry
+                    }
+                };
+                let analyzed = match caches.analysis.get(&key) {
                     Some(r) => r,
                     None => {
                         let r = sb_transform::analyze(stage, &pre, path).map(Arc::new);
-                        memo.insert(key, r.clone());
+                        caches.analysis.insert(key, r.clone());
                         r
                     }
                 };
@@ -170,7 +307,7 @@ pub fn analyze_folder(
                     Ok(a) => d.extend(tag(a.diagnostics.iter().cloned(), &unit.path, Some(stage))),
                     Err(e) => d.extend(tag(e.iter().cloned(), &unit.path, Some(stage))),
                 }
-                (u, StageAnalysis { stage, source: src.clone(), pre, analyzed }, d)
+                (u, StageAnalysis { stage, source: src.clone(), pre, key, consts, analyzed }, d)
             },
         )
         .collect();
@@ -274,7 +411,7 @@ pub fn scan_directives(
         if unit.is_compute() {
             if let Some(s) = analysis.units[u].first() {
                 let mut d = Diagnostics::new();
-                out.work_groups[u] = Some(directives::compute_work_groups(&s.pre.code, &mut d, s.source.path()));
+                out.work_groups[u] = Some(directives::compute_work_groups_in(&s.consts, &mut d, s.source.path()));
                 diags.extend(tag(d, &unit.path, Some(ShaderStage::Compute)));
             }
             continue;
@@ -306,8 +443,10 @@ pub fn scan_directives(
             d.push(Diagnostic::warning("dir.duplicate-draw-buffer", format!("draw buffers {buffers:?} name a buffer twice")));
         }
         out.draw_buffers[u] = buffers;
-        if matches!(unit.kind, ProgramKind::Composite { .. }) {
-            out.mipmaps[u] = directives::mipmapped_buffers(code);
+        if matches!(unit.kind, ProgramKind::Composite { .. })
+            && let Some(f) = analysis.units[u].iter().find(|s| s.stage == ShaderStage::Fragment)
+        {
+            out.mipmaps[u] = directives::mipmapped_buffers_in(&f.consts);
         }
         diags.extend(tag(d, &unit.path, Some(ShaderStage::Fragment)));
     }
@@ -334,11 +473,11 @@ pub fn scan_directives(
     for u in order {
         let Some(s) = analysis.units[u].iter().find(|s| s.stage == ShaderStage::Fragment) else { continue };
         let mut d = Diagnostics::new();
-        for c in directives::find_const_directives(&s.pre.code) {
+        for c in s.consts.iter() {
             // Locate by the preprocessed line's original file and line.
             let loc = s.pre.location(c.line as usize).cloned();
             let mut dd = Diagnostics::new();
-            out.pack.apply(&c, s.source.path(), &mut dd);
+            out.pack.apply(c, s.source.path(), &mut dd);
             for mut x in dd {
                 x.location = loc.clone().or(x.location);
                 d.push(x);
@@ -377,8 +516,15 @@ mod tests {
         let sources = crate::sources::OptionSources::new(crate::sources::PackRef::Borrowed(&pack), l.options.clone(), l.values.clone());
         let opts = PreprocessOptions { defines: l.glsl_macros.clone(), ..Default::default() };
         let memo = Memo::default();
+        let preprocessed = Generations::default();
+        let caches = AnalysisCaches {
+            preprocessed: &preprocessed,
+            analysis: &memo,
+            sources: sources_fingerprint(&pack.content_hash(), &l.options, &l.values),
+        };
         let mut d = Diagnostics::new();
-        let a = analyze_folder(&plan, &sources, &opts, &memo, &mut d);
+        let a = analyze_folder(&plan, &sources, &opts, &caches, &mut d);
+        let first: Vec<String> = d.iter().map(|x| x.to_string()).collect();
         let idx = |name: &str| plan.units.iter().position(|u| u.name == name).unwrap();
         assert!(a.ok(idx("composite")));
         assert!(!a.ok(idx("gbuffers_basic")));
@@ -391,12 +537,28 @@ mod tests {
         assert_eq!(dirs.work_groups[idx("composite1.csh")], Some(WorkGroups::Absolute { x: 2, y: 2, z: 1 }));
         // Composite is scanned after deferred: its format wins.
         assert_eq!(dirs.pack.colortex[&3].format, Some(sb_core::TextureFormat::RGBA16F));
-        // A second run hits the analysis cache.
+        // A second run hits the preprocessing and analysis caches, with the same
+        // diagnostics.
+        preprocessed.rotate();
         let mut d2 = Diagnostics::new();
-        let b = analyze_folder(&plan, &sources, &opts, &memo, &mut d2);
-        assert!(Arc::ptr_eq(
-            b.units[idx("composite")][0].analyzed.as_ref().unwrap(),
-            a.units[idx("composite")][0].analyzed.as_ref().unwrap()
-        ));
+        let b = analyze_folder(&plan, &sources, &opts, &caches, &mut d2);
+        let c = idx("composite");
+        assert!(Arc::ptr_eq(&b.units[c][0].pre, &a.units[c][0].pre));
+        assert!(Arc::ptr_eq(b.units[c][0].analyzed.as_ref().unwrap(), a.units[c][0].analyzed.as_ref().unwrap()));
+        assert_eq!(b.stage_keys(c), a.stage_keys(c));
+        assert_eq!(d2.iter().map(|x| x.to_string()).collect::<Vec<_>>(), first);
+        // Different macros: preprocessed again (new generation entries), the analysis of
+        // unchanged code is still shared.
+        let mut opts2 = opts.clone();
+        opts2.defines.insert("SB_TEST_MACRO".into(), None);
+        let e = analyze_folder(&plan, &sources, &opts2, &caches, &mut Diagnostics::new());
+        assert!(!Arc::ptr_eq(&e.units[c][0].pre, &a.units[c][0].pre));
+        assert!(Arc::ptr_eq(e.units[c][0].analyzed.as_ref().unwrap(), a.units[c][0].analyzed.as_ref().unwrap()));
+        // Two rotations without use drop the entries.
+        let n = preprocessed.len();
+        assert!(n > 0);
+        preprocessed.rotate();
+        preprocessed.rotate();
+        assert_eq!(preprocessed.len(), 0);
     }
 }

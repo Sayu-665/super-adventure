@@ -464,8 +464,13 @@ impl PackDirectiveState {
 
 /// `<buf>MipmapEnabled` of one program (colortex indices), from its fragment source.
 pub fn mipmapped_buffers(fragment: &str) -> Vec<u32> {
+    mipmapped_buffers_in(&find_const_directives(fragment))
+}
+
+/// [`mipmapped_buffers`] from the [`find_const_directives`] of the fragment source.
+pub fn mipmapped_buffers_in(consts: &[ConstDirective]) -> Vec<u32> {
     let mut set = BTreeSet::new();
-    for d in find_const_directives(fragment) {
+    for d in consts {
         if d.ty != ConstType::Bool {
             continue;
         }
@@ -487,8 +492,13 @@ pub fn mipmapped_buffers(fragment: &str) -> Vec<u32> {
 /// `workGroups` / `workGroupsRender` of a compute source (the last valid one wins;
 /// default `workGroupsRender = vec2(1, 1)`).
 pub fn compute_work_groups(source: &str, diags: &mut Diagnostics, file: &str) -> WorkGroups {
+    compute_work_groups_in(&find_const_directives(source), diags, file)
+}
+
+/// [`compute_work_groups`] from the [`find_const_directives`] of the compute source.
+pub fn compute_work_groups_in(consts: &[ConstDirective], diags: &mut Diagnostics, file: &str) -> WorkGroups {
     let mut wg = WorkGroups::Relative { x: 1.0, y: 1.0 };
-    for d in find_const_directives(source) {
+    for d in consts {
         let loc = sb_core::SourceLocation::new(file, d.line);
         match (d.ty, d.key.as_str()) {
             (ConstType::Ivec3, "workGroups") => {

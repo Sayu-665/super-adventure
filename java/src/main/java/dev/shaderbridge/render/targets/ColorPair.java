@@ -28,11 +28,19 @@ public final class ColorPair implements AutoCloseable {
     public ColorPair(GpuDevice device, TargetSpec spec) {
         this.spec = spec;
         for (int k = 0; k < 2; k++) {
-            String label = "ShaderBridge " + spec.name() + (k == 0 ? "" : " (alt)");
-            textures[k] = device.createTexture(label, USAGE, spec.format(), spec.width(), spec.height(), 1, spec.mipLevels());
+            textures[k] = device.createTexture(label(spec.name(), k == 1), USAGE, spec.format(), spec.width(), spec.height(), 1, spec.mipLevels());
             sampleViews[k] = device.createTextureView(textures[k]);
             attachmentViews[k] = spec.mipLevels() == 1 ? sampleViews[k] : device.createTextureView(textures[k], 0, 1);
         }
+    }
+
+    /**
+     * @param name the target's {@linkplain TargetSpec#name() name}
+     * @param alt  the alternate texture
+     * @return the label the texture is created with
+     */
+    public static String label(String name, boolean alt) {
+        return "ShaderBridge " + name + (alt ? " (alt)" : "");
     }
 
     /** @return what the pair was created for */

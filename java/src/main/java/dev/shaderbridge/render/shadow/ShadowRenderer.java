@@ -40,6 +40,9 @@ public final class ShadowRenderer {
 
         /** Copies {@code shadowtex0} into {@code shadowtex1}. */
         void copyDepth();
+
+        /** Draws the Distant Horizons LODs that cast shadows ({@code dh_shadow}), in passes of its own. */
+        void drawDistant();
     }
 
     private final ShadowPlan plan;
@@ -67,6 +70,7 @@ public final class ShadowRenderer {
         for (ShadowPlan.Step step : plan.steps()) {
             switch (step) {
                 case OPAQUE_TERRAIN -> draw(chunks, ChunkSectionLayerGroup.OPAQUE, targets);
+                case DISTANT_TERRAIN -> targets.drawDistant();
                 case COPY_DEPTH -> targets.copyDepth();
                 case TRANSLUCENT_TERRAIN -> draw(chunks, ChunkSectionLayerGroup.TRANSLUCENT, targets);
             }

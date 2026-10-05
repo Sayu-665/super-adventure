@@ -337,6 +337,38 @@ fn variants_and_registered_profiles() {
     api::close_pack(s).unwrap();
 }
 
+/// Any built-in draw profile works for a variant (the folder layout includes every
+/// built-in profile's resources), for vanilla slots and for DH slots synthesized from the
+/// pack's gbuffers programs.
+#[test]
+fn variants_for_every_builtin_profile() {
+    let _registry = profile_registry();
+    let tmp = tempfile::tempdir().unwrap();
+    let pack = tiny_pack(tmp.path(), "AllProfiles", &[("gbuffers_textured.vsh", TEXTURED_VSH), ("gbuffers_textured.fsh", TEXTURED_FSH)]);
+    let s = api::open_pack(&pack).unwrap();
+    let env = serde_json::to_string(&CompileEnvironment { distant_horizons: true, ..CompileEnvironment::default() }).unwrap();
+    let model = CompiledPack::from_json(&api::compile(s, &env, "", "").unwrap()).unwrap();
+    assert!(model.dimensions[0].geometry.contains_key(&sb_core::program::GeometryProgram::DhTerrain));
+    for profile in sb_transform::builtin_profiles() {
+        for slot in ["terrain_solid", "gbuffers_entities", "shadow_solid", "dh_terrain"] {
+            if slot == "shadow_solid" {
+                // No shadow program in this pack.
+                assert!(api::compile_variant(s, "", slot, &profile.name).is_err());
+                continue;
+            }
+            let json = api::compile_variant(s, "", slot, &profile.name).unwrap_or_else(|e| panic!("{} for {slot}: {e}", profile.name));
+            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let program: sb_core::model::Program = serde_json::from_value(v["program"].clone()).unwrap();
+            assert_eq!(program.draw_profile.as_deref(), Some(profile.name.as_str()));
+            let expected = if slot == "dh_terrain" { "dh_terrain" } else { "gbuffers_textured" };
+            assert_eq!(program.name, expected, "{} for {slot}", profile.name);
+            let infos: Vec<BlobInfo> = serde_json::from_value(v["blobs"].clone()).unwrap();
+            check_blobs(&infos, &api::with_variant_blob_data(s, |b| b.to_vec()).unwrap());
+        }
+    }
+    api::close_pack(s).unwrap();
+}
+
 #[test]
 fn disk_cache_round_trip() {
     let _registry = profile_registry();

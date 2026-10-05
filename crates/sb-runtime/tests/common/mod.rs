@@ -164,7 +164,7 @@ fn program(blobs: &mut BlobTable, spec: ProgramSpec, defines: &[&str], table: &B
     let bindings_used = spec
         .uses
         .iter()
-        .filter_map(|(n, alt)| table.get(n).map(|e| BindingUse { name: e.name.clone(), set: e.set, binding: e.binding, use_alt: *alt, stages: vec![ShaderStage::Fragment] }))
+        .filter_map(|(n, alt)| table.get(n).map(|e| BindingUse { name: e.name.clone(), set: e.set, binding: e.binding, use_alt: *alt, stages: vec![ShaderStage::Fragment], shadow_emulated: false }))
         .collect();
     Program {
         name: spec.name.into(),
@@ -238,7 +238,7 @@ pub fn test_pack(v: Variant) -> (CompiledPack, BlobTable) {
     let programs: Vec<Program> = specs.into_iter().map(|s| program(&mut blobs, s, &defines, &table)).collect();
     let mut geometry = IndexMap::new();
     let mut slot = |g: GeometryProgram, program: u32, from: GeometryProgram| {
-        geometry.insert(g, GeometrySlot { program, resolved_from: from });
+        geometry.insert(g, GeometrySlot { program, resolved_from: from, variants: Default::default() });
     };
     use GeometryProgram as G;
     for g in [G::Terrain, G::TerrainSolid, G::TerrainCutout, G::Block, G::DamagedBlock] {

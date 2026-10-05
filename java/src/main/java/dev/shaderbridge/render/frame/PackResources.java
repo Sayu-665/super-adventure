@@ -22,6 +22,8 @@ import dev.shaderbridge.render.pipeline.PipelineDiagnostics;
 import dev.shaderbridge.render.pipeline.ProfileVertexFormats;
 import dev.shaderbridge.render.pipeline.ProgramResolver;
 import dev.shaderbridge.render.pipeline.RawPath;
+import dev.shaderbridge.render.raw.RawBackend;
+import dev.shaderbridge.render.raw.RawContext;
 import dev.shaderbridge.render.pipeline.SessionVariantCompiler;
 import dev.shaderbridge.render.pipeline.SpirvModules;
 import dev.shaderbridge.render.targets.PackFiles;
@@ -38,6 +40,8 @@ import dev.shaderbridge.uniforms.UniformSettings;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import net.minecraft.client.Minecraft;
@@ -45,8 +49,8 @@ import net.minecraft.util.Util;
 
 /**
  * Everything one dimension pipeline of an active pack renders with: render targets and textures,
- * pipeline compilation and program resolution, uniform buffers, the frame sequencer, and the
- * helpers that adapt vanilla draws. Created on the render thread when the pack becomes active in a
+ * pipeline compilation and program resolution, uniform buffers, the frame sequencer, the
+ * Distant Horizons state, and the helpers that adapt vanilla draws. Created on the render thread when the pack becomes active in a
  * dimension and closed when it no longer is. Render thread only.
  */
 final class PackResources implements AutoCloseable {
@@ -70,33 +74,43 @@ final class PackResources implements AutoCloseable {
     final DrawSlots drawSlots = new DrawSlots();
     final SinkTextures sinks;
     final FrameSequencer sequencer;
+    final DistantFrame distant;
     private final ExecutorService variantCompiler;
     private final Deque<AutoCloseable> owned = new ArrayDeque<>();
 
     /**
-     * @param pack         the active pack
-     * @param dim          the dimension pipeline to render
-     * @param raw          the raw Vulkan path ({@link RawPath#NONE} without one)
-     * @param capabilities what pipelines may do on this device
+     * @param pack    the active pack
+     * @param dim     the dimension pipeline to render
+     * @param backend the raw Vulkan path's backend (what pipelines may do on this device, and the
+     *                raw path itself, which declines everything on OpenGL)
      * @throws IOException   if the pack's files cannot be opened (custom textures)
      * @throws PackException if the pack's session is closed (custom uniforms)
      */
-    PackResources(LoadedPack pack, DimensionPipeline dim, RawPath raw, PipelineCapabilities capabilities) throws IOException, PackException {
+    PackResources(LoadedPack pack, DimensionPipeline dim, RawBackend backend) throws IOException, PackException {
         this.pack = pack;
         this.dim = dim;
-        this.raw = raw;
         this.depthMode = pack.model().info().environment().depthMode();
         this.device = RenderSystem.getDevice();
+        PipelineCapabilities capabilities = backend.capabilities();
         Minecraft minecraft = Minecraft.getInstance();
         RenderTarget main = minecraft.gameRenderer.mainRenderTarget();
         try {
+            own(backend.requestStorage(dim));
             this.targets = own(PackTargets.create(device, dim, main.width, main.height, main.getDepthTexture().getFormat()));
             this.sinks = own(new SinkTextures(device));
+            this.distant = own(new DistantFrame(device, dim.distantHorizons(), depthMode, diagnostics::report));
+            Map<String, byte[]> rawFiles = new HashMap<>();
             try (PackFiles files = PackFiles.open(pack.session().path())) {
                 this.textures = own(PackTextures.load(device, device.createCommandEncoder(), dim, TextureReader.of(files, minecraft.getResourceManager()),
                     diagnostics::report));
+                for (String path : backend.packFiles(dim)) {
+                    files.read(path).ifPresent(data -> rawFiles.put(path, data));
+                }
             }
             this.textureResolver = new TextureResolver(dim, targets, textures, RenderSystem.getSamplerCache(), depthMode, diagnostics::report);
+            this.raw = own(backend.open(new RawContext(dim, depthMode, targets, textureResolver, this::host,
+                () -> minecraft.gameRenderer.mainRenderTarget().getColorTexture().getFormat(), diagnostics, Util.backgroundExecutor()),
+                pack.blobs(), rawFiles));
             SpirvModules modules = SpirvModules.global();
             this.pipelines = own(new PackPipelineCache(device, new PackShaderSource(modules), Util.backgroundExecutor(), minecraft, modules));
             this.variantCompiler = Executors.newSingleThreadExecutor(r -> {
@@ -121,6 +135,11 @@ final class PackResources implements AutoCloseable {
             close();
             throw e;
         }
+    }
+
+    /** @return the game's textures (block atlas as albedo, lightmap, depth, Distant Horizons textures) for the current frame */
+    MinecraftHost host() {
+        return MinecraftHost.blockAtlas(distant);
     }
 
     private <T extends AutoCloseable> T own(T resource) {

@@ -18,6 +18,15 @@ import java.util.Optional;
 public record TargetSpec(int index, boolean shadow, GpuFormat format, int width, int height, int mipLevels, boolean clear, Optional<Rgba> clearColor) {
     /** @return {@code colortexN} or {@code shadowcolorN} */
     public String name() {
+        return name(shadow, index);
+    }
+
+    /**
+     * @param shadow a shadow color target
+     * @param index  its colortex or shadowcolor index
+     * @return {@code colortexN} or {@code shadowcolorN}
+     */
+    public static String name(boolean shadow, int index) {
         return (shadow ? "shadowcolor" : "colortex") + index;
     }
 }

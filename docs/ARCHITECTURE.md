@@ -134,6 +134,54 @@ Shader packs assume GL conventions throughout, for example
 5. `gl_InstanceID` → `(gl_InstanceIndex - gl_BaseInstance)`. This needs
    `GL_ARB_shader_draw_parameters`, so the plain `gl_InstanceIndex` is used when
    the host guarantees base instance 0. `gl_VertexID` → `gl_VertexIndex`.
+6. Hosts must create pipelines with tessellation stages with
+   `VkPipelineTessellationDomainOriginStateCreateInfo { domainOrigin = LOWER_LEFT }`
+   (core in Vulkan 1.1), as `sb-runtime` does. GL's tessellation domain origin is
+   the lower left corner. Vulkan's default, upper left, mirrors the domain, so
+   every triangle the tessellator generates gets the opposite winding. With
+   `frontFace = CLOCKWISE` and back-face culling, the visible faces of tessellated
+   geometry would then be culled (shrimple's tessellated terrain disappeared).
+
+### 4.1 Distant Horizons conventions (contract)
+
+Packs read DH state through uniforms. Hosts follow DH 3.3 under Iris:
+
+* **Near plane.** `dhNearPlane` and the near plane of `dhProjection` (and
+  `dhProjectionInverse`, `dhPreviousProjection`) are DH's near clip plane while a
+  shader pack is active: `RenderUtil.getNearClipPlaneInBlocks()`, which DH's API
+  exposes as `IDhApiRenderProxy.getNearClipPlaneDistanceInBlocks` and which Iris
+  uses for both (`DHCompat.getProjection`). With a shader pack the overdraw
+  prevention is 0.2, so the distance is `max(0.2 × vanilla render distance in
+  blocks, 1)`, moved to the frustum corner of DH's fixed 70° field of view:
+  `near / sqrt(1 + tan²(35°) · (aspect² + 1))`. DH's own LOD projection may use
+  a closer plane; packs never see it. `dhFarPlane` and the far plane of
+  `dhProjection` are `(DH render distance in blocks + 512) · √2` (Iris
+  `DHCompatInternal.getFarPlane`; DH uses the same far clip plane while Iris is
+  loaded).
+* **Native `dh_*` programs** draw LODs into DH's own depth buffer (`dhDepthTex0`,
+  `dhDepthTex1` = before `dh_water`) with `dhProjection`. The LODs **cover the
+  vanilla area as well**. DH keeps LODs for all loaded terrain and only clips them
+  at the near plane above, and packs discard LOD fragments inside the vanilla
+  range themselves (their `dh_terrain` and `gbuffers_terrain` distance fades meet
+  at about `far`). A host that leaves the vanilla area free of LODs opens holes at
+  the transition.
+* **Synthesized DH programs** (`DhStrategy::Synthesized`, §9) share the vanilla
+  depth buffer and the unified projection (`dh.unified_projection`). LODs are drawn
+  **only beyond the vanilla render distance**, because there is no separate depth
+  buffer and no pack discard to hide LODs under vanilla terrain.
+* **`dh_shadow`** draws in the shadow pass into **shadowcolor** targets on the
+  shadow depth, like the `shadow` programs. Iris gives it a framebuffer of
+  shadowcolor0/1 (`IrisRenderingPipeline.createDHFramebufferShadow`). Its
+  `draw_buffers` are therefore shadowcolor indices, as for `shadow*` and
+  `shadowcomp`, never colortex indices. Iris attaches shadowcolor0/1 whatever the
+  program's `RENDERTARGETS` says. The `dh_shadow` programs in the corpora either
+  write only output 0 as shadowcolor0, or write no colour at all (depth only, e.g.
+  renderpearl's `RENDERTARGETS: 1` with an empty `main`). Both conventions give
+  the same result for them.
+* **`dh_generic`** vertices are 20 bytes: `vPosition` `RGB32_FLOAT`, `aColor`
+  `RGBA8_UNORM` (normalized; DH's shader comment says `RGBA_FLOAT_COLOR`, but
+  `BlazeDhGenericObjectRenderer` binds `RGBA_UBYTE_COLOR`), `aMaterial` `R8_UINT`
+  and three padding bytes.
 
 ## 5. Descriptor and uniform conventions (contract)
 
@@ -170,7 +218,12 @@ Two output **targets** share one transformer:
   therefore keep working unchanged.
 * Name conflicts are resolved per name and type. If two programs declare the
   same name with different types, the first type wins. Other declarations get
-  their own member `name__<type>`, and a warning is emitted.
+  their own member `sb_as_<type>_<name>` (e.g. `sb_as_float_worldTime`), and a
+  warning is emitted. Conflicting sampler/image declarations of one resource name
+  get bindings named the same way (`sb_as_shadow_shadowtex1`, `sb_as_uint_colortex2`;
+  §5.2). Derived names use the reserved `sb_as_` prefix (the translator renames
+  every non-uniform pack identifier starting with `sb_` to `sbu_*`) and never contain
+  `__`, which GLSL reserves; collisions get a `_<n>` counter. See `sb_uniforms::naming`.
 
 ### 5.2 Resource binding table
 
@@ -198,6 +251,28 @@ Each binding carries a `ResourceRef`. It tells the host what to bind:
 
 Following GL texture-unit-0 semantics, an `Unknown` sampler aliases the atlas
 in gbuffers and shadow programs and `colortex0` in fullscreen programs.
+
+Each binding also carries a `ResourceKind`. In the model it describes what the
+translated shaders declare, which is what their SPIR-V reflection reports and
+what the host binds:
+* Rectangle samplers (`sampler2DRect`, `isampler2DRect`, `usampler2DRect`,
+  `sampler2DRectShadow`) are declared as their 2D equivalents, so their kind
+  has dim `2d`. Vulkan has no rectangle textures; the translator converts
+  their texel coordinates to normalized ones (`sb-transform` `rect.rs`). A raw
+  `TEXTURE_RECTANGLE` custom texture keeps `2d_rect` in its `CustomTexture` id
+  and is created as a 2D texture.
+* `shadow: true` means a comparison sampler. The host binds a sampler with
+  comparison enabled, using the compare op of the depth mode (§4).
+* Hosts without comparison samplers set `DeviceCaps::comparison_samplers =
+  false` (Mojang's 26.3 `GpuSampler` cannot compare). The translator then
+  emulates `sampler2DShadow`, and `sampler2DRectShadow` after lowering it: the
+  shaders declare a plain `sampler2D` and compare in code (a 2×2
+  percentage-closer filter over `textureGather`). These bindings have
+  `shadow: false`, so the host binds the depth texture with a plain,
+  non-comparison sampler. Each program's `BindingUse::shadow_emulated` is
+  `true` for them. The flag is informational; `shadow` alone decides the
+  sampler, and the flag defaults to `false` when absent. Array and cube
+  comparison samplers are never emulated and keep `shadow: true`.
 
 Composite-style programs ping-pong between main and alt targets. Each program
 records the flip state of every `ColorTex` binding, so the host knows whether
@@ -242,10 +317,13 @@ Built-in profiles:
 * `vanilla_terrain`, `vanilla_entity` and `vanilla_generic` mirror Mojang
   26.3's core vertex formats and UBOs, plus the Iris extension attributes
   (`mc_Entity`, `mc_midTexCoord`, `at_tangent`, `at_midBlock`).
-* `dh_terrain` and `dh_generic` mirror DH 3.3 `BLAZE_3D`: vertex format
-  `vPosition` uvec3, `meta` uint, `vColor` vec4, `irisMaterial` uint,
+* `dh_terrain` and `dh_generic` mirror DH 3.3 `BLAZE_3D`. `dh_terrain`: vertex
+  format `vPosition` uvec3, `meta` uint, `vColor` vec4, `irisMaterial` uint,
   `irisNormal` uint, `textureTile` uint; blocks `vertUniqueUniformBlock`,
   `vertSharedUniformBlock`, `fragUniformBlock`; samplers `uLightMap`, `uBlockAtlas`.
+  `dh_generic` (beacon beams, clouds, API boxes): `vPosition` vec3, `aColor` vec4
+  (`RGBA8_UNORM`), `aMaterial` uint; block `vertUniformBlock`; sampler `uLightMap`
+  (§4.1).
 * `test_scene` is used by `sb-runtime`'s synthetic scene. It is a plain,
   explicit format.
 
@@ -257,6 +335,10 @@ JNI layer passes the JSON plus one concatenated byte buffer.
 
 Key parts:
 * `PackInfo`: name, source hash, ShaderBridge version, enabled feature flags.
+  The source hash is the compile-cache key. It covers the pack files, option
+  values, environment, ShaderBridge version and the translator revision (a
+  hash of the translator crates' sources and `Cargo.lock`, computed by
+  `sb-pipeline/build.rs`), so a changed translator never reuses cached output.
 * `OptionsModel`: options (boolean/value, defaults, allowed values, current
   values), screens, sliders, profiles and lang strings, so the host can build
   the options GUI.
@@ -277,12 +359,19 @@ Key parts:
     * `draw_buffers` (`RENDERTARGETS`)
     * output types per location, blend (global and per-buffer), alpha test,
       viewport `scale`/offset, `mipmap` targets
-    * `bindings_used` (with `ResourceRef` and the main/alt choice)
+    * `bindings_used` (with `ResourceRef`, the main/alt choice and
+      `shadow_emulated`, §5.2)
     * vertex inputs (location, name, type, semantic), push constants
     * compute info (local size, `workGroups` / `workGroupsRender`, indirect)
     * `cull` / `backFace` overrides
   * `geometry`: map from `GeometryProgram` to program index, after fallback
-    resolution. DH entries are tagged `native` or `synthesized`.
+    resolution. DH entries are tagged `native` or `synthesized`. Each slot
+    also lists its `variants`: the same program translated for other draw
+    profiles (profile → program index, with the `use_alt` of the slot's pass).
+    Examples are `vanilla_entity` for terrain blocks drawn as entities, and
+    the host's `profile_overrides` such as `sodium_terrain`. `compile_variant`
+    produces any other (slot, profile) variant on demand, for every built-in
+    or registered profile.
   * `passes`: an ordered list. Each entry is `PassGroup` (Setup, Begin, Shadow,
     ShadowComp, Prepare, GbuffersOpaque, Deferred, GbuffersTranslucent,
     Composite, Final) plus its programs, computes, and the **static flip
@@ -379,7 +468,9 @@ Uniforms:
   default value in the model.
 * Uniform arrays become std140 arrays.
 * Opaque uniforms are canonicalized (§5.2) and decorated per target.
-  `sampler2DShadow` stays a shadow sampler; the host binds a compare sampler.
+  `sampler2DShadow` stays a shadow sampler and the host binds a compare
+  sampler, unless the host has no comparison samplers; then the comparison is
+  emulated (§5.2).
 * Images keep their format qualifier. A missing format triggers
   `shaderStorageImageReadWithoutFormat`, and a diagnostic, if the image is read.
 
@@ -402,6 +493,35 @@ Fixups for leniency in NVIDIA and old drivers (glslang is strict):
 * Duplicate declarations from multiple includes are deduplicated.
 * Variables named after built-in functions that are later called
   (e.g. `texture`) are renamed.
+* `min`, `max` and `clamp` on floats return the non-NaN operand, as on NVIDIA and
+  AMD hardware, which packs are tuned on. GLSL leaves `min(x, NaN)` undefined, and
+  so does SPIR-V's `FMin`. `sb-compile` therefore rewrites GLSL.std.450
+  `FMin`/`FMax`/`FClamp` to `NMin`/`NMax`/`NClamp` in the emitted SPIR-V
+  (`CompileOptions::nan_tolerant_min_max`, **on by default**; integer forms are
+  untouched). The `Target::Renderpearl` GLSL is compiled by the host and is not
+  affected.
+
+  The default rests on these measurements (October 2026, lavapipe / LLVM 20):
+  * `NMin`'s result is always one of the results `FMin` may return, so the rewrite
+    can only remove NaNs, never change a defined result. `spirv-val` accepts the
+    rewritten modules (sb-compile tests).
+  * lavapipe already returns the non-NaN operand for `FMin`/`FMax`/`FClamp` (scalar
+    and vector, constant and non-constant operands, both operand orders). Renders of
+    arc-shader (3 and 30 frames), Bliss, Complementary Reimagined and photon (3 and
+    30 frames) at 480×270 are pixel-identical with and without the rewrite. Render
+    times differed only by noise.
+  * The rewrite does **not** remove arc-shader's black specks on far LOD
+    silhouettes. Those NaNs are created before any `min`/`max`/`clamp`: in
+    `deferred4`, the view position reconstructed from depth
+    (`unproject(gbufferProjectionInverse * clip)`) is non-finite for about 20
+    pixels, which makes the SSGI weight `giF = NoL / (l + 1)` NaN. `deferred5`'s
+    bilateral blur then spreads it (`0 × NaN`). When the reconstruction was
+    instrumented, the NaNs disappeared, so this is a codegen-sensitive precision
+    issue that is still open.
+
+  The option stays on as a portability guarantee. It costs nothing measurable,
+  and on a driver that exploits `FMin`'s undefined NaN result it gives packs the
+  behaviour they were tuned for.
 
 Every rewrite is covered by unit tests on small snippets. The corpus test
 (§11) is the integration referee.

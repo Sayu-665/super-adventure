@@ -144,7 +144,7 @@ public final class GameStateCapture {
         state.dhFarPlane = 0.01f;
         state.dhRenderDistance = (int) state.renderDistanceBlocks;
         if (distantHorizonsLoaded) {
-            DistantHorizonsInfo.capture(state, partialTick);
+            DistantHorizonsInfo.capture(state, mc);
         }
         ClientLevel level = mc.level;
         Entity entity = mc.getCameraEntity();

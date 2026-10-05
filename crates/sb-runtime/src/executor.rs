@@ -16,7 +16,9 @@ use crate::texel;
 use crate::textures::{self, TexDim, TextureData};
 use ash::vk;
 use gpu_allocator::MemoryLocation;
-use sb_core::model::{ColorTarget, DepthMode, DhStrategy, DimensionPipeline, ImageSize, ResourceRef, TargetSize};
+use sb_core::model::{ColorTarget, DepthMode, DhStrategy, DimensionPipeline, ImageSize, ProgramKind, ResourceRef, TargetSize};
+use sb_core::PassGroup;
+use sb_core::program::{GeometryGroup, GeometryProgram};
 use sb_expr::CustomUniforms;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -198,6 +200,9 @@ pub(crate) struct Executor<'r> {
     pub custom: CustomUniforms,
     pub flips: Flips,
     pub center_depth: f32,
+    /// The last rendered frame's values for the previous-frame uniforms (`None` before
+    /// the first frame).
+    pub previous_frame: Option<crate::uniforms::PreviousFrame>,
     pub center_buffer: BufferId,
     pub dh_enabled: bool,
     pub unified: bool,
@@ -218,6 +223,63 @@ pub(crate) fn default_clear(index: u32, shadow: bool, fog: [f32; 3]) -> [f32; 4]
             _ => [0.0; 4],
         }
     }
+}
+
+/// Whether `kind` renders into shadowcolor targets: the shadow geometry programs
+/// (`shadow*`), `dh_shadow` and `shadowcomp` passes. Every other program renders into
+/// colortex targets.
+///
+/// `dh_shadow` belongs to the Distant Horizons geometry group but draws in the shadow
+/// pass: Iris gives it a framebuffer of shadowcolor0/1 on the shadow depth
+/// (`IrisRenderingPipeline.createDHFramebufferShadow`), and sb-pipeline and the Java
+/// host (`TargetPlanner.writesShadowTargets`) classify it the same way.
+pub(crate) fn writes_shadow_targets(kind: &ProgramKind) -> bool {
+    match kind {
+        ProgramKind::Geometry { program } => program.group() == GeometryGroup::Shadow || *program == GeometryProgram::DhShadow,
+        ProgramKind::Composite { group, .. } => *group == PassGroup::ShadowComp,
+        _ => false,
+    }
+}
+
+/// The colortex and shadowcolor indices a dimension needs images for: targets marked
+/// used, the shared attachment lists, every program's draw buffers (shadowcolor for
+/// [`writes_shadow_targets`] programs, colortex otherwise) and every bound
+/// colortex/colorimg resp. shadowcolor/shadowcolorimg resource. Colortex 0 always
+/// exists (the final pass reads it).
+pub(crate) fn used_target_indices(dim: &DimensionPipeline) -> (BTreeSet<u32>, BTreeSet<u32>) {
+    let mut color: BTreeSet<u32> = dim.targets.colortex.iter().filter(|t| t.used).map(|t| t.index).collect();
+    color.extend(dim.gbuffer_attachments.iter().copied());
+    color.insert(0);
+    let mut shadow: BTreeSet<u32> = dim.targets.shadowcolor.iter().filter(|t| t.used).map(|t| t.index).collect();
+    shadow.extend(dim.shadow_attachments.iter().copied());
+    for p in &dim.programs {
+        if writes_shadow_targets(&p.kind) {
+            shadow.extend(p.draw_buffers.iter().copied());
+        } else {
+            color.extend(p.draw_buffers.iter().copied());
+        }
+        for b in &p.bindings_used {
+            if let Some(e) = dim.bindings.get(&b.name)
+                && let ResourceRef::ColorTex(i) | ResourceRef::ColorImage(i) = e.resource
+            {
+                color.insert(i);
+            }
+        }
+    }
+    for e in &dim.bindings.entries {
+        match e.resource {
+            ResourceRef::ColorTex(i) | ResourceRef::ColorImage(i) => {
+                color.insert(i);
+            }
+            ResourceRef::ShadowColor(i) | ResourceRef::ShadowColorImage(i) => {
+                shadow.insert(i);
+            }
+            _ => {}
+        }
+    }
+    color.retain(|&i| i < sb_uniforms::MAX_COLOR_TEX);
+    shadow.retain(|&i| i < sb_uniforms::MAX_SHADOW_COLOR);
+    (color, shadow)
 }
 
 fn target_format(gpu: &Gpu, t: &ColorTarget) -> (vk::Format, Option<String>) {
@@ -278,6 +340,7 @@ impl<'r> Executor<'r> {
                 custom: parts.custom,
                 flips: Flips::default(),
                 center_depth: 1.0,
+                previous_frame: None,
                 center_buffer: parts.center_buffer,
                 dh_enabled: parts.dh_enabled,
                 unified: parts.unified,
@@ -304,30 +367,7 @@ impl<'r> Executor<'r> {
         let color_usage = vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
         let depth_usage = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
 
-        // Which colortex indices are referenced anywhere.
-        let mut used: BTreeSet<u32> = dim.targets.colortex.iter().filter(|t| t.used).map(|t| t.index).collect();
-        used.extend(dim.gbuffer_attachments.iter().copied());
-        used.insert(0);
-        for p in &dim.programs {
-            let shadowish = matches!(p.kind, sb_core::model::ProgramKind::Geometry { program } if program.group() == sb_core::program::GeometryGroup::Shadow)
-                || matches!(p.kind, sb_core::model::ProgramKind::Composite { group: sb_core::PassGroup::ShadowComp, .. });
-            if !shadowish {
-                used.extend(p.draw_buffers.iter().copied());
-            }
-            for b in &p.bindings_used {
-                if let Some(e) = dim.bindings.get(&b.name)
-                    && let ResourceRef::ColorTex(i) | ResourceRef::ColorImage(i) = e.resource
-                {
-                    used.insert(i);
-                }
-            }
-        }
-        for e in &dim.bindings.entries {
-            if let ResourceRef::ColorTex(i) | ResourceRef::ColorImage(i) = e.resource {
-                used.insert(i);
-            }
-        }
-        used.retain(|&i| i < sb_uniforms::MAX_COLOR_TEX);
+        let (used, shadow_used) = used_target_indices(dim);
         let mipped_targets: BTreeSet<u32> = dim.programs.iter().flat_map(|p| p.mipmap_targets.iter().copied()).collect();
         let mut color = BTreeMap::new();
         for i in used {
@@ -355,21 +395,6 @@ impl<'r> Executor<'r> {
         let sh = &dim.targets.shadow;
         let shadow_enabled = sh.enabled;
         let shadow_res = if shadow_enabled { sh.resolution.clamp(16, 8192) } else { 1 };
-        let mut shadow_used: BTreeSet<u32> = dim.targets.shadowcolor.iter().filter(|t| t.used).map(|t| t.index).collect();
-        shadow_used.extend(dim.shadow_attachments.iter().copied());
-        for p in &dim.programs {
-            let shadowish = matches!(p.kind, sb_core::model::ProgramKind::Geometry { program } if program.group() == sb_core::program::GeometryGroup::Shadow)
-                || matches!(p.kind, sb_core::model::ProgramKind::Composite { group: sb_core::PassGroup::ShadowComp, .. });
-            if shadowish {
-                shadow_used.extend(p.draw_buffers.iter().copied());
-            }
-        }
-        for e in &dim.bindings.entries {
-            if let ResourceRef::ShadowColor(i) | ResourceRef::ShadowColorImage(i) = e.resource {
-                shadow_used.insert(i);
-            }
-        }
-        shadow_used.retain(|&i| i < sb_uniforms::MAX_SHADOW_COLOR);
         let mut shadow_color = BTreeMap::new();
         for i in shadow_used {
             let default = ColorTarget { index: i, format: Default::default(), clear: true, clear_color: None, mipmap_programs: Vec::new(), size: TargetSize::default(), used: true };
@@ -638,4 +663,45 @@ fn upload_scene(gpu: &mut Gpu, arena: &mut Arena, s: &CpuScene) -> Result<GpuSce
         dh,
         sodium,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sb_core::model::Program;
+
+    fn program(kind: ProgramKind, draw_buffers: Vec<u32>) -> Program {
+        let (mut pack, _) = crate::testutil::mini_pack();
+        let mut p = pack.dimensions[0].programs.remove(0);
+        p.kind = kind;
+        p.output_slots = (0..draw_buffers.len() as u32).collect();
+        p.draw_buffers = draw_buffers;
+        p
+    }
+
+    /// Regression (Iris `createDHFramebufferShadow`): `dh_shadow` writes shadowcolor
+    /// targets, not colortex (it used to allocate colortex images and leave its
+    /// shadowcolor outputs without an image).
+    #[test]
+    fn dh_shadow_writes_shadowcolor_targets() {
+        let geo = |program| ProgramKind::Geometry { program };
+        assert!(writes_shadow_targets(&geo(GeometryProgram::DhShadow)));
+        assert!(writes_shadow_targets(&geo(GeometryProgram::ShadowCutout)));
+        assert!(writes_shadow_targets(&ProgramKind::Composite { group: PassGroup::ShadowComp, index: 2 }));
+        for g in [GeometryProgram::DhTerrain, GeometryProgram::DhWater, GeometryProgram::DhGeneric, GeometryProgram::Terrain] {
+            assert!(!writes_shadow_targets(&geo(g)), "{g:?}");
+        }
+        assert!(!writes_shadow_targets(&ProgramKind::Composite { group: PassGroup::Composite, index: 0 }));
+
+        let mut dim = crate::testutil::empty_dimension();
+        dim.programs = vec![
+            program(geo(GeometryProgram::DhShadow), vec![3, 5]),
+            program(geo(GeometryProgram::DhTerrain), vec![6]),
+            program(geo(GeometryProgram::Shadow), vec![1]),
+            program(ProgramKind::Composite { group: PassGroup::ShadowComp, index: 0 }, vec![2]),
+        ];
+        let (color, shadow) = used_target_indices(&dim);
+        assert_eq!(color.into_iter().collect::<Vec<_>>(), vec![0, 6]);
+        assert_eq!(shadow.into_iter().collect::<Vec<_>>(), vec![1, 2, 3, 5]);
+    }
 }

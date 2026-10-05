@@ -71,6 +71,26 @@ class ModelJsonTest {
         assertNull(caps.maxDescriptorsPerProgram());
     }
 
+    /** Fields serde reads with {@code #[serde(default)]} may be absent (models of older builds). */
+    @Test
+    void slotVariantsAndShadowEmulationDefault() throws ModelParseException {
+        GeometrySlot slot = ModelJson.parse("{\"program\":3,\"resolved_from\":\"terrain_solid\"}", GeometrySlot.class);
+        assertEquals(new GeometrySlot(3, GeometryProgram.TERRAIN_SOLID), slot);
+        assertEquals(Map.of(), slot.variants());
+        GeometrySlot withVariants = ModelJson.parse("{\"program\":3,\"resolved_from\":\"terrain\",\"variants\":{\"sodium_terrain\":7}}", GeometrySlot.class);
+        assertEquals(Map.of("sodium_terrain", 7), withVariants.variants());
+        assertThrows(UnsupportedOperationException.class, () -> withVariants.variants().put("x", 1));
+        assertEquals("{\"program\":3,\"resolved_from\":\"terrain\",\"variants\":{\"sodium_terrain\":7}}", ModelJson.toJson(withVariants));
+
+        String use = "{\"name\":\"shadowtex0\",\"set\":1,\"binding\":4,\"use_alt\":false,\"stages\":[\"fragment\"]";
+        BindingUse plain = ModelJson.parse(use + "}", BindingUse.class);
+        assertFalse(plain.shadowEmulated());
+        assertEquals(new BindingUse("shadowtex0", 1, 4, false, List.of(ShaderStage.FRAGMENT)), plain);
+        BindingUse emulated = ModelJson.parse(use + ",\"shadow_emulated\":true}", BindingUse.class);
+        assertTrue(emulated.shadowEmulated());
+        assertEquals(use + ",\"shadow_emulated\":true}", ModelJson.toJson(emulated));
+    }
+
     @Test
     void optionsModel() {
         OptionsModel options = pack.options();

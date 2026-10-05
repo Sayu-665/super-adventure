@@ -37,4 +37,14 @@ class ModelValidationTest {
         assertTrue(problems.get(1).contains("spirv refers to blob 500"), problems.get(1));
         assertTrue(problems.get(2).contains("glsl_vulkan refers to a spirv blob"), problems.get(2));
     }
+
+    @Test
+    void danglingVariantIndicesAreReported() throws Exception {
+        JsonObject pack = serdePack();
+        JsonObject world0 = pack.getAsJsonArray("dimensions").get(0).getAsJsonObject();
+        world0.getAsJsonObject("geometry").getAsJsonObject("terrain").getAsJsonObject("variants").addProperty("sodium_terrain", 42);
+        List<String> problems = problems(pack);
+        assertEquals(1, problems.size(), problems.toString());
+        assertTrue(problems.get(0).contains("geometry terrain variant sodium_terrain refers to program 42"), problems.get(0));
+    }
 }

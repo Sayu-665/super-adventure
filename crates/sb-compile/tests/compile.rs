@@ -588,3 +588,94 @@ fn pathological_expressions_are_rejected_not_aborted() {
     let err = compile_glsl(&src, ShaderStage::Fragment, "macro", &CompileOptions::default(), None).unwrap_err();
     assert!(err.errors[0].message.contains("too complex"), "{err}");
 }
+
+/// GLSL.std.450 instruction numbers of the opcodes in each `OpExtInst` of `spirv`.
+fn glsl_std_450_ops(spirv: &[u32]) -> Vec<u32> {
+    let mut set = None;
+    let mut ops = Vec::new();
+    let mut i = module::HEADER_WORDS;
+    while i < spirv.len() {
+        let count = (spirv[i] >> 16) as usize;
+        let opcode = spirv[i] & 0xffff;
+        assert!(count > 0 && i + count <= spirv.len(), "malformed module");
+        if opcode == 11 && module::words_to_bytes(&spirv[i + 2..i + count]).starts_with(b"GLSL.std.450\0") {
+            set = Some(spirv[i + 1]);
+        }
+        if opcode == 12 && Some(spirv[i + 3]) == set {
+            ops.push(spirv[i + 4]);
+        }
+        i += count;
+    }
+    ops
+}
+
+const MIN_MAX_FRAG: &str = r#"#version 450
+layout(set = 0, binding = 0, std140) uniform sb_Frame { float a; float b; int i; ivec2 iv; vec3 v; };
+layout(location = 0) out vec4 sb_FragData_0;
+void main() {
+    float x = min(a, b) + max(a, b) + clamp(a, b, 1.0);
+    vec3 y = min(v, vec3(b)) + max(v, vec3(a)) + clamp(v, vec3(0.0), vec3(1.0));
+    int j = min(i, 3) + max(i, 2) + clamp(i, 0, 4);
+    ivec2 k = min(iv, ivec2(1)) + max(iv, ivec2(0));
+    sb_FragData_0 = vec4(y * x, float(j + k.x + k.y));
+}
+"#;
+
+const FMIN: u32 = 37;
+const FMAX: u32 = 40;
+const FCLAMP: u32 = 43;
+const NMIN: u32 = 79;
+const NMAX: u32 = 80;
+const NCLAMP: u32 = 81;
+
+/// `min`/`max`/`clamp` on floats become NaN-tolerant `NMin`/`NMax`/`NClamp` by default
+/// (NVIDIA/AMD semantics: the non-NaN operand wins); integer forms are untouched and the
+/// module stays valid. The option turns it off.
+#[test]
+fn float_min_max_clamp_are_nan_tolerant_by_default() {
+    let on = compile_ok(MIN_MAX_FRAG, ShaderStage::Fragment);
+    assert_valid(&on, VulkanTarget::Vulkan1_2);
+    let ops = glsl_std_450_ops(&on);
+    for op in [NMIN, NMAX, NCLAMP] {
+        assert_eq!(ops.iter().filter(|&&o| o == op).count(), 2, "scalar + vector forms of {op}: {ops:?}");
+    }
+    assert!(!ops.iter().any(|o| [FMIN, FMAX, FCLAMP].contains(o)), "{ops:?}");
+    // SMin 39, SMax 42, SClamp 45 stay.
+    assert_eq!(ops.iter().filter(|&&o| o == 39 || o == 42).count(), 4, "{ops:?}");
+    assert!(ops.contains(&45), "{ops:?}");
+
+    let off = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    assert_valid(&off, VulkanTarget::Vulkan1_2);
+    let ops = glsl_std_450_ops(&off);
+    for op in [FMIN, FMAX, FCLAMP] {
+        assert_eq!(ops.iter().filter(|&&o| o == op).count(), 2, "{op}: {ops:?}");
+    }
+    assert!(!ops.iter().any(|o| [NMIN, NMAX, NCLAMP].contains(o)), "{ops:?}");
+    // Only the instruction numbers differ.
+    assert_eq!(on.len(), off.len());
+}
+
+/// The word-level pass: counts its rewrites, is idempotent, and leaves malformed modules
+/// untouched with an error instead of panicking.
+#[test]
+fn nan_tolerant_pass_on_raw_modules() {
+    let mut spirv = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    assert_eq!(module::nan_tolerant_min_max(&mut spirv), Ok(6));
+    assert_eq!(module::nan_tolerant_min_max(&mut spirv), Ok(0));
+    assert_valid(&spirv, VulkanTarget::Vulkan1_2);
+
+    let mut truncated = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    let len = truncated.len();
+    truncated[len - 1] = 0xffff_0001; // a final instruction claiming 65535 words
+    let before = truncated.clone();
+    assert!(module::nan_tolerant_min_max(&mut truncated).is_err());
+    assert_eq!(truncated, before, "a malformed module must not be modified");
+    for mut junk in [vec![], vec![1, 2, 3], vec![module::MAGIC, 0x0001_0500, 0, 1, 0, 0]] {
+        assert!(module::nan_tolerant_min_max(&mut junk).is_err());
+    }
+    // A module without GLSL.std.450 has nothing to rewrite.
+    let mut plain = compile_ok(FRAG, ShaderStage::Fragment);
+    let copy = plain.clone();
+    assert_eq!(module::nan_tolerant_min_max(&mut plain), Ok(0));
+    assert_eq!(plain, copy);
+}

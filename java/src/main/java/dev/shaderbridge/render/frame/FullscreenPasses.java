@@ -13,12 +13,11 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.shaderbridge.model.PassGroup;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.model.ViewportScale;
-import dev.shaderbridge.render.draw.UniformTarget;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.AttachmentPlan;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
+import dev.shaderbridge.render.pipeline.RawDraw;
 import dev.shaderbridge.render.targets.ColorPair;
-import dev.shaderbridge.render.targets.TextureBinding;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -28,7 +27,8 @@ import net.minecraft.client.renderer.RenderPipelines;
 /**
  * Draws composite-style programs: each in its own render pass over its output targets (the
  * {@link FlipState#write} textures, or Minecraft's main color target for {@code final}) as the
- * {@code fullscreen} profile's six vertices, with its inputs bound per {@code BindingUse.use_alt}.
+ * {@code fullscreen} profile's six vertices, with its inputs bound per {@code BindingUse.use_alt},
+ * through renderpearl or, for programs only raw Vulkan can run, the raw path.
  * Also performs the copies around them: {@code colortex0} to the main target when no
  * {@code final} program drew, and the end-of-frame alt to main copies. Render thread only.
  */
@@ -60,7 +60,8 @@ final class FullscreenPasses {
             return FrameSteps.Drawn.NOTHING;
         }
         AttachmentLayout layout = layout(index, group);
-        if (!(r.programs.program(index, layout) instanceof ProgramResolution.Renderpearl pipeline)) {
+        ProgramResolution resolution = r.programs.program(index, layout);
+        if (!(resolution instanceof ProgramResolution.Renderpearl) && !(resolution instanceof ProgramResolution.Raw)) {
             return FrameSteps.Drawn.NOTHING;
         }
         if (!isDefault(program.viewport())) {
@@ -69,22 +70,55 @@ final class FullscreenPasses {
         if (!program.mipmapTargets().isEmpty()) {
             r.diagnostics.report(program.name() + ": mipmaps of " + program.mipmapTargets() + " are not generated; their lower levels keep old contents");
         }
-        RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> "ShaderBridge " + program.name());
+        List<Optional<GpuTextureView>> views = new ArrayList<>();
         for (int s = 0; s < slots.size(); s++) {
-            switch (slots.get(s)) {
-                case AttachmentSlot.Target t -> descriptor.withColorAttachment(pair(t.target(), shadow).orElseThrow().attachmentView(t.alt()));
-                case AttachmentSlot.MainColor m -> descriptor.withColorAttachment(main.getColorTextureView());
-                case AttachmentSlot.Sink k -> descriptor.withColorAttachment(r.sinks.view(layout.attachments().get(s).format(), size[0], size[1]));
-                case AttachmentSlot.Unused u -> descriptor.withUnusedColorAttachment();
-            }
+            views.add(switch (slots.get(s)) {
+                case AttachmentSlot.Target t -> Optional.of(pair(t.target(), shadow).orElseThrow().attachmentView(t.alt()));
+                case AttachmentSlot.MainColor m -> Optional.of(main.getColorTextureView());
+                case AttachmentSlot.Sink k -> Optional.of(r.sinks.view(layout.attachments().get(s).format(), size[0], size[1]));
+                case AttachmentSlot.Unused u -> Optional.empty();
+            });
         }
+        if (resolution instanceof ProgramResolution.Raw raw) {
+            return drawRaw(raw, program, slots, views, size, shadow, flips, frame);
+        }
+        ProgramResolution.Renderpearl pipeline = (ProgramResolution.Renderpearl) resolution;
+        RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> "ShaderBridge " + program.name());
+        views.forEach(v -> v.ifPresentOrElse(descriptor::withColorAttachment, descriptor::withUnusedColorAttachment));
         DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.NONE, false);
         try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build())) {
             pass.setPipeline(pipeline.compiled());
-            r.binder.bind(new FreshPass(pass), pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key), MinecraftHost.blockAtlas());
+            r.binder.bind(new OwnPassUniforms(pass), pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key),
+                r.host());
             pass.draw(VERTICES, 1, 0, 0);
         }
         return new FrameSteps.Drawn(true, shadow ? written(slots, pipeline.pipeline().attachments()) : List.of());
+    }
+
+    /**
+     * Draws a program on the raw Vulkan path, in a render pass of its own over the same
+     * attachments.
+     *
+     * @return whether it drew, and the shadowcolor targets a {@code shadowcomp} program wrote
+     */
+    private FrameSteps.Drawn drawRaw(ProgramResolution.Raw raw, Program program, List<AttachmentSlot> slots, List<Optional<GpuTextureView>> views,
+                                     int[] size, boolean shadow, FlipState flips, GpuBufferSlice frame) {
+        GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, false));
+        List<Boolean> wrote;
+        try {
+            wrote = r.raw.draw(raw.program(), new RawDraw(views, size[0], size[1], r.frameState.timer().frameCounter(), frame, draw,
+                flips.colorState(), flips.shadowState()));
+        } catch (RuntimeException e) {
+            r.diagnostics.report(program.name() + " was not drawn: " + e.getMessage());
+            return FrameSteps.Drawn.NOTHING;
+        }
+        List<Integer> written = new ArrayList<>();
+        for (int s = 0; s < slots.size() && s < wrote.size(); s++) {
+            if (slots.get(s) instanceof AttachmentSlot.Target t && wrote.get(s)) {
+                written.add(t.target());
+            }
+        }
+        return new FrameSteps.Drawn(true, shadow ? written : List.of());
     }
 
     /**
@@ -180,28 +214,5 @@ final class FullscreenPasses {
             }
         }
         return out;
-    }
-
-    /** A pass ShaderBridge just created: nothing is bound yet. */
-    private record FreshPass(RenderPass pass) implements UniformTarget {
-        @Override
-        public boolean isBound(String name) {
-            return false;
-        }
-
-        @Override
-        public Optional<TextureBinding> boundTexture(String name) {
-            return Optional.empty();
-        }
-
-        @Override
-        public void bind(String name, GpuBufferSlice slice) {
-            pass.setUniform(name, slice);
-        }
-
-        @Override
-        public void bind(String name, TextureBinding texture) {
-            pass.setUniform(name, texture.view(), texture.sampler());
-        }
     }
 }

@@ -26,7 +26,11 @@ public final class ModelValidation {
             String where = "dimension '" + dimension.folder() + "'";
             int programs = dimension.programs().size();
             for (Map.Entry<GeometryProgram, GeometrySlot> slot : dimension.geometry().entrySet()) {
-                index(out, where + " geometry " + slot.getKey().wireName(), slot.getValue().program(), programs);
+                String slotName = where + " geometry " + slot.getKey().wireName();
+                index(out, slotName, slot.getValue().program(), programs);
+                for (Map.Entry<String, Integer> variant : slot.getValue().variants().entrySet()) {
+                    index(out, slotName + " variant " + variant.getKey(), variant.getValue(), programs);
+                }
             }
             for (Pass pass : dimension.passes()) {
                 String passName = where + " pass " + pass.group().wireName() + pass.index();

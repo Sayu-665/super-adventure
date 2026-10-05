@@ -14,6 +14,8 @@
 //!   matching sampler type.
 //! * [`bindings`]: the pack-global [`BindingTable`](sb_core::model::BindingTable):
 //!   samplers in set 1, SSBOs and storage images in set 2.
+//! * [`naming`]: the names derived from a pack name when it needs several members or
+//!   bindings (`sb_as_<suffix>_<name>` conflict variants).
 //!
 //! Typical use by the pipeline, after analyzing every stage of a dimension:
 //!
@@ -46,6 +48,7 @@
 
 pub mod bindings;
 pub mod layout;
+pub mod naming;
 pub mod registry;
 pub mod resources;
 
@@ -53,6 +56,7 @@ pub use bindings::{
     BindingTableBuilder, IMAGE_BINDING_BASE, MAX_SSBO_INDEX, PACK_UBO_BINDING_BASE, SAMPLER_SET,
     STORAGE_SET, find_binding, kinds_compatible,
 };
+pub use naming::{CONFLICT_PREFIX, conflict_name, is_derived_name, uniquified_name};
 pub use layout::{
     DRAW_BINDING, DRAW_BLOCK_NAME, FRAME_BINDING, FRAME_BLOCK_NAME, LayoutBuilder, MAX_MEMBER_SIZE,
     MemberIndex, MemberRef, PORTABLE_MAX_BLOCK_SIZE, UNIFORM_SET, UniformDecl,

@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * One member of a uniform block.
  *
- * @param name          GLSL member name (the pack's uniform name, or {@code name__type} for type conflicts)
+ * @param name          GLSL member name (the pack's uniform name, or {@code sb_as_<type>_<name>} for type conflicts)
  * @param ty            declared type
  * @param offset        std140 byte offset
  * @param source        where the host gets the value from

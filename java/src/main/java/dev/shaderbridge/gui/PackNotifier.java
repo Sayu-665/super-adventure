@@ -37,6 +37,16 @@ public final class PackNotifier {
     }
 
     /**
+     * Reports a problem that degrades rendering without stopping the pack (e.g. Distant Horizons
+     * LODs that cannot be drawn).
+     *
+     * @param message what happened
+     */
+    public static void warning(String message) {
+        show(Component.literal(message).withStyle(ChatFormatting.YELLOW), true);
+    }
+
+    /**
      * @param enabled the new state of shader packs
      */
     public static void toggled(boolean enabled) {

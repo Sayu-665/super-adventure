@@ -1,5 +1,5 @@
 name = "dh_generic"
-description = "Distant Horizons 3.3 BLAZE_3D generic objects (beacon beams, clouds, custom API boxes): vPosition vec3, aColor vec4 (RGBA32_FLOAT), aMaterial uint, with vertUniformBlock."
+description = "Distant Horizons 3.3 BLAZE_3D generic objects (beacon beams, clouds, custom API boxes). 20-byte vertices: vPosition RGB32_FLOAT (vec3), aColor RGBA8_UNORM (vec4, normalized 0..1), aMaterial R8_UINT (uint, DH_BLOCK_* id) followed by 3 padding bytes. DH's vert.vsh comments aColor as RGBA_FLOAT_COLOR, but BlazeDhGenericObjectRenderer (verified in the 3.3.4 26.3 jar) binds BlazeDhVertexFormatUtil.RGBA_UBYTE_COLOR = GpuFormat.RGBA8_UNORM. DH binds vertUniformBlock and the sampler uLightMap by name."
 
 [[inputs]]
 name = "vPosition"

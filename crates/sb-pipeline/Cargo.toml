@@ -20,6 +20,10 @@ indexmap.workspace = true
 rayon.workspace = true
 blake3.workspace = true
 
+[build-dependencies]
+# build.rs hashes the translator's sources into SB_TRANSLATOR_REVISION (cache key).
+blake3.workspace = true
+
 [dev-dependencies]
 pretty_assertions.workspace = true
 tempfile = "3"

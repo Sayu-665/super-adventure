@@ -40,6 +40,14 @@ pub struct CompileOptions {
     pub debug_info: bool,
     /// Suppress glslang warnings. Default `false`.
     pub suppress_warnings: bool,
+    /// Make `min`, `max` and `clamp` on floats return the non-NaN operand, as NVIDIA
+    /// and AMD GPUs do: GLSL.std.450 `FMin`/`FMax`/`FClamp` are rewritten to
+    /// `NMin`/`NMax`/`NClamp` ([`crate::module::nan_tolerant_min_max`]). Shader packs
+    /// are tuned on those GPUs; GLSL and `FMin` leave the result undefined when an
+    /// operand is NaN, while `NMin` defines it as the other operand. The rewrite never
+    /// changes a defined result. Default `true`; `docs/ARCHITECTURE.md` §8 has the
+    /// measurements behind the default (a no-op on lavapipe, which already flushes).
+    pub nan_tolerant_min_max: bool,
 }
 
 impl Default for CompileOptions {
@@ -53,6 +61,7 @@ impl Default for CompileOptions {
             auto_map_locations: false,
             debug_info: false,
             suppress_warnings: false,
+            nan_tolerant_min_max: true,
         }
     }
 }
@@ -415,6 +424,11 @@ fn finish(
         entries.into_iter().chain(generator_warnings).map(|e| CompileMessage::from_entry(e, line_map)).collect();
 
     let mut spirv = out.spirv;
+    if opts.nan_tolerant_min_max
+        && let Err(reason) = module::nan_tolerant_min_max(&mut spirv)
+    {
+        warnings.push(CompileMessage::plain(format!("min/max/clamp left NaN-sensitive: {reason}")));
+    }
     if opts.optimize {
         match tools::optimize(&spirv, opts.vulkan) {
             Ok(optimized) => spirv = optimized,

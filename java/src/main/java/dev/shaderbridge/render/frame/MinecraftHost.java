@@ -11,21 +11,27 @@ import net.minecraft.data.AtlasIds;
 
 /**
  * The game's textures for pack programs that sample them by pack name: the block atlas (or the
- * albedo the current draw binds as {@code Sampler0}), the lightmap, the entity overlay and
- * Minecraft's main depth. PBR atlases and Distant Horizons textures are not provided (normals and
- * specular fall back to neutral textures, DH depth to the far plane). Render thread only.
+ * albedo the current draw binds as {@code Sampler0}), the lightmap, the entity overlay,
+ * Minecraft's main depth, and Distant Horizons' {@code dhDepthTex0/1} and block atlas while LODs
+ * are drawn ({@link DistantFrame}). PBR atlases are not provided (normals and specular fall back
+ * to neutral textures; DH depth falls back to the far plane without LODs). Render thread only.
  */
 final class MinecraftHost implements HostTextures {
     private final TextureBinding albedo;
+    private final DistantFrame distant;
 
-    private MinecraftHost(TextureBinding albedo) {
+    private MinecraftHost(TextureBinding albedo, DistantFrame distant) {
         this.albedo = albedo;
+        this.distant = distant;
     }
 
-    /** @return the host textures with the block atlas as albedo */
-    static MinecraftHost blockAtlas() {
+    /**
+     * @param distant the frame's Distant Horizons textures
+     * @return the host textures with the block atlas as albedo
+     */
+    static MinecraftHost blockAtlas(DistantFrame distant) {
         GpuTextureView atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.BLOCKS).getTextureView();
-        return new MinecraftHost(new TextureBinding(atlas, RenderSystem.getSamplerCache().getRepeat(FilterMode.NEAREST)));
+        return new MinecraftHost(new TextureBinding(atlas, RenderSystem.getSamplerCache().getRepeat(FilterMode.NEAREST)), distant);
     }
 
     /**
@@ -33,7 +39,7 @@ final class MinecraftHost implements HostTextures {
      * @return host textures whose atlas is that texture
      */
     MinecraftHost withAlbedo(TextureBinding albedo) {
-        return new MinecraftHost(albedo);
+        return new MinecraftHost(albedo, distant);
     }
 
     @Override
@@ -69,11 +75,11 @@ final class MinecraftHost implements HostTextures {
 
     @Override
     public Optional<GpuTextureView> dhDepth(int index) {
-        return Optional.empty();
+        return distant.depthTexture(index);
     }
 
     @Override
     public Optional<TextureBinding> dhBlockAtlas() {
-        return Optional.empty();
+        return distant.blockAtlas();
     }
 }

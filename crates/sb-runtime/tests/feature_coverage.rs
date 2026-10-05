@@ -319,14 +319,14 @@ fn coverage_pack() -> (CompiledPack, BlobTable) {
     programs[1].blend = Some(BlendMode::TRANSLUCENT);
     programs[5].mipmap_targets = vec![0];
     programs[6].viewport = ViewportScale { scale: 0.5, offset_x: 0.0, offset_y: 0.0 };
-    programs[6].bindings_used = vec![BindingUse { name: "colortex0".into(), set: 1, binding: 2, use_alt: true, stages: vec![ShaderStage::Fragment] }];
+    programs[6].bindings_used = vec![BindingUse { name: "colortex0".into(), set: 1, binding: 2, use_alt: true, stages: vec![ShaderStage::Fragment], shadow_emulated: false }];
     programs[7].compute = Some(ComputeInfo { local_size: [8, 8, 1], work_groups: WorkGroups::Absolute { x: 64, y: 32, z: 1 }, indirect: None });
     programs[8].compute = Some(ComputeInfo { local_size: [1, 1, 1], work_groups: WorkGroups::Absolute { x: 0, y: 0, z: 0 }, indirect: Some((1, 0)) });
 
     let mut geometry = IndexMap::new();
     use GeometryProgram as G;
     for (g, p) in [(G::TerrainSolid, 0), (G::TerrainCutout, 0), (G::Water, 1), (G::SkyBasic, 2), (G::ShadowSolid, 3), (G::ShadowCutout, 3), (G::ShadowWater, 3)] {
-        geometry.insert(g, GeometrySlot { program: p, resolved_from: g });
+        geometry.insert(g, GeometrySlot { program: p, resolved_from: g, variants: Default::default() });
     }
     let flips = |set: &[usize]| {
         let mut v = vec![false; 7];

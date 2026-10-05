@@ -5,8 +5,10 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
+import dev.shaderbridge.dh.DhMode;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
+import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
 import dev.shaderbridge.render.shadow.ShadowPlan;
 import dev.shaderbridge.render.shadow.ShadowRenderer;
@@ -27,14 +29,16 @@ import org.joml.Vector4f;
  *   <li>{@link #beginFrame} (start of {@code LevelRenderer.render}): game state and uniforms, the
  *   frame's clears, then every step before the opaque geometry ({@code setup} on the first frame,
  *   {@code begin}, the shadow pass, {@code shadowcomp}, {@code prepare});</li>
- *   <li>Minecraft draws the sky and the opaque geometry into {@link #openGbuffers gbuffers passes};</li>
+ *   <li>Minecraft draws the sky and, after the opaque Distant Horizons LODs
+ *   ({@link #drawDistantOpaque}), the opaque geometry into {@link #openGbuffers gbuffers passes};</li>
  *   <li>{@link #afterOpaque}: the {@code depthtex1}/{@code depthtex2} copies, then {@code deferred};</li>
- *   <li>Minecraft draws the translucent geometry into another gbuffers pass;</li>
+ *   <li>after the translucent LODs ({@link #drawDistantWater}), Minecraft draws the translucent
+ *   geometry into another gbuffers pass;</li>
  *   <li>{@link #finishFrame}: {@code composite}, {@code final} into Minecraft's main color target,
  *   the end-of-frame copies.</li>
  * </ol>
  *
- * A frame only renders with the pack once its composite-style pipelines are compiled; until then
+ * A frame only renders with the pack once its composite-style pipelines and compute programs are compiled; until then
  * Minecraft renders vanilla. Render thread only.
  */
 final class PackRenderer implements FrameSteps, AutoCloseable {
@@ -43,6 +47,7 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     private final FullscreenPasses fullscreen;
     private final ComputeDispatcher computes;
     private final ShadowRenderer shadows;
+    private final DistantPasses distant;
     private LevelRenderer level;
     private GpuBufferSlice frameSlice;
     private boolean firstFrame = true;
@@ -53,7 +58,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         this.geometry = new GeometryPasses(resources);
         this.fullscreen = new FullscreenPasses(resources);
         this.computes = new ComputeDispatcher(resources);
-        ShadowPlan plan = ShadowPlan.of(resources.dim.targets().shadow());
+        this.distant = new DistantPasses(resources, geometry);
+        ShadowPlan plan = ShadowPlan.of(resources.dim.targets().shadow(),
+            DhMode.castsShadows(resources.dim.distantHorizons(), resources.dim.targets().shadow()));
         plan.notes().forEach(n -> resources.diagnostics.report(resources.dim.folder() + ": " + n));
         this.shadows = new ShadowRenderer(plan, ShadowSections.CAMERA_VISIBLE);
     }
@@ -92,6 +99,7 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         r.drawSlots.prepare(r.frameState, r.drawUniforms::push);
         r.drawUniforms.flush(encoder);
         r.targets.clear(encoder, new Rgba(fogColor.x, fogColor.y, fogColor.z, 1), r.depthMode);
+        r.distant.beginFrame(encoder, r.frameState.dhActive);
         RenderSystem.setShaderFog(terrainFog);
         this.level = level;
         r.sequencer.begin(firstFrame);
@@ -117,6 +125,24 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
      */
     void closed(RenderPass pass) {
         geometry.closed(pass);
+    }
+
+    /** Draws the opaque Distant Horizons LODs of this frame (before Minecraft's opaque geometry). */
+    void drawDistantOpaque() {
+        distant.drawOpaque(r.sequencer.flips(), frameSlice);
+    }
+
+    /** Draws the translucent Distant Horizons LODs of this frame (before Minecraft's translucent geometry). */
+    void drawDistantWater() {
+        distant.drawWater(r.sequencer.flips(), frameSlice);
+    }
+
+    /**
+     * @return the far plane Minecraft's projection must reach in the next frames (synthesized
+     *     Distant Horizons LODs), or NaN for its own
+     */
+    float unifiedFarPlane() {
+        return r.distant.unifiedFarPlane();
     }
 
     /** The opaque geometry is drawn: copies the depth, then runs everything up to the translucent geometry. */
@@ -145,14 +171,29 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         return r.sequencer.inFrame();
     }
 
-    /** Requests every composite-style pipeline; true once none is still compiling. */
+    /**
+     * Requests every composite-style pipeline and every compute program; true once none is still
+     * compiling ({@code setup} computes run on the first frame only, so they must be ready by then).
+     */
     private boolean compositesReady() {
         boolean ready = true;
         for (FramePlan.Step step : r.sequencer.plan().steps()) {
-            if (step instanceof FramePlan.Step.Fullscreen f
-                && r.programs.program(f.program(), fullscreen.layout(f.program(), f.group())) instanceof ProgramResolution.Pending) {
-                ready = false;
+            switch (step) {
+                case FramePlan.Step.Fullscreen f -> ready &= !(r.programs.program(f.program(), fullscreen.layout(f.program(), f.group()))
+                    instanceof ProgramResolution.Pending);
+                case FramePlan.Step.Computes c -> ready &= computesReady(c.pass());
+                case FramePlan.Step.Geometry g when g.pass() != null -> ready &= computesReady(g.pass());
+                default -> {
+                }
             }
+        }
+        return ready;
+    }
+
+    private boolean computesReady(Pass pass) {
+        boolean ready = true;
+        for (int index : pass.computes()) {
+            ready &= !(r.programs.program(index, AttachmentLayout.fullscreen(r.dim, r.dim.programs().get(index))) instanceof ProgramResolution.Pending);
         }
         return ready;
     }
@@ -188,6 +229,11 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
             @Override
             public void copyDepth() {
                 r.targets.copyShadowDepth(RenderSystem.getDevice().createCommandEncoder());
+            }
+
+            @Override
+            public void drawDistant() {
+                distant.drawShadow(flips, frameSlice);
             }
         });
     }

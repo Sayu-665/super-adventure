@@ -536,6 +536,13 @@ fn pack_layouts_are_valid() {
                     &layout.draw
                 };
                 assert_eq!(block.member(&m.member).map(|b| b.offset), Some(m.offset));
+                // #52: conflict members never introduce GLSL-reserved `__`.
+                assert!(
+                    m.member == *name || (!m.member.contains("__") && sb_uniforms::is_derived_name(&m.member, name)),
+                    "{}: {name} {ty} -> {}",
+                    p.name,
+                    m.member
+                );
             }
         }
         let unset = layout
@@ -618,6 +625,13 @@ fn samplers_and_images_canonicalize_and_bind() {
                 p.name,
                 e.name
             );
+            // #52: derived names never introduce GLSL-reserved `__`.
+            assert!(
+                !e.name.starts_with(sb_uniforms::CONFLICT_PREFIX) || !e.name.contains("__"),
+                "{}: conflict variant {} contains `__`",
+                p.name,
+                e.name
+            );
             match e.kind {
                 ResourceKind::Sampler { .. } => assert_eq!(e.set, SAMPLER_SET),
                 ResourceKind::StorageImage { .. } => assert_eq!(e.set, STORAGE_SET),
@@ -647,7 +661,7 @@ fn samplers_and_images_canonicalize_and_bind() {
                 continue;
             };
             assert!(
-                !e.name.contains("__"),
+                !e.name.starts_with(sb_uniforms::CONFLICT_PREFIX),
                 "{}: custom texture {id} needs a conflict variant {}",
                 p.name,
                 e.name

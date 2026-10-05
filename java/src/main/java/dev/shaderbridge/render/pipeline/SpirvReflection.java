@@ -123,11 +123,18 @@ public record SpirvReflection(
      * @param arraySize    1 for a single descriptor, the element count of a descriptor array, 0 for a
      *                     runtime-sized array
      * @param sampled      numeric class of the sampled/stored texel, {@link ScalarClass#OTHER} for buffers
-     * @param decorated    has both {@code DescriptorSet} and {@code Binding} decorations, which Mojang's
-     *                     pipeline builder rewrites in place
+     * @param set          the {@code DescriptorSet} decoration, -1 if absent
+     * @param binding      the {@code Binding} decoration, -1 if absent
      */
     public record Descriptor(String name, DescriptorType type, ImageDim dim, boolean arrayed, boolean multisampled, int arraySize,
-                             ScalarClass sampled, boolean decorated) {
+                             ScalarClass sampled, int set, int binding) {
+        /**
+         * @return whether the descriptor has both {@code DescriptorSet} and {@code Binding}
+         *     decorations, which Mojang's pipeline builder rewrites in place and the raw path binds by
+         */
+        public boolean decorated() {
+            return set >= 0 && binding >= 0;
+        }
     }
 
     /**

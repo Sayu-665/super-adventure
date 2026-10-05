@@ -1,8 +1,9 @@
 //! Spec step 11: translating and compiling one (program, draw profile) variant for every
 //! requested target, with content-addressed caches for SPIR-V, validation and the
-//! Renderpearl compile check.
+//! Renderpearl compile check, and a per-session cache of whole variants keyed by
+//! everything a variant's translation reads ([`compile_job_cached`]).
 
-use crate::analysis::{Key, Memo, tag};
+use crate::analysis::{Generations, Key, Memo, tag};
 use indexmap::IndexMap;
 use sb_compile::{CompileOptions, Reflection, ValidationResult, VulkanTarget};
 use sb_core::model::{AlphaTest, CompileEnvironment, DepthMode, OutputTarget, ProgramKind, VertexInput};
@@ -17,15 +18,33 @@ pub type SpirvModule = Arc<(Vec<u32>, Reflection, Vec<Diagnostic>)>;
 /// Outcome of compiling one Vulkan GLSL stage (cached).
 pub type SpirvResult = Result<SpirvModule, Arc<Vec<Diagnostic>>>;
 
+/// Outcome of compiling one variant (shared with the session's variant cache).
+pub type VariantResult = Result<Arc<CompiledVariant>, Diagnostics>;
+
 /// Shared caches of a session.
 #[derive(Debug, Default)]
 pub struct Caches {
+    /// Preprocessed stages and their analysis keys (two generations; see
+    /// [`crate::analysis::AnalysisCaches::preprocessed`] for the key's scope).
+    pub preprocessed: Generations<crate::analysis::PreprocessedStage>,
     pub analysis: Memo<crate::analysis::AnalysisResult>,
+    /// Translated and compiled variants by [`variant_key`] (two generations), so a
+    /// recompile skips the transform of every program whose inputs did not change.
+    pub variants: Generations<VariantResult>,
     /// Vulkan GLSL → SPIR-V + reflection (or the compile errors).
     pub spirv: Memo<SpirvResult>,
     pub validation: Memo<ValidationResult>,
     /// Renderpearl GLSL compile check.
     pub renderpearl: Memo<Result<(), Arc<Vec<Diagnostic>>>>,
+}
+
+impl Caches {
+    /// Start a compile: rotate the generational caches (entries the previous compile did
+    /// not use are dropped).
+    pub fn start_compile(&self) {
+        self.preprocessed.rotate();
+        self.variants.rotate();
+    }
 }
 
 fn key(parts: &[&[u8]]) -> Key {
@@ -92,6 +111,73 @@ pub struct JobEnv<'a> {
     pub caches: &'a Caches,
     pub pack: PackContext<'a>,
     pub image_formats: &'a IndexMap<String, String>,
+    /// [`folder_fingerprint`] of `env`, `validate` and the layout and binding table of
+    /// `pack` (computed once per folder).
+    pub fingerprint: &'a Key,
+}
+
+/// Fingerprint of the folder-wide inputs of every variant: the environment, whether
+/// modules are validated, the `sb_Frame`/`sb_Draw` layout, its member index and the
+/// binding table. Values are fingerprinted through their derived `Debug` output, which
+/// shows every field (and the maps involved keep their insertion order).
+pub fn folder_fingerprint(
+    env: &CompileEnvironment,
+    validate: bool,
+    layout: &sb_core::model::UniformLayout,
+    members: &sb_uniforms::MemberIndex,
+    bindings: &sb_core::model::BindingTable,
+) -> Key {
+    key(&[
+        b"sb-folder-v1",
+        format!("{env:?}").as_bytes(),
+        &[u8::from(validate)],
+        format!("{layout:?}").as_bytes(),
+        format!("{members:?}").as_bytes(),
+        format!("{bindings:?}").as_bytes(),
+    ])
+}
+
+/// Key of a variant job: everything [`compile_job`] reads. The folder fingerprint, the
+/// program's resource context, the draw profile, the analysis keys of its stages (which
+/// identify the analyzed code), the stage files, the program kind and the full
+/// [`TransformOptions`] of every requested target (name, class, shadow pass, alpha test,
+/// output locations, profile constants, image formats, depth mode, ...).
+pub fn variant_key(job: &VariantJob<'_>, jenv: &JobEnv<'_>, stage_keys: &[(ShaderStage, Key)]) -> Key {
+    let mut h = blake3::Hasher::new();
+    let mut part = |b: &[u8]| {
+        h.update(&(b.len() as u64).to_le_bytes());
+        h.update(b);
+    };
+    part(b"sb-variant-v1");
+    part(jenv.fingerprint);
+    part(format!("{:?}", jenv.pack.resources).as_bytes());
+    part(format!("{:?}", job.profile).as_bytes());
+    for (stage, k) in stage_keys {
+        part(stage.name().as_bytes());
+        part(k);
+    }
+    for (stage, file) in &job.files {
+        part(stage.name().as_bytes());
+        part(file.as_bytes());
+    }
+    part(format!("{:?}", job.kind).as_bytes());
+    for target in &jenv.env.targets {
+        part(format!("{:?}", transform_options(job, jenv.env, *target, jenv.image_formats)).as_bytes());
+    }
+    *h.finalize().as_bytes()
+}
+
+/// [`compile_job`] through the session's variant cache: a job whose [`variant_key`] was
+/// compiled before (by this compile or the previous one) returns that result, failures
+/// included. The flag tells whether the result came from the cache.
+pub fn compile_job_cached(job: &VariantJob<'_>, jenv: &JobEnv<'_>, stage_keys: &[(ShaderStage, Key)]) -> (VariantResult, bool) {
+    let k = variant_key(job, jenv, stage_keys);
+    if let Some(hit) = jenv.caches.variants.get(&k) {
+        return (hit, true);
+    }
+    let r = compile_job(job, jenv).map(Arc::new);
+    jenv.caches.variants.insert(k, r.clone());
+    (r, false)
 }
 
 fn transform_options(job: &VariantJob<'_>, env: &CompileEnvironment, target: OutputTarget, formats: &IndexMap<String, String>) -> TransformOptions {

@@ -3,11 +3,14 @@ package dev.shaderbridge.model;
 /** Descriptor kind of a binding ({@code #[serde(tag = "type")]}). */
 public sealed interface ResourceKind {
     /**
-     * Combined image sampler.
+     * Combined image sampler, as the translated shaders declare it: rectangle samplers are 2D
+     * samplers, and comparison samplers the translator emulates (see
+     * {@link BindingUse#shadowEmulated()}) are plain samplers.
      *
      * @param dim        {@code 1d}, {@code 1d_array}, {@code 2d}, {@code 2d_array}, {@code 3d}, {@code cube},
-     *                   {@code cube_array}, {@code 2d_rect}, {@code buffer}, {@code 2d_ms}, {@code 2d_ms_array}
-     * @param shadow     depth-comparison sampler
+     *                   {@code cube_array}, {@code buffer}, {@code 2d_ms}, {@code 2d_ms_array}
+     * @param shadow     depth-comparison sampler: bind a sampler with comparison enabled; false means a
+     *                   plain sampler, also for emulated comparisons
      * @param sampleType {@code float}, {@code int} or {@code uint}
      */
     record Sampler(String dim, boolean shadow, String sampleType) implements ResourceKind {

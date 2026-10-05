@@ -1,6 +1,7 @@
 package dev.shaderbridge.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -219,6 +220,10 @@ class SerdeFixtureTest {
         DimensionPipeline world0 = pack.dimension("world0").orElseThrow();
         assertEquals(List.of(GeometryProgram.TERRAIN, GeometryProgram.DAMAGED_BLOCK, GeometryProgram.DH_TERRAIN), List.copyOf(world0.geometry().keySet()));
         assertEquals(new GeometrySlot(0, GeometryProgram.TERRAIN), world0.geometry().get(GeometryProgram.DAMAGED_BLOCK));
+        // Slot variants keep serde's (insertion) order.
+        Map<String, Integer> variants = world0.geometry().get(GeometryProgram.TERRAIN).variants();
+        assertEquals(List.of("sodium_terrain", "vanilla_entity"), List.copyOf(variants.keySet()));
+        assertEquals(List.of(3, 2), List.copyOf(variants.values()));
         assertEquals(5_000_000_000L, world0.targets().buffers().get(0).size());
         assertEquals(List.of(1f, 0.5f, 0.25f, 0f), world0.targets().colortex().get(1).clearColor());
         assertEquals(new TargetSize.PerAxis(new AxisSize.Relative(0.5f), new AxisSize.Absolute(64)), world0.targets().colortex().get(2).size());
@@ -238,6 +243,10 @@ class SerdeFixtureTest {
         assertNull(perBuffer.get(4));
         assertEquals(BlendFactor.SRC_ALPHA_SATURATE, perBuffer.get(0).srcAlpha());
         assertEquals(0.1f, terrain.alphaTest().reference());
+        // An emulated comparison sampler: a plain sampler in the table, flagged on the use.
+        assertFalse(terrain.bindingsUsed().get(0).shadowEmulated());
+        assertTrue(terrain.bindingsUsed().get(1).shadowEmulated());
+        assertEquals(new ResourceKind.Sampler("2d", false, "float"), world0.bindings().get("shadowtex1").orElseThrow().kind());
         assertEquals(Boolean.FALSE, terrain.cull());
         assertEquals(new BlobId(3), terrain.stage(ShaderStage.FRAGMENT).orElseThrow().glslVulkan());
         Program compute = world0.programs().get(2);

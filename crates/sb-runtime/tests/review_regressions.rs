@@ -15,7 +15,9 @@
 //!   memory leaks are checked precisely by the `lifetime_tests` unit test);
 //! * tessellated geometry keeps GL's triangle winding (Vulkan's default upper-left
 //!   tessellation domain origin reversed it, so back-face culling removed the front
-//!   faces of shrimple's tessellated terrain).
+//!   faces of shrimple's tessellated terrain);
+//! * `dh_shadow` renders into shadowcolor targets, as in Iris (its draw buffers used to
+//!   allocate colortex images while its outputs had no shadowcolor image).
 //!
 //! The depth-copy, comparison-sampler and culling tests fail on the code before their
 //! fixes.
@@ -318,4 +320,51 @@ fn tessellated_terrain_keeps_gl_winding() {
     let fraction = differing as f64 / f64::from(a.image.width() * a.image.height());
     assert!(fraction < 0.01, "tessellated terrain differs from plain terrain in {:.1} % of the pixels (culled front faces?)", fraction * 100.0);
     assert!(mean_abs_diff(&a.image, &b.image) < 0.002);
+}
+
+/// `dh_shadow` draws in the shadow pass into shadowcolor targets: Iris gives it a
+/// framebuffer of shadowcolor0/1 on the shadow depth (`createDHFramebufferShadow`), and
+/// sb-pipeline and the Java host classify it as a shadow program. Its draw buffers are
+/// shadowcolor indices, so the runtime must allocate shadowcolor images for them (it
+/// used to allocate a colortex image instead and send the output to a sink).
+#[test]
+fn dh_shadow_writes_shadowcolor_targets() {
+    let _g = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut rt) = runtime() else { return };
+    let (mut pack, mut blobs) = test_pack(Variant { native_dh: true, ..Variant::default() });
+    let vsh = common::shaders::dh_vsh().replace("dhProjection * (gbufferModelView", "shadowProjection * (shadowModelView");
+    assert!(vsh.contains("shadowProjection * (shadowModelView"), "dh_vsh changed");
+    // Physical location 1: shadowcolor3 is slot 1 of the shared shadow attachments.
+    let fsh = "#version 460\nlayout(location = 1) out vec4 sb_FragData0;\nvoid main() { sb_FragData0 = vec4(1.0, 0.0, 1.0, 1.0); }\n";
+    let vs = blobs.push_spirv(&compile(&vsh, ShaderStage::Vertex));
+    let fs = blobs.push_spirv(&compile(fsh, ShaderStage::Fragment));
+    let d = dim(&mut pack);
+    let template = d.programs.iter().find(|p| p.name == "dh_terrain").expect("dh_terrain").clone();
+    let mut dh_shadow = template;
+    dh_shadow.name = "dh_shadow".into();
+    dh_shadow.kind = ProgramKind::Geometry { program: sb_core::program::GeometryProgram::DhShadow };
+    for s in &mut dh_shadow.stages {
+        s.spirv = Some(if s.stage == ShaderStage::Vertex { vs } else { fs });
+        s.glsl_vulkan = None;
+    }
+    dh_shadow.draw_buffers = vec![3];
+    dh_shadow.output_slots = vec![1];
+    dh_shadow.output_types = vec!["float".into()];
+    dh_shadow.bindings_used.clear();
+    d.programs.push(dh_shadow);
+    let index = d.programs.len() as u32 - 1;
+    d.geometry.insert(sb_core::program::GeometryProgram::DhShadow, GeometrySlot { program: index, resolved_from: sb_core::program::GeometryProgram::DhShadow, variants: Default::default() });
+    d.distant_horizons.shadow_enabled = true;
+    d.shadow_attachments = vec![0, 3];
+
+    let out = render(&mut rt, &pack, &blobs, small_scene(), (160, 90), 1, true);
+    assert_no_validation_messages(&out);
+    assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
+    assert!(!out.stats.warnings.iter().any(|w| w.contains("has no image")), "{:?}", out.stats.warnings);
+    let target = |name: &str| out.targets.iter().find(|(n, _)| n == name).map(|(_, img)| img);
+    assert!(target("colortex3").is_none(), "dh_shadow's draw buffer allocated a colortex");
+    let shadowcolor3 = target("shadowcolor3").expect("no shadowcolor3 image for dh_shadow's draw buffer");
+    shadowcolor3.save(render_dir().join("review_dh_shadowcolor3.png")).ok();
+    let magenta = shadowcolor3.pixels().filter(|p| p[0] > 200 && p[1] < 50 && p[2] > 200).count();
+    assert!(magenta > 0, "no DH LOD reached shadowcolor3");
 }

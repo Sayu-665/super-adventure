@@ -60,6 +60,34 @@ pub(crate) struct FrameInputs<'a> {
     pub unified_projection: bool,
     /// GL depth at the screen centre measured in the previous frame.
     pub center_depth: f32,
+    /// The previous frame's values ([`FrameState::as_previous`] of the frame before), or
+    /// `None` for the first frame of a render.
+    pub previous: Option<PreviousFrame>,
+}
+
+/// The values of the previous frame that packs read through the `*Previous*` / `*Prev`
+/// uniforms (`gbufferPreviousModelView`, `gbufferPreviousProjection`,
+/// `dhPreviousProjection`, `previousCameraPosition*`, `vxModelViewPrev`, `vxProjPrev`).
+///
+/// Iris keeps the value its supplier returned one frame earlier (`MatrixUniforms.Previous`,
+/// `CameraPositionTracker`), so a host must capture these *before* it computes the new
+/// frame's values. On the first frame Iris returns an identity matrix and a zero camera
+/// position (its trackers start empty); the headless runtime starts in the steady state of
+/// its static camera instead (the previous frame equals the first one), so short renders
+/// do not reproject their first frame through a bogus matrix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PreviousFrame {
+    pub camera: Vec3,
+    /// `gbufferModelView`.
+    pub model_view: Mat4,
+    /// `gbufferProjection`.
+    pub projection: Mat4,
+    /// `dhProjection`.
+    pub dh_projection: Mat4,
+    /// `vxModelView` (Voxy's LOD view).
+    pub vx_model_view: Mat4,
+    /// `vxProj` (Voxy's LOD projection).
+    pub vx_projection: Mat4,
 }
 
 /// Everything the host computes once per frame.
@@ -108,6 +136,8 @@ pub(crate) struct FrameState {
     pub moon_phase: i32,
     pub center_depth: f32,
     pub sun_path_rotation: f64,
+    /// Values of the previous frame (see [`PreviousFrame`]).
+    pub previous: PreviousFrame,
 }
 
 /// Minecraft 26.3's fog distances (`FogRenderer.setupFog` with the overworld's
@@ -152,8 +182,8 @@ fn mix3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 impl FrameState {
-    /// Compute the frame state. The camera is static, so the previous-frame values equal
-    /// the current ones.
+    /// Compute the frame state. `inp.previous` supplies the previous frame's values (the
+    /// first frame uses its own, see [`PreviousFrame`]).
     pub fn new(inp: &FrameInputs<'_>) -> Self {
         let s = inp.scene;
         let width = inp.width.max(1) as f64;
@@ -210,7 +240,7 @@ impl FrameState {
         let fog_color = mix3([0.02, 0.02, 0.05], [0.75, 0.85, 1.0], daylight).map(|c| c * dim);
         let frame_time = if s.frame_time.is_finite() && s.frame_time > 0.0 { s.frame_time.min(1.0) } else { 1.0 / 60.0 };
         let fog = Fog::new(rd_blocks as f32, rain, inp.dh);
-        Self {
+        let mut state = Self {
             frame_counter: inp.frame % FRAME_COUNTER_WRAP,
             frame_time,
             frame_time_counter: (inp.frame as f32 * frame_time) % 3600.0,
@@ -250,7 +280,41 @@ impl FrameState {
             moon_phase: world_day.rem_euclid(8) as i32,
             center_depth: if inp.center_depth.is_finite() { inp.center_depth.clamp(0.0, 1.0) } else { 1.0 },
             sun_path_rotation: spr,
+            // Replaced below; the first frame is its own previous frame.
+            previous: PreviousFrame {
+                camera: inp.camera,
+                model_view,
+                projection,
+                dh_projection,
+                vx_model_view: model_view,
+                vx_projection: projection,
+            },
+        };
+        state.previous = inp.previous.unwrap_or_else(|| state.as_previous());
+        state
+    }
+
+    /// This frame's values as the next frame's [`PreviousFrame`].
+    pub fn as_previous(&self) -> PreviousFrame {
+        PreviousFrame {
+            camera: self.camera,
+            model_view: self.model_view,
+            projection: self.projection,
+            dh_projection: self.dh_projection,
+            vx_model_view: self.vx_model_view(),
+            vx_projection: self.vx_projection(),
         }
+    }
+
+    /// `vxModelView`: Voxy is not part of the synthetic scene, so its LOD view equals the
+    /// level's (what a pack falls back to when it combines both).
+    pub fn vx_model_view(&self) -> Mat4 {
+        self.model_view
+    }
+
+    /// `vxProj`: equals the level projection (see [`FrameState::vx_model_view`]).
+    pub fn vx_projection(&self) -> Mat4 {
+        self.projection
     }
 
     /// `gbufferModelViewInverse`.
@@ -378,16 +442,23 @@ fn fl(v: f64) -> Value {
 /// The value of a builtin uniform (sb-uniforms registry name) for this frame and draw.
 /// `None` only for names that are not builtins.
 pub(crate) fn builtin_value(name: &str, f: &FrameState, d: &DrawState) -> Option<Value> {
-    let floor = f.camera.map(f64::floor);
-    let fract = [f.camera[0] - floor[0], f.camera[1] - floor[1], f.camera[2] - floor[2]];
+    let split = |c: Vec3| {
+        let floor = c.map(f64::floor);
+        (floor, [c[0] - floor[0], c[1] - floor[1], c[2] - floor[2]])
+    };
+    let (floor, fract) = split(f.camera);
+    let (prev_floor, prev_fract) = split(f.previous.camera);
     let normal_matrix = d.model_view.inverse_or_identity().transpose();
     let horizontal = math::vec::normalize([f.look[0], 0.0, f.look[2]]);
     Some(match name {
         // camera / player
-        "cameraPosition" | "previousCameraPosition" | "eyePosition" => v3(f.camera),
+        "cameraPosition" | "eyePosition" => v3(f.camera),
+        "previousCameraPosition" => v3(f.previous.camera),
         "eyeAltitude" => fl(f.camera[1]),
-        "cameraPositionInt" | "previousCameraPositionInt" => v3(floor),
-        "cameraPositionFract" | "previousCameraPositionFract" => v3(fract),
+        "cameraPositionInt" => v3(floor),
+        "previousCameraPositionInt" => v3(prev_floor),
+        "cameraPositionFract" => v3(fract),
+        "previousCameraPositionFract" => v3(prev_fract),
         "relativeEyePosition" | "vehicleLookVector" | "relativeVehiclePosition" | "currentSelectedBlockPos" | "endFlashPosition" => v3([0.0; 3]),
         "playerLookVector" => v3(f.look),
         "playerBodyVector" => v3(horizontal),
@@ -475,15 +546,18 @@ pub(crate) fn builtin_value(name: &str, f: &FrameState, d: &DrawState) -> Option
         "terrainTextureSize" => Value::Vec2([64.0, 64.0]),
         "terrainIconSize" => Value::Int(16),
         // matrices
-        "gbufferModelView" | "gbufferPreviousModelView" => m4(&f.model_view),
+        "gbufferModelView" => m4(&f.model_view),
+        "gbufferPreviousModelView" => m4(&f.previous.model_view),
         "gbufferModelViewInverse" => m4(&f.model_view_inverse()),
-        "gbufferProjection" | "gbufferPreviousProjection" => m4(&f.projection),
+        "gbufferProjection" => m4(&f.projection),
+        "gbufferPreviousProjection" => m4(&f.previous.projection),
         "gbufferProjectionInverse" => m4(&f.projection.inverse_or_identity()),
         "shadowModelView" => m4(&f.shadow_model_view),
         "shadowModelViewInverse" => m4(&f.shadow_model_view.inverse_or_identity()),
         "shadowProjection" => m4(&f.shadow_projection),
         "shadowProjectionInverse" => m4(&f.shadow_projection.inverse_or_identity()),
-        "dhProjection" | "dhPreviousProjection" => m4(&f.dh_projection),
+        "dhProjection" => m4(&f.dh_projection),
+        "dhPreviousProjection" => m4(&f.previous.dh_projection),
         "dhProjectionInverse" => m4(&f.dh_projection.inverse_or_identity()),
         "dhNearPlane" => fl(f.dh_near),
         "dhFarPlane" => fl(f.dh_far),
@@ -491,10 +565,12 @@ pub(crate) fn builtin_value(name: &str, f: &FrameState, d: &DrawState) -> Option
         // Voxy is not part of the synthetic scene: no LOD distance, and the LOD matrices
         // equal the level's (what a pack falls back to when it combines both).
         "vxRenderDistance" => Value::Int(0),
-        "vxProj" | "vxProjPrev" => m4(&f.projection),
-        "vxProjInv" => m4(&f.projection.inverse_or_identity()),
-        "vxModelView" | "vxModelViewPrev" => m4(&f.model_view),
-        "vxModelViewInv" => m4(&f.model_view_inverse()),
+        "vxProj" => m4(&f.vx_projection()),
+        "vxProjPrev" => m4(&f.previous.vx_projection),
+        "vxProjInv" => m4(&f.vx_projection().inverse_or_identity()),
+        "vxModelView" => m4(&f.vx_model_view()),
+        "vxModelViewPrev" => m4(&f.previous.vx_model_view),
+        "vxModelViewInv" => m4(&f.vx_model_view().inverse_or_identity()),
         "modelViewMatrix" => m4(&d.model_view),
         "modelViewMatrixInverse" => m4(&d.model_view.inverse_or_identity()),
         "projectionMatrix" => m4(&d.projection),
@@ -729,6 +805,7 @@ mod tests {
             dh,
             unified_projection: false,
             center_depth: 0.5,
+            previous: None,
         })
     }
 
@@ -777,9 +854,73 @@ mod tests {
             dh: true,
             unified_projection: true,
             center_depth: 1.0,
+            previous: None,
         });
         assert!((u.far - expected_dh_far).abs() < 1e-9);
         assert_eq!(u.dh_projection, u.projection);
+    }
+
+    /// Every `*Previous*` / `*Prev` uniform reads the previous frame's value: the first
+    /// frame is its own previous frame, later frames see exactly what the frame before
+    /// reported (regression: `vxProjPrev` / `vxModelViewPrev` and the `gbufferPrevious*`,
+    /// `dhPreviousProjection` and `previousCameraPosition*` uniforms returned the current
+    /// frame's values).
+    #[test]
+    fn previous_uniforms_read_the_previous_frame() {
+        let settings = PackSettings::default();
+        let shadow = ShadowSettings::default();
+        let first_scene = SceneParams { yaw: 10.0, pitch: -5.0, fov: 70.0, ..Default::default() };
+        let second_scene = SceneParams { yaw: 40.0, pitch: 20.0, fov: 90.0, render_distance: 6, dh_render_distance: 20, ..Default::default() };
+        let inputs = |scene, camera, width, frame, previous| FrameInputs {
+            scene,
+            camera,
+            width,
+            height: 360,
+            frame,
+            settings: &settings,
+            shadow: &shadow,
+            dh: true,
+            unified_projection: false,
+            center_depth: 1.0,
+            previous,
+        };
+        let first = FrameState::new(&inputs(&first_scene, [10.25, 70.5, -3.75], 640, 0, None));
+        let second = FrameState::new(&inputs(&second_scene, [12.5, 71.0, -2.25], 480, 1, Some(first.as_previous())));
+        assert_ne!(first.projection, second.projection);
+        assert_ne!(first.model_view, second.model_view);
+        assert_ne!(first.dh_projection, second.dh_projection);
+        let pairs: [(&str, &str); 9] = [
+            ("gbufferPreviousModelView", "gbufferModelView"),
+            ("gbufferPreviousProjection", "gbufferProjection"),
+            ("dhPreviousProjection", "dhProjection"),
+            ("vxModelViewPrev", "vxModelView"),
+            ("vxProjPrev", "vxProj"),
+            ("previousCameraPosition", "cameraPosition"),
+            ("previousCameraPositionInt", "cameraPositionInt"),
+            ("previousCameraPositionFract", "cameraPositionFract"),
+            ("previousEndFlashIntensity", "endFlashIntensity"),
+        ];
+        for (prev, current) in pairs {
+            assert!(sb_uniforms::is_builtin(prev) && sb_uniforms::is_builtin(current), "{prev} / {current}");
+            // First frame: the previous frame is the steady state of the static camera.
+            let d = DrawState::new(&first);
+            assert_eq!(builtin_value(prev, &first, &d), builtin_value(current, &first, &d), "{prev} on the first frame");
+            // Later frames: exactly the previous frame's current value.
+            let d1 = DrawState::new(&first);
+            let d2 = DrawState::new(&second);
+            assert_eq!(builtin_value(prev, &second, &d2), builtin_value(current, &first, &d1), "{prev}");
+            if prev != "previousEndFlashIntensity" {
+                assert_ne!(builtin_value(prev, &second, &d2), builtin_value(current, &second, &d2), "{prev} reads the current frame");
+            }
+        }
+        // No other builtin is a previous-frame value.
+        let others: Vec<&str> = sb_uniforms::all()
+            .iter()
+            .map(|u| u.name)
+            .filter(|n| n.contains("Prev") || n.contains("previous"))
+            .filter(|n| !pairs.iter().any(|(p, _)| p == n))
+            .collect();
+        assert!(others.is_empty(), "previous-frame uniforms without a test: {others:?}");
     }
 
     /// `dhNearPlane` and the `dhProjection` near plane follow Distant Horizons' near clip
@@ -830,6 +971,7 @@ mod tests {
             dh: false,
             unified_projection: false,
             center_depth: 1.0,
+            previous: None,
         });
         assert!(f.shadow_projection.approx_eq(&shadow::ortho(32.0, -64.0, 64.0), 1e-12), "{:?}", f.shadow_projection);
     }
@@ -899,7 +1041,7 @@ mod tests {
             layout.members.push(BlockMember { name: name.into(), ty, offset, source, default });
         };
         add("frameTimeCounter", GlslType::FLOAT, 0, UniformSource::Builtin("frameTimeCounter".into()), None);
-        add("worldTime__float", GlslType::FLOAT, 4, UniformSource::Builtin("worldTime".into()), None);
+        add("sb_as_float_worldTime", GlslType::FLOAT, 4, UniformSource::Builtin("worldTime".into()), None);
         add("myConst", GlslType::VEC3, 16, UniformSource::Unset, Some(vec![1.0, 2.0, 3.0]));
         add("myArr", GlslType::FLOAT.with_array(2), 32, UniformSource::Unset, Some(vec![5.0, 6.0]));
         add("myMat", GlslType::MAT2, 64, UniformSource::Unset, Some(vec![1.0, 2.0, 3.0, 4.0]));

@@ -1,8 +1,8 @@
 //! Building one [`DimensionPipeline`] (spec steps 7–14 for one program folder).
 
-use crate::analysis::{self, FolderAnalysis, FolderDirectives};
+use crate::analysis::{self, FolderAnalysis, FolderDirectives, Key};
 use crate::bindings::{self, LayoutBuild};
-use crate::compile::{Caches, CompiledVariant, JobEnv, VariantJob, compile_job};
+use crate::compile::{Caches, CompiledVariant, JobEnv, VariantJob, VariantResult, compile_job_cached};
 use crate::flips::{self, PassInput, Schedule, ScheduleInput};
 use crate::load::{FolderInfo, PackLoad};
 use crate::resolve::{FolderPlan, Unit};
@@ -41,6 +41,8 @@ pub struct FolderInputs<'a> {
     pub settings: &'a CompileSettings,
     pub caches: &'a Caches,
     pub profiles: Profiles<'a>,
+    /// [`analysis::sources_fingerprint`] of the load's options and values.
+    pub sources_fingerprint: Key,
 }
 
 /// Identity of a compiled (program, profile) variant.
@@ -101,6 +103,10 @@ pub struct FolderState {
     pub gbuffer_attachments: Vec<u32>,
     pub shadow_attachments: Vec<u32>,
     pub schedule: Schedule,
+    /// [`crate::compile::folder_fingerprint`] of the layout and binding table.
+    pub fingerprint: Key,
+    /// How Distant Horizons programs are provided.
+    pub strategy: DhStrategy,
 }
 
 /// Per-folder results.
@@ -110,6 +116,7 @@ pub struct FolderStats {
     pub programs_failed: Vec<String>,
     pub modules: usize,
     pub modules_validated: usize,
+    pub variants_cached: usize,
 }
 
 /// The result of one folder.
@@ -133,6 +140,45 @@ pub(crate) fn phase_of_slot(g: GeometryProgram) -> PassGroup {
 
 pub(crate) fn is_shadow_group(g: GeometryProgram) -> bool {
     g.group() == GeometryGroup::Shadow || g == GeometryProgram::DhShadow
+}
+
+/// Sampler-visibility class of the programs of a geometry slot.
+pub(crate) fn slot_class(g: GeometryProgram) -> ProgramClass {
+    if g.group() == GeometryGroup::DistantHorizons { ProgramClass::Dh } else { ProgramClass::from_geometry(g) }
+}
+
+/// The pack program a Distant Horizons slot is synthesized from when the pack has no
+/// DH programs (ARCHITECTURE §9).
+pub(crate) fn dh_synthesis_source(g: GeometryProgram) -> Option<GeometryProgram> {
+    Some(match g {
+        GeometryProgram::DhTerrain | GeometryProgram::DhGeneric => GeometryProgram::Terrain,
+        GeometryProgram::DhWater => GeometryProgram::Water,
+        GeometryProgram::DhShadow => GeometryProgram::Shadow,
+        _ => return None,
+    })
+}
+
+/// The units that can draw geometry slot `g`, in fallback order (those that analyzed
+/// successfully), and the DH program they are synthesized as: with the synthesized DH
+/// strategy, a DH slot the pack has no program for is drawn by the pack's program for
+/// [`dh_synthesis_source`] (and its fallbacks).
+pub(crate) fn slot_units(
+    plan: &FolderPlan,
+    ok: &dyn Fn(usize) -> bool,
+    strategy: DhStrategy,
+    g: GeometryProgram,
+) -> (Vec<usize>, Option<GeometryProgram>) {
+    let chain = |g: GeometryProgram| -> Vec<usize> { g.chain().filter_map(|p| plan.geometry.get(&p).copied()).filter(|&u| ok(u)).collect() };
+    if strategy == DhStrategy::Synthesized
+        && let Some(source) = dh_synthesis_source(g)
+    {
+        // A pack shipping only some DH programs (e.g. only dh_shadow) keeps them.
+        return match plan.geometry.get(&g).copied().filter(|&u| ok(u)) {
+            Some(u) => (vec![u], None),
+            None => (chain(source), Some(g)),
+        };
+    }
+    (chain(g), None)
 }
 
 /// `backFace.*` → cull override of programs dedicated to one render layer.
@@ -163,7 +209,12 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     let plan = crate::resolve::resolve_folder(input.pack, &info.folder, load, env);
     diags.extend(plan.diagnostics.iter().cloned());
     let pp_opts = sb_preprocess::PreprocessOptions { defines: load.glsl_macros.clone(), ..Default::default() };
-    let analysis = analysis::analyze_folder(&plan, input.sources, &pp_opts, &input.caches.analysis, &mut diags);
+    let analysis_caches = analysis::AnalysisCaches {
+        preprocessed: &input.caches.preprocessed,
+        analysis: &input.caches.analysis,
+        sources: input.sources_fingerprint,
+    };
+    let analysis = analysis::analyze_folder(&plan, input.sources, &pp_opts, &analysis_caches, &mut diags);
     let directives = analysis::scan_directives(&plan, &analysis, env.device.max_color_attachments, &mut diags);
     let ok = |u: usize| analysis.ok(u);
 
@@ -252,14 +303,11 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
 
     // Slot requests.
     let mut requests: Vec<SlotRequest> = Vec::new();
-    let chain_units = |g: GeometryProgram| -> Vec<usize> {
-        g.chain().filter_map(|p| plan.geometry.get(&p).copied()).filter(|&u| ok(u)).collect()
-    };
     for (i, &g) in GeometryProgram::ALL.iter().enumerate() {
         if g.group() == GeometryGroup::DistantHorizons {
             continue;
         }
-        let candidates = chain_units(g);
+        let (candidates, _) = slot_units(&plan, &ok, strategy, g);
         if candidates.is_empty() {
             continue;
         }
@@ -267,7 +315,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
             slot: Some(g),
             candidates,
             profile: sb_transform::default_profile_for(g).to_string(),
-            class: ProgramClass::from_geometry(g),
+            class: slot_class(g),
             shadow_pass: is_shadow_group(g),
             synth: None,
             order: (0, i as u32),
@@ -276,67 +324,39 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     let shadow_on_for_dh = props.shadow_enabled != Some(false)
         && props.dh_shadow_enabled != Some(false)
         && plan.geometry.get(&GeometryProgram::Shadow).is_some_and(|&u| ok(u));
-    match strategy {
-        DhStrategy::Native => {
-            for (i, g) in [GeometryProgram::DhTerrain, GeometryProgram::DhWater, GeometryProgram::DhGeneric, GeometryProgram::DhShadow]
-                .into_iter()
-                .enumerate()
-            {
-                let candidates = chain_units(g);
-                if candidates.is_empty() || (g == GeometryProgram::DhShadow && props.dh_shadow_enabled == Some(false)) {
-                    continue;
-                }
-                requests.push(SlotRequest {
-                    slot: Some(g),
-                    candidates,
-                    profile: sb_transform::default_profile_for(g).to_string(),
-                    class: ProgramClass::Dh,
-                    shadow_pass: g == GeometryProgram::DhShadow,
-                    synth: None,
-                    order: (1, i as u32),
-                });
-            }
-        }
-        DhStrategy::Synthesized => {
-            // Programs synthesized from gbuffers_terrain/gbuffers_water/shadow get the
-            // `dh_terrain` variant whose lightmap follows the vanilla terrain convention
-            // those sources were written for (DH_SYNTH_PROFILE); dh_generic keeps its
-            // own profile.
-            let specs = [
-                (GeometryProgram::DhTerrain, GeometryProgram::Terrain, sb_transform::DH_SYNTH_PROFILE, false),
-                (GeometryProgram::DhWater, GeometryProgram::Water, sb_transform::DH_SYNTH_PROFILE, false),
-                (GeometryProgram::DhGeneric, GeometryProgram::Terrain, "dh_generic", false),
-                (GeometryProgram::DhShadow, GeometryProgram::Shadow, sb_transform::DH_SYNTH_PROFILE, true),
-            ];
-            for (i, (dh, source, synth_profile, shadow)) in specs.into_iter().enumerate() {
-                if shadow && !shadow_on_for_dh {
-                    continue;
-                }
-                // A pack shipping only dh_shadow keeps it (with the native DH profile).
-                let native = plan.geometry.get(&dh).copied().filter(|&u| ok(u));
-                let (candidates, synth, profile) = match native {
-                    Some(u) => (vec![u], None, sb_transform::default_profile_for(dh)),
-                    None => (chain_units(source), Some(dh), synth_profile),
-                };
-                if candidates.is_empty() {
-                    continue;
-                }
-                requests.push(SlotRequest {
-                    slot: Some(dh),
-                    candidates,
-                    profile: profile.to_string(),
-                    class: ProgramClass::Dh,
-                    shadow_pass: shadow,
-                    synth,
-                    order: (1, i as u32),
-                });
-            }
-        }
-        DhStrategy::Disabled => {}
-    }
-    for (i, (g, profiles)) in input.settings.profile_overrides.iter().enumerate() {
-        let candidates = chain_units(*g);
+    let dh_slots = [GeometryProgram::DhTerrain, GeometryProgram::DhWater, GeometryProgram::DhGeneric, GeometryProgram::DhShadow];
+    for (i, g) in dh_slots.into_iter().enumerate() {
+        let shadow = g == GeometryProgram::DhShadow;
+        let (candidates, synth) = match strategy {
+            DhStrategy::Disabled => continue,
+            DhStrategy::Native if shadow && props.dh_shadow_enabled == Some(false) => continue,
+            DhStrategy::Synthesized if shadow && !shadow_on_for_dh => continue,
+            _ => slot_units(&plan, &ok, strategy, g),
+        };
         if candidates.is_empty() {
+            continue;
+        }
+        // Programs synthesized from gbuffers_terrain/gbuffers_water/shadow get the
+        // `dh_terrain` variant whose lightmap follows the vanilla terrain convention those
+        // sources were written for (DH_SYNTH_PROFILE); dh_generic keeps its own profile.
+        let profile = match synth {
+            Some(dh) if dh != GeometryProgram::DhGeneric => sb_transform::DH_SYNTH_PROFILE,
+            _ => sb_transform::default_profile_for(g),
+        };
+        requests.push(SlotRequest {
+            slot: Some(g),
+            candidates,
+            profile: profile.to_string(),
+            class: ProgramClass::Dh,
+            shadow_pass: shadow,
+            synth,
+            order: (1, i as u32),
+        });
+    }
+    // Host-requested variants: the slot's chain (or DH synthesis) with another profile.
+    for (i, (g, profiles)) in input.settings.profile_overrides.iter().enumerate() {
+        let (candidates, synth) = slot_units(&plan, &ok, strategy, *g);
+        if candidates.is_empty() || (g.group() == GeometryGroup::DistantHorizons && strategy == DhStrategy::Disabled) {
             continue;
         }
         for (j, p) in profiles.iter().enumerate() {
@@ -344,9 +364,9 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
                 slot: None,
                 candidates: candidates.clone(),
                 profile: p.clone(),
-                class: if g.group() == GeometryGroup::DistantHorizons { ProgramClass::Dh } else { ProgramClass::from_geometry(*g) },
+                class: slot_class(*g),
                 shadow_pass: is_shadow_group(*g),
-                synth: None,
+                synth,
                 order: (3, (i * 64 + j) as u32),
             });
         }
@@ -360,9 +380,13 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     if plan.units.iter().any(|u| matches!(u.kind, ProgramKind::Composite { .. })) {
         profiles_used.insert((FULLSCREEN_PROFILE.to_string(), ProgramClass::Fullscreen), ());
     }
-    for p in input.settings.extra_profiles.iter() {
-        let class = if p.name.starts_with("dh_") { ProgramClass::Dh } else { ProgramClass::Gbuffers };
-        profiles_used.insert((p.name.clone(), class), ());
+    // Every profile a host may ask a variant for later (`compile_variant`): registered and
+    // built-in ones. Their builtins and host resources must be in this folder's layout and
+    // binding table, which variants share.
+    let builtin = sb_transform::builtin_profiles().iter().filter(|p| p.name != FULLSCREEN_PROFILE);
+    for name in input.settings.extra_profiles.iter().map(|p| p.name.clone()).chain(builtin.map(|p| p.name.clone())) {
+        let class = if name.starts_with("dh_") { ProgramClass::Dh } else { ProgramClass::Gbuffers };
+        profiles_used.insert((name, class), ());
     }
     let base_ctx = bindings::resource_context(ProgramClass::Gbuffers, "gbuffers", props, watershadow, &BTreeSet::new());
     for (name, class) in profiles_used.keys() {
@@ -386,6 +410,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     }
     let (layout, members, mut binding_table, ld) = lb.finish();
     diags.extend(ld);
+    let fingerprint = crate::compile::folder_fingerprint(env, input.settings.validate_spirv, &layout, &members, &binding_table);
 
     // ---- Image formats and DH constants ----------------------------------------------------
     let colortex_format = |i: u32| directives.pack.colortex.get(&i).and_then(|b| b.format).unwrap_or(TextureFormat::RGBA);
@@ -433,7 +458,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
     }
 
     // ---- Compile rounds with fallback ------------------------------------------------------
-    let mut compiled: HashMap<VariantKey, Result<CompiledVariant, Diagnostics>> = HashMap::new();
+    let mut compiled: HashMap<VariantKey, VariantResult> = HashMap::new();
     let fullscreen = input.profiles.get(FULLSCREEN_PROFILE);
     let mut pending: Vec<VariantKey> = specs.keys().cloned().collect();
     for round in 0..8 {
@@ -462,7 +487,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
         if pending.is_empty() {
             break;
         }
-        let results: Vec<(VariantKey, Result<CompiledVariant, Diagnostics>)> = pending
+        let results: Vec<(VariantKey, (VariantResult, bool))> = pending
             .par_iter()
             .map(|key| {
                 let spec = &specs[key];
@@ -471,11 +496,11 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
                 let Some(profile) = profile else {
                     return (
                         key.clone(),
-                        Err(Diagnostics(vec![Diagnostic::error("pipeline.unknown-profile", format!("draw profile `{}` does not exist", key.profile)).in_program(spec.name.clone())])),
+                        (Err(Diagnostics(vec![Diagnostic::error("pipeline.unknown-profile", format!("draw profile `{}` does not exist", key.profile)).in_program(spec.name.clone())])), false),
                     );
                 };
                 let Some(stages) = analysis.stages_of(key.unit) else {
-                    return (key.clone(), Err(Diagnostics::new()));
+                    return (key.clone(), (Err(Diagnostics::new()), false));
                 };
                 let ctx = contexts[key.unit].for_class(key.class);
                 let jenv = JobEnv {
@@ -484,6 +509,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
                     caches: input.caches,
                     pack: PackContext { layout: &layout, members: &members, bindings: &binding_table, resources: &ctx },
                     image_formats: &image_formats,
+                    fingerprint: &fingerprint,
                 };
                 let job = VariantJob {
                     name: spec.name.clone(),
@@ -497,10 +523,11 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
                     profile_constants: spec.profile_constants.clone(),
                     kind: spec.kind.clone(),
                 };
-                (key.clone(), compile_job(&job, &jenv))
+                (key.clone(), compile_job_cached(&job, &jenv, &analysis.stage_keys(key.unit)))
             })
             .collect();
-        for (k, r) in results {
+        for (k, (r, cached)) in results {
+            stats.variants_cached += usize::from(cached);
             compiled.insert(k, r);
         }
     }
@@ -545,7 +572,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
 
     // Geometry slots.
     let mut geometry: IndexMap<GeometryProgram, GeometrySlot> = IndexMap::new();
-    let mut slot_phase: Vec<(GeometryProgram, u32)> = Vec::new();
+    let mut slot_keys: Vec<(GeometryProgram, VariantKey)> = Vec::new();
     for r in &requests {
         let Some(g) = r.slot else { continue };
         let found = r.candidates.iter().enumerate().find_map(|(i, &u)| {
@@ -574,8 +601,35 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
             (ProgramKind::Geometry { program }, Some(_)) => *program,
             _ => plan.units[u].geometry().unwrap_or(g),
         };
-        geometry.insert(g, GeometrySlot { program: idx, resolved_from });
-        slot_phase.push((g, idx));
+        geometry.insert(g, GeometrySlot { program: idx, resolved_from, variants: IndexMap::new() });
+        slot_keys.push((g, VariantKey { unit: u, profile: r.profile.clone(), class: r.class, shadow_pass: r.shadow_pass }));
+    }
+    // Each slot's program compiled for other draw profiles (variants other slots needed and
+    // `profile_overrides`): the same unit, class and pass, and the same model identity.
+    // Slot programs first, so that each keeps its index when it is also another slot's
+    // variant in a pass with another flip state (the variant entry gets the copy).
+    let mut slot_programs: Vec<(GeometryProgram, Option<String>, u32)> =
+        geometry.iter().map(|(g, slot)| (*g, None, slot.program)).collect();
+    for (g, key) in &slot_keys {
+        let Some(slot) = geometry.get_mut(g) else { continue };
+        let spec = &specs[key];
+        let mut others: Vec<(&String, u32)> = index_of
+            .iter()
+            .filter(|(k, _)| {
+                k.unit == key.unit
+                    && k.class == key.class
+                    && k.shadow_pass == key.shadow_pass
+                    && k.profile != key.profile
+                    && specs[*k].name == spec.name
+                    && specs[*k].kind == spec.kind
+            })
+            .map(|(k, idx)| (&k.profile, *idx))
+            .collect();
+        others.sort();
+        for (profile, idx) in others {
+            slot.variants.insert(profile.clone(), idx);
+            slot_programs.push((*g, Some(profile.clone()), idx));
+        }
     }
 
     // ---- Final schedule --------------------------------------------------------------------
@@ -597,7 +651,7 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
 
     // use_alt of colortex/colorimg bindings, per pass state (programs used in passes with
     // different states are duplicated).
-    assign_use_alt(&mut programs, &mut geometry, &slot_phase, &schedule, &binding_table);
+    assign_use_alt(&mut programs, &mut geometry, &slot_programs, &schedule, &binding_table);
 
     // ---- Targets and settings --------------------------------------------------------------
     let shadow_programs = geometry.iter().any(|(g, _)| g.group() == GeometryGroup::Shadow);
@@ -639,7 +693,9 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
         settings,
         uniforms: layout.clone(),
         custom_uniforms: props.custom_uniforms.clone(),
-        bindings: binding_table.clone(),
+        // What the shaders declare (rectangle samplers as 2D, emulated comparison samplers
+        // as plain ones); the folder state keeps the declarations the translator uses.
+        bindings: bindings::declared_table(&binding_table, !env.device.comparison_samplers),
         programs,
         geometry,
         passes: schedule.passes.clone(),
@@ -662,6 +718,8 @@ pub fn build_folder(input: &FolderInputs<'_>, info: &FolderInfo, blobs: &mut Blo
         gbuffer_attachments,
         shadow_attachments,
         schedule,
+        fingerprint,
+        strategy,
     };
     FolderResult { pipeline, diagnostics: diags, stats, state }
 }
@@ -932,7 +990,14 @@ pub(crate) fn model_program(
         .iter()
         .filter_map(|(name, stages)| {
             let e = table.get(name)?;
-            Some(BindingUse { name: e.name.clone(), set: e.set, binding: e.binding, use_alt: false, stages: stages.clone() })
+            Some(BindingUse {
+                name: e.name.clone(),
+                set: e.set,
+                binding: e.binding,
+                use_alt: false,
+                stages: stages.clone(),
+                shadow_emulated: bindings::shadow_emulated(&e.kind, !env.device.comparison_samplers),
+            })
         })
         .collect();
     let compute = unit.is_compute().then(|| ComputeInfo {
@@ -979,12 +1044,14 @@ pub(crate) fn model_program(
 }
 
 /// Set `use_alt` of colortex/colorimg bindings from the flip state of the pass each
-/// program runs in. A program shared by geometry slots of passes with different states
-/// (e.g. opaque and translucent around a flipping `deferred`) is duplicated.
+/// program runs in. `slot_programs` lists the program of every geometry slot (`None`) and
+/// of each of its variants (`Some(profile)`); a program shared by slots of passes with
+/// different states (e.g. opaque and translucent around a flipping `deferred`) is
+/// duplicated and the slot (or variant) entry pointed at the copy.
 fn assign_use_alt(
     programs: &mut Vec<Program>,
     geometry: &mut IndexMap<GeometryProgram, GeometrySlot>,
-    slot_phase: &[(GeometryProgram, u32)],
+    slot_programs: &[(GeometryProgram, Option<String>, u32)],
     schedule: &Schedule,
     table: &BindingTable,
 ) {
@@ -1011,32 +1078,41 @@ fn assign_use_alt(
     // Geometry programs: the pass of the slot's phase.
     let mut assigned: HashMap<u32, BTreeSet<u32>> = HashMap::new();
     let mut clones: HashMap<(u32, Vec<u32>), u32> = HashMap::new();
-    for (g, idx) in slot_phase {
+    for (g, variant, idx) in slot_programs {
         let phase = phase_of_slot(*g);
         let st = schedule.group_state.get(&phase).cloned().unwrap_or_default();
-        match assigned.get(idx) {
+        let new_idx = match assigned.get(idx) {
             None => {
                 if let Some(p) = programs.get_mut(*idx as usize) {
                     apply(p, &st);
                 }
                 assigned.insert(*idx, st);
+                continue;
             }
-            Some(prev) if *prev == st => {}
+            Some(prev) if *prev == st => continue,
             Some(_) => {
                 let sig: Vec<u32> = st.iter().copied().collect();
-                let new_idx = match clones.get(&(*idx, sig.clone())) {
+                match clones.get(&(*idx, sig.clone())) {
                     Some(n) => *n,
                     None => {
-                        let mut p = programs[*idx as usize].clone();
+                        let Some(original) = programs.get(*idx as usize) else { continue };
+                        let mut p = original.clone();
                         apply(&mut p, &st);
                         programs.push(p);
                         let n = (programs.len() - 1) as u32;
                         clones.insert((*idx, sig), n);
                         n
                     }
-                };
-                if let Some(slot) = geometry.get_mut(g) {
-                    slot.program = new_idx;
+                }
+            }
+        };
+        if let Some(slot) = geometry.get_mut(g) {
+            match variant {
+                None => slot.program = new_idx,
+                Some(profile) => {
+                    if let Some(v) = slot.variants.get_mut(profile) {
+                        *v = new_idx;
+                    }
                 }
             }
         }

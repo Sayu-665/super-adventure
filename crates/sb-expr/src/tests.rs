@@ -1065,7 +1065,7 @@ fn frame_layout(shift: u32) -> BlockLayout {
             member("u_bool", GlslType::BOOL, 116 + shift, custom("u_bool")),
             member("u_int", GlslType::INT, 120 + shift, custom("u_int")),
             member(
-                "u_float__int",
+                "sb_as_int_u_float",
                 GlslType::INT,
                 124 + shift,
                 custom("u_float"),
@@ -1155,7 +1155,7 @@ fn evaluate_into_block_round_trip() {
     let read = |name: &str| read_in(&block, name);
     assert_eq!(read("u_float"), Value::Float(1.5 * 2.0 + 14.0));
     assert_eq!(
-        read("u_float__int"),
+        read("sb_as_int_u_float"),
         Value::Int(17),
         "converted to the member's type"
     );
@@ -1213,7 +1213,7 @@ fn evaluate_into_block_follows_layout_changes() {
 
 #[test]
 fn block_inputs_prefer_the_member_of_the_builtin_type() {
-    // `frameTimeCounter__int` (a pack re-declaration with another type) comes first,
+    // `sb_as_int_frameTimeCounter` (a pack re-declaration with another type) comes first,
     // but the float member is the one the float input must be read from.
     let layout = BlockLayout {
         name: "sb_Frame".into(),
@@ -1222,7 +1222,7 @@ fn block_inputs_prefer_the_member_of_the_builtin_type() {
         size: 16,
         members: vec![
             member(
-                "frameTimeCounter__int",
+                "sb_as_int_frameTimeCounter",
                 GlslType::INT,
                 0,
                 builtin("frameTimeCounter"),

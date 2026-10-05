@@ -36,7 +36,8 @@ import org.objectweb.asm.tree.MethodNode;
  *   <li>{@code @ModifyVariable(argsOnly)}: the target method exists and has exactly one parameter
  *   of the handler's type;</li>
  *   <li>{@code @ModifyArg} and {@code @WrapOperation}: the target method exists, its bytecode
- *   invokes the {@code @At} target exactly once, and the handler's signature fits the call.</li>
+ *   invokes the {@code @At} target exactly once, and the handler's signature fits the call (the
+ *   modified argument is the one {@code index} names, or the only one of the handler's type).</li>
  * </ul>
  */
 class MixinMembersTest {
@@ -213,7 +214,12 @@ class MixinMembersTest {
                         assertEquals(1, invokes(method(m.target(), selector, where), invokeTarget).size(), where + ": one call of " + invokeTarget);
                     }
                     Type[] callArgs = Type.getArgumentTypes(invokeTarget.substring(invokeTarget.indexOf('(')));
-                    assertEquals(1, Arrays.stream(callArgs).filter(type::equals).count(), where + ": the call has one argument of type " + type);
+                    if (value(arg, "index") instanceof Integer index) {
+                        assertTrue(index >= 0 && index < callArgs.length, where + ": argument index " + index + " exists");
+                        assertEquals(type, callArgs[index], where + ": argument " + index + " has the handler's type");
+                    } else {
+                        assertEquals(1, Arrays.stream(callArgs).filter(type::equals).count(), where + ": the call has one argument of type " + type);
+                    }
                     checked++;
                 }
             }

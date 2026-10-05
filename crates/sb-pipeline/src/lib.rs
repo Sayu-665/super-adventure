@@ -53,7 +53,7 @@ mod resolve;
 mod sources;
 
 pub use bindings::{resource_kind_of, sample_type_name};
-pub use cache::cache_key;
+pub use cache::{TRANSLATOR_REVISION, cache_key};
 pub use inspect::{FolderSummary, PackSummary, ProgramSummary, inspect};
 pub use macros::standard_macros;
 pub use resolve::FALLBACK_SOURCE;
@@ -91,8 +91,10 @@ pub struct CompileSettings {
     /// Draw profiles registered by the host (they take precedence over built-in profiles
     /// of the same name; their builtins and resources are added to every folder's layout).
     pub extra_profiles: Vec<DrawProfile>,
-    /// Extra (geometry program, profile) variants to compile; they are added to the
-    /// model's program list (not to the geometry map) so hosts can select them.
+    /// Extra (geometry program, profile) variants to compile: the slot's program (its
+    /// fallback chain, or its DH synthesis) translated with each profile. They are added
+    /// to the model's program list and listed in the slot's
+    /// [`GeometrySlot::variants`](sb_core::model::GeometrySlot::variants).
     pub profile_overrides: IndexMap<GeometryProgram, Vec<String>>,
 }
 
@@ -135,6 +137,10 @@ pub struct CompileStats {
     pub modules: usize,
     /// Stages accepted by `spirv-val`.
     pub modules_validated: usize,
+    /// Variants a [`PackSession`] reused from an earlier compile instead of translating
+    /// and compiling them again (their inputs were unchanged).
+    #[serde(default)]
+    pub variants_cached: usize,
 }
 
 /// The result of [`compile_pack`].
@@ -259,8 +265,11 @@ impl<'p> PackSession<'p> {
     /// Compile the pack with the current settings.
     pub fn compile(&mut self) -> CompileOutput {
         let start = Instant::now();
+        self.caches.start_compile();
         let pack: &ShaderPack = &self.pack;
         let settings = &self.settings;
+        // Hashed first: preprocessing reuses earlier results only for unchanged contents.
+        let content_hash = pack.content_hash();
         let load = load::load(pack, &settings.env, &settings.option_values, &settings.language, settings.dimension_filter.as_deref());
         let load_ms = start.elapsed().as_secs_f64() * 1e3;
         let sources = sources::OptionSources::new(self.pack.clone(), load.options.clone(), load.values.clone());
@@ -278,6 +287,7 @@ impl<'p> PackSession<'p> {
                 settings,
                 caches: &self.caches,
                 profiles: Profiles { extra: &settings.extra_profiles },
+                sources_fingerprint: analysis::sources_fingerprint(&content_hash, &load.options, &load.values),
             };
             for info in &load.folders {
                 let t = Instant::now();
@@ -288,6 +298,7 @@ impl<'p> PackSession<'p> {
                 stats.programs_failed.extend(r.stats.programs_failed);
                 stats.modules += r.stats.modules;
                 stats.modules_validated += r.stats.modules_validated;
+                stats.variants_cached += r.stats.variants_cached;
                 dimensions.push(r.pipeline);
                 states.push(r.state);
             }
@@ -295,7 +306,7 @@ impl<'p> PackSession<'p> {
         let blobs = blobs.into_table();
         let info = PackInfo {
             name: pack.name().to_string(),
-            source_hash: cache::cache_key_with_hash(&pack.content_hash(), settings),
+            source_hash: cache::cache_key_with_hash(&content_hash, settings),
             shaderbridge_version: sb_core::SHADERBRIDGE_VERSION.to_string(),
             features_enabled: load.features_enabled.clone(),
             features_unsupported: load.features_unsupported.clone(),
@@ -325,7 +336,7 @@ impl<'p> PackSession<'p> {
 ///
 /// With [`CompileSettings::cache_dir`], the result is cached under
 /// `<dir>/<cache_key>.{json,bin}` and reused when the pack contents, option values,
-/// environment and ShaderBridge version are unchanged.
+/// environment, ShaderBridge version and [`TRANSLATOR_REVISION`] are unchanged.
 pub fn compile_pack(pack: &ShaderPack, settings: &CompileSettings) -> CompileOutput {
     let start = Instant::now();
     let key = settings.cache_dir.as_ref().map(|_| cache::cache_key(pack, settings));
@@ -391,13 +402,16 @@ fn failed_output(pack: &ShaderPack, settings: &CompileSettings, d: Diagnostic) -
 }
 
 /// Compile one extra variant: the program resolved for `program` in `folder` (following
-/// the fallback chain past programs that fail) translated with draw profile `profile`.
+/// the fallback chain past programs that fail; for a Distant Horizons slot of a pack
+/// without DH programs, the program synthesized from its gbuffers source, as in the
+/// compiled pack) translated with draw profile `profile`. Its `use_alt` flags follow the
+/// flip state of the slot's pass.
 ///
-/// The variant uses the folder's existing `sb_Frame`/`sb_Draw` layout and binding table,
-/// so a profile whose builtins or host resources are not already part of them must be
-/// registered up front (`CompileSettings::extra_profiles` or `profile_overrides`); the
-/// translation otherwise fails with an unbound-resource diagnostic. Compiles the session
-/// first if needed. Blob ids of the returned program index the returned table.
+/// The variant uses the folder's existing `sb_Frame`/`sb_Draw` layout and binding table.
+/// Every built-in draw profile and every profile of `CompileSettings::extra_profiles` is
+/// part of them, so any of those works; a profile registered after the compile fails
+/// with `pipeline.unknown-profile`. Compiles the session first if needed, and reuses the
+/// session's variant cache. Blob ids of the returned program index the returned table.
 pub fn compile_variant(
     session: &mut PackSession<'_>,
     folder: &str,
@@ -419,15 +433,11 @@ pub fn compile_variant(
     let Some(prof) = profiles.get(profile) else {
         return Err(err("pipeline.unknown-profile", format!("draw profile `{profile}` does not exist")));
     };
-    let class = if program.group() == GeometryGroup::DistantHorizons {
-        sb_uniforms::ProgramClass::Dh
-    } else {
-        sb_uniforms::ProgramClass::from_geometry(program)
-    };
+    let class = folder::slot_class(program);
     let shadow_pass = folder::is_shadow_group(program);
-    let candidates: Vec<usize> =
-        program.chain().filter_map(|p| fs.plan.geometry.get(&p).copied()).filter(|&u| fs.analysis.ok(u)).collect();
-    if candidates.is_empty() {
+    let no_dh = program.group() == GeometryGroup::DistantHorizons && fs.strategy == sb_core::model::DhStrategy::Disabled;
+    let (candidates, synth) = folder::slot_units(&fs.plan, &|u| fs.analysis.ok(u), fs.strategy, program);
+    if candidates.is_empty() || no_dh {
         return Err(err("pipeline.no-program", format!("folder `{folder}` has no program for {}", program.file_name())));
     }
     let props = &state.load.props;
@@ -443,7 +453,7 @@ pub fn compile_variant(
     let mut diags = Diagnostics::new();
     for u in candidates {
         let key = VariantKey { unit: u, profile: profile.to_string(), class, shadow_pass };
-        let spec = spec_inputs.spec(&key, None, (3, 0, 0));
+        let spec = spec_inputs.spec(&key, synth, (3, 0, 0));
         let Some(stages) = fs.analysis.stages_of(u) else { continue };
         let ctx = fs.contexts[u].for_class(class);
         let jenv = compile::JobEnv {
@@ -452,6 +462,7 @@ pub fn compile_variant(
             caches: &session.caches,
             pack: sb_transform::PackContext { layout: &fs.layout, members: &fs.members, bindings: &fs.bindings, resources: &ctx },
             image_formats: &fs.image_formats,
+            fingerprint: &fs.fingerprint,
         };
         let job = compile::VariantJob {
             name: spec.name.clone(),
@@ -465,7 +476,7 @@ pub fn compile_variant(
             profile_constants: spec.profile_constants.clone(),
             kind: spec.kind.clone(),
         };
-        match compile::compile_job(&job, &jenv) {
+        match compile::compile_job_cached(&job, &jenv, &fs.analysis.stage_keys(u)).0 {
             Ok(c) => {
                 let mut blobs = BlobStore::default();
                 let mut d = Diagnostics::new();

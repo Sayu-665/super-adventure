@@ -6,8 +6,9 @@ import java.util.List;
 
 /**
  * What the shadow pass draws, from the pack's shadow directives, in the headless executor's order:
- * opaque casters, the {@code shadowtex0} to {@code shadowtex1} copy (so {@code shadowtex1} holds
- * only opaque casters), then translucent casters.
+ * opaque casters (terrain, then Distant Horizons LODs), the {@code shadowtex0} to
+ * {@code shadowtex1} copy (so {@code shadowtex1} holds only opaque casters), then translucent
+ * casters.
  *
  * @param steps the steps, empty when the pack has no shadow pass
  * @param notes casters the pack asks for that ShaderBridge does not render into the shadow map
@@ -22,6 +23,8 @@ public record ShadowPlan(List<Step> steps, List<String> notes) {
     public enum Step {
         /** Solid and cutout terrain ({@code shadow_solid}, {@code shadow_cutout}, {@code shadow}). */
         OPAQUE_TERRAIN,
+        /** Distant Horizons LODs ({@code dh_shadow}). */
+        DISTANT_TERRAIN,
         /** Copy {@code shadowtex0} into {@code shadowtex1}. */
         COPY_DEPTH,
         /** Translucent terrain ({@code shadow_water}). */
@@ -29,10 +32,11 @@ public record ShadowPlan(List<Step> steps, List<String> notes) {
     }
 
     /**
-     * @param shadow the pack's shadow settings
+     * @param shadow         the pack's shadow settings
+     * @param distantCasters Distant Horizons LODs cast shadows ({@code DhMode.castsShadows})
      * @return the plan
      */
-    public static ShadowPlan of(ShadowSettings shadow) {
+    public static ShadowPlan of(ShadowSettings shadow, boolean distantCasters) {
         if (!shadow.enabled()) {
             return new ShadowPlan(List.of(), List.of());
         }
@@ -40,6 +44,9 @@ public record ShadowPlan(List<Step> steps, List<String> notes) {
         List<String> notes = new ArrayList<>();
         if (shadow.renderTerrain()) {
             steps.add(Step.OPAQUE_TERRAIN);
+        }
+        if (distantCasters) {
+            steps.add(Step.DISTANT_TERRAIN);
         }
         steps.add(Step.COPY_DEPTH);
         if (shadow.renderTranslucent()) {

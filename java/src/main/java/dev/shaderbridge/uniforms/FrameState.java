@@ -235,11 +235,11 @@ public final class FrameState {
     public final Vector3f skyColor = new Vector3f();
 
     // ------------------------------------------------------------------ inputs: Distant Horizons
-    /** Distant Horizons is rendering. */
+    /** Distant Horizons is rendering (with the unified projection: and Minecraft's projection reaches the DH far plane). */
     public boolean dhActive;
-    /** DH near plane. */
+    /** DH near plane ({@code dhProjection}'s, Minecraft's near plane with the unified projection). */
     public float dhNearPlane = 0.01f;
-    /** DH far plane. */
+    /** DH far plane ({@code dhProjection}'s and, with the unified projection, {@code gbufferProjection}'s). */
     public float dhFarPlane = 0.01f;
     /** DH render distance in blocks (the vanilla render distance without DH). */
     public int dhRenderDistance = 256;
@@ -321,9 +321,10 @@ public final class FrameState {
         gbufferModelView.invert(gbufferModelViewInverse);
         MatrixConversions.reversedToGl(projection, zeroToOne, gbufferProjection);
         gbufferProjection.invert(gbufferProjectionInverse);
-        if (dhActive) {
+        if (dhActive && !settings.unifiedProjection()) {
             dhProjection.setPerspective(gbufferProjection.perspectiveFov(), gbufferProjection.m11() / gbufferProjection.m00(), dhNearPlane, dhFarPlane);
         } else {
+            // Without Distant Horizons, and with the unified projection (whose far plane is already the DH far plane).
             dhProjection.set(gbufferProjection);
         }
         dhProjection.invert(dhProjectionInverse);
@@ -417,6 +418,11 @@ public final class FrameState {
     /** @return {@code gbufferProjection} (GL convention) */
     public Matrix4fc gbufferProjection() {
         return gbufferProjection;
+    }
+
+    /** @return {@code dhProjection} (GL convention) */
+    public Matrix4fc dhProjection() {
+        return dhProjection;
     }
 
     /** @return {@code shadowModelView} */

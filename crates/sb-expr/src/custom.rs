@@ -135,7 +135,7 @@ impl BlockPlan {
             .map(|slot| {
                 let candidates = builtin.get(slot.name.as_str())?;
                 // Prefer the member whose type matches the builtin's own type (others
-                // are `name__<type>` re-declarations), else the first one.
+                // are `sb_as_<type>_<name>` conflict members), else the first one.
                 let index = candidates
                     .iter()
                     .copied()

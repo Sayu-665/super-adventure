@@ -22,21 +22,30 @@ class ShadowPlanTest {
     @Test
     void opaqueCastersThenTheDepthCopyThenTranslucentCasters() {
         assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.COPY_DEPTH, ShadowPlan.Step.TRANSLUCENT_TERRAIN),
-            ShadowPlan.of(with(true, true, true, false)).steps());
-        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.COPY_DEPTH), ShadowPlan.of(with(true, true, false, false)).steps());
-        assertEquals(List.of(ShadowPlan.Step.COPY_DEPTH, ShadowPlan.Step.TRANSLUCENT_TERRAIN), ShadowPlan.of(with(true, false, true, false)).steps(),
+            ShadowPlan.of(with(true, true, true, false), false).steps());
+        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.COPY_DEPTH), ShadowPlan.of(with(true, true, false, false), false).steps());
+        assertEquals(List.of(ShadowPlan.Step.COPY_DEPTH, ShadowPlan.Step.TRANSLUCENT_TERRAIN), ShadowPlan.of(with(true, false, true, false), false).steps(),
             "shadowTranslucent does not depend on shadowTerrain, as in the headless executor");
     }
 
     @Test
+    void distantHorizonsLodsAreOpaqueCasters() {
+        assertEquals(List.of(ShadowPlan.Step.OPAQUE_TERRAIN, ShadowPlan.Step.DISTANT_TERRAIN, ShadowPlan.Step.COPY_DEPTH,
+            ShadowPlan.Step.TRANSLUCENT_TERRAIN), ShadowPlan.of(with(true, true, true, false), true).steps());
+        assertEquals(List.of(ShadowPlan.Step.DISTANT_TERRAIN, ShadowPlan.Step.COPY_DEPTH), ShadowPlan.of(with(true, false, false, false), true).steps(),
+            "LODs cast shadows without shadowTerrain, as in the headless executor");
+        assertTrue(ShadowPlan.of(with(false, true, true, false), true).steps().isEmpty());
+    }
+
+    @Test
     void withoutAShadowPassNothingIsDrawn() {
-        assertTrue(ShadowPlan.of(with(false, true, true, true)).steps().isEmpty());
-        assertTrue(ShadowPlan.of(with(false, true, true, true)).notes().isEmpty());
+        assertTrue(ShadowPlan.of(with(false, true, true, true), false).steps().isEmpty());
+        assertTrue(ShadowPlan.of(with(false, true, true, true), false).notes().isEmpty());
     }
 
     @Test
     void entityCastersAreReportedAsMissing() {
-        assertTrue(ShadowPlan.of(with(true, true, true, false)).notes().isEmpty());
-        assertEquals(1, ShadowPlan.of(with(true, true, true, true)).notes().size());
+        assertTrue(ShadowPlan.of(with(true, true, true, false), false).notes().isEmpty());
+        assertEquals(1, ShadowPlan.of(with(true, true, true, true), false).notes().size());
     }
 }

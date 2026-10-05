@@ -199,38 +199,45 @@ public final class SpirvReflector {
             arraySize = t[0] == OP_TYPE_RUNTIME_ARRAY ? 0 : arraySize * constants.getOrDefault(t[2], 0);
             type = t[1];
         }
-        boolean decorated = decoration(variable, DECORATION_DESCRIPTOR_SET) != null && decoration(variable, DECORATION_BINDING) != null;
+        Binding at = new Binding(decorationValue(variable, DECORATION_DESCRIPTOR_SET), decorationValue(variable, DECORATION_BINDING));
         int[] t = types.get(type);
         if (t == null) {
-            return new Descriptor(nameOf(variable), DescriptorType.OTHER, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, decorated);
+            return at.plain(nameOf(variable), DescriptorType.OTHER, arraySize);
         }
         return switch (t[0]) {
             case OP_TYPE_STRUCT -> {
                 boolean storageBlock = storage == STORAGE_STORAGE_BUFFER || decoration(type, DECORATION_BUFFER_BLOCK) != null;
                 DescriptorType kind = storageBlock ? DescriptorType.STORAGE_BUFFER
                     : decoration(type, DECORATION_BLOCK) != null ? DescriptorType.UNIFORM_BUFFER : DescriptorType.OTHER;
-                yield new Descriptor(blockName(variable, type), kind, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, decorated);
+                yield at.plain(blockName(variable, type), kind, arraySize);
             }
-            case OP_TYPE_SAMPLED_IMAGE -> image(variable, types.get(t[1]), DescriptorType.SAMPLED_IMAGE, arraySize, decorated);
+            case OP_TYPE_SAMPLED_IMAGE -> image(variable, types.get(t[1]), DescriptorType.SAMPLED_IMAGE, arraySize, at);
             case OP_TYPE_IMAGE -> {
                 ImageDim dim = ImageDim.of(t[2]);
                 DescriptorType kind = dim == ImageDim.SUBPASS_DATA ? DescriptorType.OTHER
                     : t[6] == 2 ? DescriptorType.STORAGE_IMAGE : DescriptorType.SEPARATE_IMAGE;
-                yield image(variable, t, kind, arraySize, decorated);
+                yield image(variable, t, kind, arraySize, at);
             }
-            case OP_TYPE_SAMPLER ->
-                new Descriptor(nameOf(variable), DescriptorType.SEPARATE_SAMPLER, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, decorated);
-            default -> new Descriptor(nameOf(variable), DescriptorType.OTHER, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, decorated);
+            case OP_TYPE_SAMPLER -> at.plain(nameOf(variable), DescriptorType.SEPARATE_SAMPLER, arraySize);
+            default -> at.plain(nameOf(variable), DescriptorType.OTHER, arraySize);
         };
     }
 
     /** {@code image} is an OpTypeImage: sampled type, dim, depth, arrayed, MS, sampled, format. */
-    private Descriptor image(int variable, int[] image, DescriptorType kind, int arraySize, boolean decorated) {
+    private Descriptor image(int variable, int[] image, DescriptorType kind, int arraySize, Binding at) {
         if (image == null || image[0] != OP_TYPE_IMAGE || image.length < 7) {
-            return new Descriptor(nameOf(variable), DescriptorType.OTHER, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, decorated);
+            return at.plain(nameOf(variable), DescriptorType.OTHER, arraySize);
         }
         return new Descriptor(nameOf(variable), kind, ImageDim.of(image[2]), image[4] != 0, image[5] != 0, arraySize, scalarClass(image[1]),
-            decorated);
+            at.set(), at.binding());
+    }
+
+    /** The {@code DescriptorSet} and {@code Binding} decorations of a variable, -1 where absent. */
+    private record Binding(int set, int binding) {
+        /** @return a descriptor that is not an image */
+        Descriptor plain(String name, DescriptorType type, int arraySize) {
+            return new Descriptor(name, type, ImageDim.NONE, false, false, arraySize, ScalarClass.OTHER, set, binding);
+        }
     }
 
     private InterfaceVariable interfaceVariable(int variable, int pointee) {
@@ -319,6 +326,12 @@ public final class SpirvReflector {
         return d == null ? null : d.get(decoration);
     }
 
+    /** @return the decoration's literal, -1 if the id lacks the decoration */
+    private int decorationValue(int id, int decoration) {
+        Integer value = decoration(id, decoration);
+        return value == null ? -1 : value;
+    }
+
     /** A nul-terminated UTF-8 literal in words {@code [from, end)}. */
     private String string(int from, int end) {
         byte[] bytes = new byte[Math.max(0, end - from) * 4];
@@ -359,7 +372,8 @@ public final class SpirvReflector {
     public static final class InvalidSpirvException extends IllegalArgumentException {
         private static final long serialVersionUID = 1L;
 
-        InvalidSpirvException(String message) {
+        /** @param message what is wrong with the module */
+        public InvalidSpirvException(String message) {
             super(message);
         }
     }
