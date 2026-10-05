@@ -26,11 +26,16 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
     compileOnly "maven.modrinth:distanthorizons:${project.dh_version}"
+    // Sodium's terrain renderer is hooked by the optional mixins of shaderbridge-sodium.mixins.json
+    // (dev.shaderbridge.compat.sodium); nothing of Sodium is bundled.
+    compileOnly "maven.modrinth:sodium:${project.sodium_version}"
 
     testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
     // DhInternalsTest resolves the Distant Horizons internals ShaderBridge reflects on against the real jar.
     testRuntimeOnly "maven.modrinth:distanthorizons:${project.dh_version}"
+    // The Sodium integration's targets and its vertex encoder are tested against the real jar.
+    testImplementation "maven.modrinth:sodium:${project.sodium_version}"
 }
 
 // ---------------------------------------------------------------------------------------------

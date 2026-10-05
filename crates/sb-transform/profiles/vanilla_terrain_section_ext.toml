@@ -1,5 +1,5 @@
-name = "vanilla_terrain"
-description = "Minecraft 26.3 terrain (MultiDrawIndirect path: BLOCK format + CHUNK_DATA_INSTANCED) extended with the Iris attributes the host appends to the BLOCK format (52 bytes per vertex, the layout the Java mod meshes chunk sections in while a pack is active): sb_Normal RGBA8_SNORM face normal (w = 0), sb_Entity RG16_SINT (block.properties id or -1, render type 0 = block, 1 = fluid), sb_MidTexCoord RG32_FLOAT (centre of the quad's texture coordinates), sb_Tangent RGBA8_SNORM (w = handedness), sb_MidBlock RGBA8_SINT ((block centre - vertex) x 64, w = light emission). Positions are chunk-section relative; gl_Vertex is camera-relative like OptiFine/Iris."
+name = "vanilla_terrain_section_ext"
+description = "Minecraft 26.3 terrain on the per-section path (pipeline/*_terrain without _multidraw, used when MultiDrawIndirect is unavailable) with ShaderBridge's extended chunk vertex: the BLOCK elements followed by the same extension attributes as vanilla_terrain (sb_Normal, sb_Entity, sb_MidTexCoord, sb_Tangent, sb_MidBlock; 52 bytes), with the section origin and visibility in the ChunkSection block instead of instanced attributes. The Java mod meshes chunk sections in this format while a shader pack is active."
 # Camera-relative world geometry: in the shadow pass (TransformOptions::is_shadow_pass) the
 # model_view / projection semantics become shadowModelView / shadowProjection, as in Iris.
 world_space = true
@@ -21,35 +21,25 @@ name = "UV2"
 type = "ivec2"
 location = 3
 [[inputs]]
-name = "ChunkPosition"
-type = "ivec3"
-location = 4
-instanced = true
-[[inputs]]
-name = "ChunkVisibility"
-type = "float"
-location = 5
-instanced = true
-[[inputs]]
 name = "sb_Normal"
 type = "vec3"
-location = 6
+location = 4
 [[inputs]]
 name = "sb_Entity"
 type = "ivec2"
-location = 7
+location = 5
 [[inputs]]
 name = "sb_MidTexCoord"
 type = "vec2"
-location = 8
+location = 6
 [[inputs]]
 name = "sb_Tangent"
 type = "vec4"
-location = 9
+location = 7
 [[inputs]]
 name = "sb_MidBlock"
 type = "ivec4"
-location = 10
+location = 8
 
 [[blocks]]
 name = "Globals"
@@ -59,6 +49,10 @@ members = "ivec3 CameraBlockPos; float GlintAlpha; vec3 CameraOffset; float Game
 name = "TerrainUniform"
 instance = "sb_hTerrain"
 members = "mat4 ModelViewMat; ivec2 TextureSize;"
+[[blocks]]
+name = "ChunkSection"
+instance = "sb_hSection"
+members = "ivec3 ChunkPosition; float ChunkVisibility;"
 
 [[samplers]]
 name = "Sampler0"
@@ -70,7 +64,7 @@ type = "sampler2D"
 provides = ["lightmap"]
 
 [semantics]
-position = "vec4(Position + vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset, 1.0)"
+position = "vec4(Position + vec3(sb_hSection.ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset, 1.0)"
 color = "Color"
 uv0 = "vec4(UV0, 0.0, 1.0)"
 lightmap = "vec4(vec2(UV2), 0.0, 1.0)"
@@ -83,10 +77,10 @@ mid_block = "vec4(sb_MidBlock)"
 model_view = "sb_hTerrain.ModelViewMat"
 projection = "gbufferProjection"
 texture_matrix = "mat4(1.0)"
-chunk_offset = "(vec3(ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset)"
+chunk_offset = "(vec3(sb_hSection.ChunkPosition - sb_hGlobals.CameraBlockPos) + sb_hGlobals.CameraOffset)"
 
 [[globals]]
 name = "mc_chunkFade"
 type = "float"
 stage = "vertex"
-init = "ChunkVisibility"
+init = "sb_hSection.ChunkVisibility"

@@ -89,6 +89,8 @@ constant is `-1`), e.g. `SB_DH_BLOCK_ID_<n>` in `dh_terrain.toml`.
 
 Built-in profiles: `fullscreen`, `vanilla_terrain`, `vanilla_terrain_basic`,
 `vanilla_terrain_section` (per-section terrain path with the `ChunkSection` block),
+`vanilla_terrain_section_ext` (the per-section path with `vanilla_terrain`'s extension
+attributes),
 `vanilla_block` (`BLOCK` vertices with `DynamicTransforms`: moving blocks, beacon beams,
 block breaking), `vanilla_entity`, `vanilla_particle`, `vanilla_lines`, `vanilla_position`,
 `vanilla_position_color`, `vanilla_position_color_lightmap` (leads), `vanilla_position_tex`,

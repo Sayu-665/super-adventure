@@ -419,6 +419,7 @@ const EMBEDDED_FILES: &[(&str, &str)] = &[
     ("vanilla_position_tex_color.toml", include_str!("../profiles/vanilla_position_tex_color.toml")),
     ("vanilla_block.toml", include_str!("../profiles/vanilla_block.toml")),
     ("vanilla_terrain_section.toml", include_str!("../profiles/vanilla_terrain_section.toml")),
+    ("vanilla_terrain_section_ext.toml", include_str!("../profiles/vanilla_terrain_section_ext.toml")),
     ("vanilla_position_color_lightmap.toml", include_str!("../profiles/vanilla_position_color_lightmap.toml")),
     ("vanilla_text.toml", include_str!("../profiles/vanilla_text.toml")),
     ("vanilla_clouds.toml", include_str!("../profiles/vanilla_clouds.toml")),

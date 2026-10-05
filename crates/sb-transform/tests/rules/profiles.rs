@@ -279,7 +279,7 @@ fn invalid_push_constant_declarations_are_rejected() {
 #[test]
 fn world_space_profiles_add_shadow_matrices_to_the_layout() {
     let rc = ResourceContext::new(ProgramClass::Gbuffers);
-    for name in ["vanilla_terrain", "vanilla_terrain_basic", "dh_terrain", "sodium_terrain"] {
+    for name in ["vanilla_terrain", "vanilla_terrain_basic", "vanilla_terrain_section", "vanilla_terrain_section_ext", "dh_terrain", "sodium_terrain"] {
         let p = profile(name).unwrap();
         assert!(p.world_space, "{name}");
         let mut b = PackBuilder::new(rc.clone());
@@ -403,10 +403,51 @@ fn mc_entity_is_the_block_id_only_in_terrain_formats() {
         ("vanilla_position_tex_color", "vec4(0.0, 0.0, 0.0, 1.0)"),
         ("dh_generic", "vec4(0.0, 0.0, 0.0, 1.0)"),
         ("vanilla_terrain", "vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 1.0)"),
+        ("vanilla_terrain_section_ext", "vec4(float(sb_Entity.x), float(sb_Entity.y), 0.0, 1.0)"),
     ] {
         let out = T::new(p).vs(vs).fs(fs).run();
         assert_eq!(semantic_init(&out, "sb_mc_Entity"), entity, "{p}");
         contains_none(out.vs(), &["entityId"]);
+    }
+}
+
+#[test]
+fn extended_terrain_profiles_share_the_extension_attributes() {
+    // The Java mod meshes chunk sections in one extended format for both terrain paths:
+    // vanilla_terrain (MultiDrawIndirect, instanced section data) and
+    // vanilla_terrain_section_ext (per-section draws, ChunkSection block). Both must read the
+    // extension attributes with the same types and semantics, and the per-section profile must
+    // be vanilla_terrain_section plus those attributes.
+    let mdi = profile("vanilla_terrain").unwrap();
+    let section = profile("vanilla_terrain_section").unwrap();
+    let ext = profile("vanilla_terrain_section_ext").unwrap();
+    let extension = |p: &sb_transform::DrawProfile| {
+        p.inputs.iter().filter(|i| i.name.starts_with("sb_")).map(|i| (i.name.clone(), i.ty.clone())).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        extension(mdi).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+        ["sb_Normal", "sb_Entity", "sb_MidTexCoord", "sb_Tangent", "sb_MidBlock"]
+    );
+    assert_eq!(extension(mdi), extension(ext));
+    let vanilla = |p: &sb_transform::DrawProfile| {
+        p.inputs.iter().filter(|i| !i.name.starts_with("sb_")).map(|i| (i.name.clone(), i.ty.clone(), i.location)).collect::<Vec<_>>()
+    };
+    assert_eq!(vanilla(section), vanilla(ext));
+    assert_eq!(section.blocks.iter().map(|b| &b.name).collect::<Vec<_>>(), ext.blocks.iter().map(|b| &b.name).collect::<Vec<_>>());
+
+    let vs = "#version 120\nattribute vec4 mc_Entity;\nattribute vec4 mc_midTexCoord;\nattribute vec4 at_tangent;\nattribute vec4 at_midBlock;\n\
+        varying vec4 v;\nvoid main() { gl_Position = ftransform(); v = mc_Entity + mc_midTexCoord + at_tangent + at_midBlock + vec4(gl_Normal, 0.0); }\n";
+    let fs = "#version 120\nvarying vec4 v;\nvoid main() { gl_FragData[0] = v; }\n";
+    let a = T::new("vanilla_terrain").vs(vs).fs(fs).run();
+    let b = T::new("vanilla_terrain_section_ext").vs(vs).fs(fs).run();
+    for global in ["sb_gl_Normal", "sb_mc_Entity", "sb_mc_midTexCoord", "sb_at_tangent", "sb_at_midBlock"] {
+        assert_eq!(semantic_init(&a, global), semantic_init(&b, global), "{global}");
+    }
+    assert_eq!(semantic_init(&b, "sb_gl_Normal"), "sb_Normal");
+    assert_eq!(semantic_init(&b, "sb_at_midBlock"), "vec4(sb_MidBlock)");
+    // The program reads every extension attribute at the profile's locations.
+    for (name, location) in [("sb_Normal", 4), ("sb_Entity", 5), ("sb_MidTexCoord", 6), ("sb_Tangent", 7), ("sb_MidBlock", 8)] {
+        assert!(b.prog.vertex_inputs.iter().any(|i| i.name == name && i.location == location), "{name}: {:?}", b.prog.vertex_inputs);
     }
 }
 

@@ -65,6 +65,7 @@ final class HostVertexLayouts {
     /** Vertex buffer slots per profile. */
     static final Map<String, List<VertexFormat>> BY_PROFILE = Map.of(
         "vanilla_terrain", List.of(EXTENDED_TERRAIN, CHUNK_INSTANCE),
+        "vanilla_terrain_section_ext", List.of(EXTENDED_TERRAIN),
         "dh_terrain", List.of(DH_TERRAIN),
         DrawProfiles.DH_SYNTH_PROFILE, List.of(DH_TERRAIN),
         "dh_generic", List.of(DH_GENERIC),

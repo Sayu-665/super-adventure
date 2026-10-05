@@ -63,6 +63,16 @@ import net.minecraft.resources.Identifier;
  * ({@code GLINT} shader define), so they map to the program of the model; only
  * {@code pipeline/glint}, which draws the glint alone over an existing surface, maps to
  * {@code gbuffers_armor_glint}.
+ *
+ * <p>While a pack is active, chunk sections are meshed in ShaderBridge's extended terrain vertex
+ * format ({@code dev.shaderbridge.render.chunk}) and drawn with clones of the vanilla terrain
+ * pipelines located at {@code shaderbridge:extended_terrain/<namespace>/<path>}
+ * ({@link #extendedTerrainLocation(Identifier)}). Such a location maps like the
+ * vanilla pipeline it was cloned from, with the extended counterpart of its draw profile
+ * ({@value #TERRAIN_MULTIDRAW} becomes {@value #TERRAIN_MULTIDRAW_EXTENDED},
+ * {@value #TERRAIN_SECTION} becomes {@value #TERRAIN_SECTION_EXTENDED}), so terrain programs read
+ * the normal, {@code mc_Entity}, {@code mc_midTexCoord}, {@code at_tangent} and
+ * {@code at_midBlock} of every vertex.
  */
 public final class VanillaPipelineTable {
     /** Namespace of vanilla pipeline locations. */
@@ -71,6 +81,18 @@ public final class VanillaPipelineTable {
     public static final String TERRAIN_MULTIDRAW = "vanilla_terrain_basic";
     /** Terrain on the per-section path ({@code BLOCK} + the {@code ChunkSection} block). */
     public static final String TERRAIN_SECTION = "vanilla_terrain_section";
+    /**
+     * Terrain on the MultiDrawIndirect path in the extended chunk vertex format ({@code BLOCK}
+     * followed by {@code sb_Normal}, {@code sb_Entity}, {@code sb_MidTexCoord}, {@code sb_Tangent},
+     * {@code sb_MidBlock}, plus {@code CHUNK_DATA_INSTANCED}).
+     */
+    public static final String TERRAIN_MULTIDRAW_EXTENDED = "vanilla_terrain";
+    /** Terrain on the per-section path in the extended chunk vertex format. */
+    public static final String TERRAIN_SECTION_EXTENDED = "vanilla_terrain_section_ext";
+    /** Namespace of the locations of vanilla terrain pipelines cloned with the extended vertex format. */
+    public static final String EXTENDED_TERRAIN_NAMESPACE = "shaderbridge";
+    /** Location path prefix of vanilla terrain pipelines cloned with the extended vertex format. */
+    public static final String EXTENDED_TERRAIN_PREFIX = "extended_terrain/";
     /** {@code BLOCK} vertices with {@code DynamicTransforms}. */
     public static final String BLOCK_FORMAT = "vanilla_block";
     /** {@code ENTITY} vertices with {@code DynamicTransforms}. */
@@ -98,6 +120,9 @@ public final class VanillaPipelineTable {
     static final String OIT_PREFIX = "pipeline/oit_";
 
     private static final Map<String, PipelineMapping> TABLE = build();
+    /** Basic terrain profiles and their extended counterparts. */
+    private static final Map<String, String> EXTENDED_PROFILES = Map.of(TERRAIN_MULTIDRAW, TERRAIN_MULTIDRAW_EXTENDED, TERRAIN_SECTION,
+        TERRAIN_SECTION_EXTENDED);
 
     private VanillaPipelineTable() {
     }
@@ -107,10 +132,64 @@ public final class VanillaPipelineTable {
      * @return the mapping of the pipeline; unknown locations (other mods, newer versions) draw vanilla
      */
     public static PipelineMapping lookup(Identifier location) {
+        Optional<Identifier> origin = extendedTerrainOrigin(location);
+        if (origin.isPresent()) {
+            PipelineMapping mapping = lookup(origin.get());
+            if (mapping instanceof PipelineMapping.Mapped mapped) {
+                return extendedProfile(mapped.profile())
+                    .<PipelineMapping>map(profile -> new PipelineMapping.Mapped(mapped.gbuffers(), mapped.shadow(), profile))
+                    .orElse(mapping);
+            }
+            return mapping;
+        }
         if (!NAMESPACE.equals(location.getNamespace())) {
             return new PipelineMapping.Vanilla("not a vanilla pipeline");
         }
         return lookupPath(location.getPath());
+    }
+
+    /**
+     * @param vanilla the location of a vanilla terrain pipeline
+     * @return the location of its clone with the extended chunk vertex format,
+     *     {@code shaderbridge:extended_terrain/<namespace>/<path>}
+     */
+    public static Identifier extendedTerrainLocation(Identifier vanilla) {
+        return Identifier.fromNamespaceAndPath(EXTENDED_TERRAIN_NAMESPACE, EXTENDED_TERRAIN_PREFIX + vanilla.getNamespace() + "/" + vanilla.getPath());
+    }
+
+    /**
+     * @param location a pipeline location
+     * @return the location of the vanilla pipeline it is the extended-format clone of, or empty
+     *     if it is not such a clone (the inverse of {@link #extendedTerrainLocation})
+     */
+    public static Optional<Identifier> extendedTerrainOrigin(Identifier location) {
+        if (!EXTENDED_TERRAIN_NAMESPACE.equals(location.getNamespace()) || !location.getPath().startsWith(EXTENDED_TERRAIN_PREFIX)) {
+            return Optional.empty();
+        }
+        String rest = location.getPath().substring(EXTENDED_TERRAIN_PREFIX.length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0 || slash == rest.length() - 1) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(Identifier.tryBuild(rest.substring(0, slash), rest.substring(slash + 1)));
+    }
+
+    /**
+     * @param profile a draw profile
+     * @return the profile of the same draw path in the extended chunk vertex format, if
+     *     {@code profile} is a basic terrain profile
+     */
+    public static Optional<String> extendedProfile(String profile) {
+        return Optional.ofNullable(EXTENDED_PROFILES.get(profile));
+    }
+
+    /**
+     * @param profile a draw profile
+     * @return the basic terrain profile of the same draw path (the {@code BLOCK} attributes only),
+     *     if {@code profile} is an extended terrain profile
+     */
+    public static Optional<String> basicProfile(String profile) {
+        return EXTENDED_PROFILES.entrySet().stream().filter(e -> e.getValue().equals(profile)).map(Map.Entry::getKey).findFirst();
     }
 
     /**
