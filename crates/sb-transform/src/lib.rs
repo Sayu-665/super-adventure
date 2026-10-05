@@ -5,13 +5,13 @@
 //! for Vulkan 1.2 (see `docs/ARCHITECTURE.md` §4–§8).
 //!
 //! * [`profiles`]: draw profiles, the data describing how a host feeds geometry.
-//! * [`analyze`]: phase A, parse one stage and collect [`StageInfo`].
+//! * [`analyze()`]: phase A, parse one stage and collect [`StageInfo`].
 //! * [`transform_program`]: phases B and C, rewrite every stage of a program, link the
 //!   stage interfaces and emit Vulkan GLSL with a line map back to the pack sources.
 //!
 //! Typical use (see the corpus test for a complete example):
 //!
-//! 1. [`analyze`] every stage of every program of a dimension;
+//! 1. [`analyze()`] every stage of every program of a dimension;
 //! 2. build the pack layout from [`StageInfo::uniform_decls`] plus each used profile's
 //!    [`DrawProfile::referenced_builtins`], and the binding table from
 //!    [`AnalyzedStage::resources`] (canonicalized with

@@ -28,20 +28,21 @@ implements are those of [ARCHITECTURE.md](ARCHITECTURE.md) §4–§7 and §9. Th
 | `render.pipeline` | Turns pack programs into renderpearl `RenderPipeline`s. SPIR-V is served through the compiler hook, compiled asynchronously and cached. Programs are checked for eligibility and resolved along the fallback chain or routed to the raw path. |
 | `render.targets` | `colortexN`/`shadowcolorN` as main/alt pairs, depth copies, shadow maps, noise and custom textures, samplers, and the resolution of pack resources to texture views. |
 | `render.mapping` | The table from vanilla pipelines to (geometry program, draw profile) (§4). |
+| `render.chunk` | The extended chunk vertex format (§4): chunk sections meshed with normals, block ids, mid-texture coordinates, tangents and `at_midBlock` while a pack renders, the pack's block id table, the extended clones of the terrain pipelines, and the format switch with its full chunk rebuild. |
 | `render.frame` | Frame orchestration: `RenderBridge` (entry from the mixins), `PackRenderer`, the frame plan and flips, geometry, fullscreen and compute passes, mipmaps, pass copies, DH passes. |
 | `render.draw` | Pipeline substitution inside ShaderBridge's passes: vanilla clones, uniform binding, the compiled-pipeline index. |
 | `render.shadow` | The shadow pass: a terrain re-render for the shadow camera. |
 | `render.raw` | The raw Vulkan path: compute and fullscreen programs on Mojang's `VkDevice`, extra device features, storage usage. |
 | `dh` | Distant Horizons takeover (reflection and API, no mixins). |
-| `compat.sodium` | Sodium detection (packs are refused while Sodium is loaded). |
+| `compat.sodium` | The Sodium 0.9 integration (§9): its all-or-nothing target check, the extended Sodium terrain vertex and its encoder, the routing of Sodium's terrain pipelines, and Sodium's sections for the shadow pass. Its optional mixins are in `mixin.sodium`. |
 | `mixin` | All mixins and accessors (§2). |
 
 ## 2. Integration points
 
 Every target below is checked against `minecraft-merged-deobf-26.3.jar` by `MixinTargetsTest`
 (`@Inject` selectors and handler parameters), `MixinMembersTest` (`@Shadow`, `@Accessor`,
-`@Invoker`, `@ModifyVariable`, `@ModifyArg`, `@WrapOperation`) and `RawMixinsTest`
-(`@WrapMethod`, `@ModifyReturnValue`).
+`@Invoker`, `@ModifyVariable`, `@ModifyArg`, `@WrapOperation`), `RawMixinsTest`
+(`@WrapMethod`, `@ModifyReturnValue`) and `RedirectMixinsTest` (`@Redirect` of a constructor).
 
 Every injection uses `require = 0`. A hook that does not apply in another Minecraft version
 leaves vanilla rendering in place, or makes ShaderBridge refuse or disable the pack with a message.
@@ -65,11 +66,34 @@ disappears, the game fails at class load (see [Limitations](#11-known-limitation
 | `RenderSystemMixin` | `RenderSystem.getCompiledPipelineNullable(RenderPipeline)` RETURN | Records compiled pipeline → `RenderPipeline` (`CompiledPipelineIndex`), so draws can be routed by the vanilla pipeline's location. |
 | `GlslCompilerMixin` | `GlslCompiler.compileToSpv(String, String, ShaderType, ShaderDefines, ShaderSource)` HEAD, cancellable | Serves ShaderBridge's precompiled SPIR-V (`shaderbridge:spv/<n>` ids) as a `SPIRVModule` instead of running shaderc. |
 | `CameraMixin` | `@ModifyArg` index 1 of `Camera.setupPerspective(FFFFF)V` in `Camera.update` | Extends the level projection's far plane to the DH far plane for synthesized DH LODs (§8). |
+| `LevelExtractorMixin` | `LevelExtractor.extract(DeltaTracker, Camera, F)` HEAD | Switches the chunk mesh format when a pack starts or stops rendering, or its block ids change, with a full chunk rebuild (§4, terrain vertices). |
+| `ChunkSectionLayerMixin` | `@ModifyReturnValue` `ChunkSectionLayer.pipeline(Z)` and `vertexFormat()` | While the extended format is active: the extended terrain pipeline clones and vertex format. Minecraft derives the section builders' format, the vertex size of the section buffer heaps and every draw's base vertex from these. |
+| `ChunkSectionsToRenderMixin` | `@ModifyArg` indices 5 and 6 of `renderLayers(...)` in `renderGroup` and `renderOit` | The wireframe and order-independent-transparency pipeline overrides draw the extended meshes with their extended clones. |
+| `SectionCompilerMixin` | `@Redirect` of `new BufferBuilder(ByteBufferBuilder, PrimitiveTopology, VertexFormat)` in `getOrBeginLayer`; `@WrapOperation` of `RenderSectionRegion.getBlockState(BlockPos)` and `FluidRenderer.tesselate(...)` in `compile` | Layers in the extended format get ShaderBridge's builder; the block (and fluid) being meshed is recorded for every quad's `mc_Entity` and `at_midBlock`. |
 | `FrontendGpuDeviceAccess` | `@Accessor` `FrontendGpuDevice.backend` | Reaches `VulkanDevice` for the raw path. |
 | `VulkanDeviceAccess` | `@Accessor` `VulkanDevice.enabledFeatures` | Which device features were actually enabled. |
 | `VulkanFeatureSetsMixin` | `@ModifyReturnValue` `VulkanFeatureSets.optionalFeatureSets()` | Requests extra features as optional feature sets (§7). |
 | `VulkanDeviceMixin` | `@WrapMethod` `VulkanDevice.createTexture(String, int, GpuFormat, int, int, int, int)` | Marks creation of render targets that packs bind as storage images. |
 | `VulkanGpuTextureMixin` | `@ModifyArg` of `VkImageCreateInfo.usage(I)` in the `VulkanGpuTexture` constructor | Adds `VK_IMAGE_USAGE_STORAGE_BIT` to those targets. |
+
+### Sodium mixins (`shaderbridge-sodium.mixins.json`, client side)
+
+Optional (`"required": false`, `defaultRequire` 0) and applied all together or not at all by
+`SodiumMixinPlugin` (§9). Their targets are checked against the Sodium 0.9.3-alpha.1 jar the build
+compiles against (Modrinth Maven, `compileOnly`; nothing of Sodium is bundled) and against Minecraft
+26.3 by `SodiumTargetsTest` and `SodiumMixinsTest`; they were also checked with `javap` against
+Sodium 0.9.2 for 26.3.
+
+| Mixin | Target and point | Why |
+|---|---|---|
+| `ChunkMeshFormatsMixin` | `ChunkMeshFormats.getCurrent()` HEAD, cancellable | While a pack is active, Sodium meshes the extended terrain vertex. |
+| `SodiumWorldRendererMixin` | `SodiumWorldRenderer.initRenderer()` HEAD; `setupTerrain(...)` after its call to `processChunkEvents()` | Chooses the vertex when Sodium creates its section manager; reloads Sodium's renderer when the active pack (or its block ids) needs another one. |
+| `ChunkBuilderMeshingTaskMixin` | `@WrapOperation` of `BlockRenderer.renderModel(...)` and `FluidRenderer.render(...)` in `ChunkBuilderMeshingTask.execute(...)` | The block being meshed on the worker thread (id, position, emission, fluid flag) for the extension attributes. |
+| `TranslucentGeometryCollectorMixin` | `TranslucentGeometryCollector.appendQuad(...)` HEAD | Tags translucent quads before the sorter copies them, so quads it splits and encodes later keep their block's data. |
+| `ChunkVertexMixin` | `ChunkVertexEncoder.Vertex`: tag fields (`VertexTags`); `copyVertexTo(Vertex, Vertex)` TAIL | Carries the tags through the sorter's vertex copies. |
+| `DefaultChunkRendererMixin` | `DefaultChunkRenderer.render(...)` HEAD | In a ShaderBridge pass, binds the block atlas as `Sampler0` (the draw's albedo) before Sodium binds its pipeline. |
+| `LevelRendererSodiumMixin` | `LevelRenderer.prepareChunkRenders(Matrix4fc, Z)` HEAD, cancellable | During pack frames, answers the shadow pass with Sodium's sections (Minecraft has none with Sodium). |
+| `VanillaPipelineTableMixin` | ShaderBridge's `VanillaPipelineTable.lookup(Identifier)` HEAD, cancellable | Routes `sodium:pipeline/*_terrain` to the terrain programs with the `sodium_terrain` profile (`SodiumPipelines`). |
 
 ### Other hooks
 
@@ -96,7 +120,8 @@ disappears, the game fails at class load (see [Limitations](#11-known-limitation
 
 A pack is **refused**, with a message to the player and vanilla rendering, when one of these holds:
 
-* Sodium is loaded (§9).
+* Sodium is loaded, but ShaderBridge's Sodium integration cannot be applied to it, or Sodium's
+  chunk vertex is not the one ShaderBridge extends (§9).
 * The pack was not compiled for `REVERSED_ZERO_TO_ONE` depth, or the device does not clip depth
   to [0, 1] (`DepthSupport`). Pack geometry shares Minecraft's main depth buffer. Minecraft 26.3
   clears that buffer to 0 and tests it with `GEQUAL`, so only reversed-Z packs can be drawn into it.
@@ -224,7 +249,7 @@ Iris 26.3 (`IrisPipelines`) where Iris maps a pipeline to one program.
 
 | Vanilla pipelines | gbuffers program | Shadow program | Profile |
 |---|---|---|---|
-| `solid_terrain(_multidraw)` | `terrain_solid` | `shadow_solid` | `vanilla_terrain_section` / `vanilla_terrain_basic` (MDI) |
+| `solid_terrain(_multidraw)` | `terrain_solid` | `shadow_solid` | `vanilla_terrain_section_ext` / `vanilla_terrain` (MDI); `vanilla_terrain_section` / `vanilla_terrain_basic` without the extended format |
 | `cutout_terrain(_multidraw)` | `terrain_cutout` | `shadow_cutout` | same |
 | `translucent_terrain(_multidraw)` | `water` | `shadow_water` | same |
 | `solid_block`, `cutout_block` | `terrain_solid`, `terrain_cutout` | `shadow_cutout` | `vanilla_block` |
@@ -252,6 +277,55 @@ Iris 26.3 (`IrisPipelines`) where Iris maps a pipeline to one program.
 
 Program names omit the `gbuffers_` prefix. In 26.3 the `*_glint` pipelines draw the model and its
 glint in one pass, so they use the model's program; only `glint` uses `gbuffers_armor_glint`.
+
+### Terrain vertices (`render.chunk`)
+
+Minecraft 26.3 meshes chunk sections in the 28-byte `BLOCK` format: position, color, atlas
+coordinates and lightmap. While a pack renders, ShaderBridge meshes them in an extended 52-byte
+format instead, as Iris extends Sodium's (`TerrainVertexFormat`, the layout of the
+`vanilla_terrain` profile):
+
+| Element | Format | Pack attribute | Content |
+|---|---|---|---|
+| `sb_Normal` | `RGBA8_SNORM` | `gl_Normal` | Normalized cross product of the quad's diagonals. |
+| `sb_Entity` | `RG16_SINT` | `mc_Entity` | `block.properties` id (-1 if unmapped), render type 0 for block models and 1 for fluids (Iris' terrain encoding). |
+| `sb_MidTexCoord` | `RG32_FLOAT` | `mc_midTexCoord` | Average of the quad's four atlas coordinates. |
+| `sb_Tangent` | `RGBA8_SNORM` | `at_tangent` | Direction of growing `u` across the quad, orthogonal to the normal; `w` = +1 when `v` grows along `cross(tangent, normal)`, -1 for mirrored mappings. A quad without atlas area gets its cube face's tangent. |
+| `sb_MidBlock` | `RGBA8_SINT` | `at_midBlock` | `(block centre - vertex) * 64`, rounded and clamped to a byte; `w` = the block's light emission. |
+
+* **Block ids** (`BlockIdTable`, `BlockIdMapping`) are resolved once per pack from the
+  `CompiledPack` id maps with Iris' precedence: every block entry before any tag entry, each in file
+  order, the first match of a state wins. Property filters accept OptiFine's value lists
+  (`age=6,7`); a filter on a property the block does not have is ignored, as in Iris. Fluid quads
+  carry the id of the fluid's block (`FluidState.createLegacyBlock()`, so `minecraft:water` maps
+  water), and `at_midBlock.w` is the emission of the block at the position, for fluids too (Iris).
+* **Meshing.** `SectionCompiler.getOrBeginLayer` creates an `ExtendedTerrainBufferBuilder` for
+  layers in the extended format. Minecraft's block renderer, Fabric's renderer API and the fluid
+  renderer write the `BLOCK` elements through it as usual: with a format other than `BLOCK`,
+  `BufferBuilder` writes element by element, byte-identical to its `BLOCK` fast path. The builder
+  records the block of every quad (set by the `getBlockState` and fluid hooks of `compile`) and
+  fills the extension attributes of the whole mesh when the layer is built, before the
+  translucent layer's quads are sorted.
+* **Drawing.** `ChunkSectionLayer.pipeline` returns clones of the terrain pipelines with the
+  extended format in vertex slot 0 (`ExtendedTerrainPipelines`, located at
+  `shaderbridge:extended_terrain/<namespace>/<path>`). Minecraft's shaders read the `BLOCK`
+  elements at unchanged offsets and the pipeline builder skips the others, so the clones draw
+  vanilla terrain from extended meshes: in frames without the pack, in the wireframe view, with
+  order-independent transparency, and as the vanilla pipeline of fallback draws (`VanillaClones`
+  copies their vertex layout). `VanillaPipelineTable` maps an extended location like the vanilla
+  pipeline with the extended profile (`vanilla_terrain` on the MultiDrawIndirect path, whose
+  programs the pack is compiled for by default, `vanilla_terrain_section_ext` on the per-section
+  path); `PipelineRouter` falls back to the basic profile if the buffers lack the extension.
+* **Switching** (`ChunkMeshFormat`). With no pack rendering every hook returns Minecraft's own
+  values: meshing and drawing are vanilla. When a pack starts or stops rendering
+  (`RenderBridge.packActive()`), or a new pack's block ids differ, the start of the next
+  `LevelExtractor.extract` switches the format and rebuilds every chunk section: it releases the
+  section meshes and the section dispatcher (`LevelRenderer.resetLevelRenderData`) and marks the
+  level changed, as a world change does, so the dispatcher is recreated with the new vertex size
+  before the frame uses it. Meshes of one format are never stored or drawn with the other. The
+  first frame of a pack still draws the `BLOCK` meshes (with the basic profiles); the world is
+  then remeshed. If the layer hooks did not apply, the format stays `BLOCK` and the switch is
+  logged as unavailable.
 
 ## 5. Render targets and textures
 
@@ -399,12 +473,89 @@ reflection and through the DH API, and fails soft.
   * Sections entirely inside the vanilla area are skipped.
 * **OFF**: no LODs are drawn.
 
-## 9. Sodium (`compat.sodium`)
+## 9. Sodium (`compat.sodium`, `mixin.sodium`)
 
-Sodium replaces Minecraft's terrain renderer, so ShaderBridge's terrain hooks never see terrain.
-Its 20-byte mesh also lacks attributes the `sodium_terrain` profile reads. While Sodium is loaded,
-ShaderBridge does not activate packs and shows: "Sodium <version> is installed … remove Sodium to
-use shader packs". Minecraft and Sodium render as usual.
+Sodium 0.9 replaces Minecraft's terrain renderer: its own chunk meshes (a 20-byte compact vertex),
+render pipelines (`sodium:pipeline/<layer>_terrain`), render lists and draw path. Minecraft's main
+pass still hands it the render pass to draw into (`SodiumChunkSection.renderGroup` →
+`DefaultChunkRenderer.render`), so Sodium's terrain lands in ShaderBridge's gbuffers passes, where
+the pipeline substitution (§4) swaps its pipelines for the pack's. The integration is written
+against Sodium 0.9.2 and 0.9.3-alpha.1 for Minecraft 26.3 and copies no Sodium code.
+
+**All or nothing.** `SodiumMixinPlugin` decides once, while Mixin loads
+`shaderbridge-sodium.mixins.json` and before any class is loaded: the integration's mixins are
+applied only if Sodium is installed and every member they hook or call exists in Sodium's and
+Minecraft's class files (`SodiumTargets`, read through Mixin's bytecode provider). Otherwise none
+is applied, Sodium renders untouched, and `SodiumCompat` refuses packs with "Sodium <version> is
+installed, and ShaderBridge cannot shade its terrain: <what is missing>; update ShaderBridge or
+Sodium, or remove Sodium to use shader packs". Packs are also refused if Sodium's compact vertex
+is not the one ShaderBridge extends, or the extended vertex no longer feeds the `sodium_terrain`
+profile (`SodiumTerrain.layoutProblems`).
+
+**Terrain vertex** (`TerrainVertexLayout`, `ExtendedChunkVertex`). While a pack is active Sodium
+meshes a 36-byte vertex: Sodium's 20 bytes, written by Sodium's own compact encoder (so they are
+exactly what Sodium's shader and the profile decode), followed by ShaderBridge's extension:
+
+| Offset | Element | Format | Pack attribute | Content |
+|---|---|---|---|---|
+| 0 | `a_Position` | `RG32_UINT` | `gl_Vertex` | Sodium: 20-bit section-local position; the profile adds `u_RegionOffset` and the section's offset in its region. |
+| 8 | `a_Color` | `RGBA8_UNORM` | `gl_Color` | Sodium: colour times ambient occlusion. |
+| 12 | `a_TexCoord` | `RG16_UINT` | `gl_MultiTexCoord0` | Sodium: 15-bit coordinate, nudged towards the quad centre by `u_TexCoordShrink`. |
+| 16 | `a_LightAndData` | `RGBA8_UINT` | `gl_MultiTexCoord1` | Sodium: block and sky light (16 L + 8; the profile subtracts 8), material bits, section index. |
+| 20 | `sb_Entity` | `R32_UINT` | `mc_Entity` | `((block id + 1) << 1) \| is fluid`: the `block.properties` id (-1 if unmapped) and render type 1 for fluids, 0 for block models. |
+| 24 | `sb_Normal` | `RGBA8_SNORM` | `gl_Normal` | Normalized cross product of the quad's diagonals (the outward normal of the face drawn; flipped fluid faces point the other way). |
+| 28 | `sb_MidTexCoord` | `RG16_UINT` | `mc_midTexCoord` | Average of the quad's texture coordinates times 32768. |
+| 32 | `sb_MidBlock` | `RGBA8_SNORM` | `at_midBlock` | `(block centre - vertex) * 64`, rounded and clamped to ±127; `w` = the light emission of the block at the position. |
+
+* **Block data.** Around Sodium's calls that mesh a block model or a fluid, the block is recorded
+  for the worker thread (`ChunkBuilderMeshingTaskMixin`, `BlockContext`). Fluid quads carry the
+  id of the fluid's block (`FluidState.createLegacyBlock()`, so `minecraft:water` maps water in a
+  waterlogged stair). Ids come from a table of every block state built when the vertex is chosen,
+  with `IdMapLookup` and the world's block tags.
+* **Translucent sorting.** Sodium copies translucent quads for sorting and encodes the pieces of
+  quads it splits after their block was meshed. Their vertices are tagged with the block's data
+  when they enter the sorter (`TranslucentGeometryCollectorMixin`), and the tags travel through
+  Sodium's vertex copies (`ChunkVertexMixin`); geometry that belongs to no block (other mods'
+  mesh appenders) gets id -1 and no `at_midBlock`.
+* **Switching** (`SodiumTerrain`, `MeshPlan`). The vertex is chosen when Sodium creates its
+  section manager and chunk builder (`SodiumWorldRenderer.initRenderer`), because every buffer of
+  that renderer uses it: extended when a pack is active (`ShaderBridge.activePack()`), Sodium's
+  own otherwise. When that changes, or a pack with other block ids becomes active, Sodium's
+  renderer is reloaded at the start of its next terrain update, right after chunk events are
+  processed, where Sodium itself reloads after a render distance change; every section is meshed
+  again. Sodium memoizes its terrain pipelines per pass with the vertex format they were built
+  for, so the memo is cleared when the format changes. Sodium's own shader reads its four
+  elements by name and skips the extension, so Sodium keeps drawing the extended meshes with its
+  own pipelines when the pack does not draw a frame.
+
+**Program swap.** `VanillaPipelineTableMixin` routes Sodium's three terrain pipelines through
+`SodiumPipelines` to the programs of the vanilla terrain pipelines they stand for
+(`gbuffers_terrain_solid`, `gbuffers_terrain_cutout`, `gbuffers_water`; `shadow_solid`,
+`shadow_cutout`, `shadow_water`) with the `sodium_terrain` profile. Sodium names its pipelines
+after `ChunkSectionLayer.pipeline(false)`; paths of ShaderBridge's extended vanilla terrain clones
+(`extended_terrain/minecraft/pipeline/...`) map alike. From there the substitution is the vanilla
+one: `PipelineRouter` keeps the mapping when Sodium's pipeline carries the profile's attributes
+(only the extended vertex does; otherwise the draw stays vanilla, into `fallback_tex`), programs
+are compiled for `sodium_terrain` on demand (`OnDemandVariants`), and `PackPipelineFactory`
+builds them with Sodium's vertex binding, topology, depth state and 20-byte push-constant range.
+When Sodium binds its pipeline, `FrontendRenderPassMixin` binds the pack pipeline with `sb_Frame`,
+`sb_Draw` and the pack samplers; Sodium then binds its own `u_Globals`, `u_SectionTimeInfo`,
+`u_LightTex` and `u_BlockTex` (which provide the pack's `lightmap` and `gtexture`) and pushes
+`u_RegionOffset`, `u_CurrentTime` and `u_RegionID` for every region (std430 offsets 0, 12, 16, as
+the profile declares them). `DefaultChunkRendererMixin` first binds the block atlas as `Sampler0`,
+the albedo `sb_Draw` is sized by (`atlasSize`, `gtextureSize`) and unnamed pack samplers resolve
+to. Classic transparency is forced as for vanilla terrain, so Sodium draws translucent terrain
+with `renderGroup` in the translucent gbuffers pass; its order-independent-transparency pipelines
+are never used.
+
+**Shadow pass.** With Sodium, Minecraft's own chunk sections are empty: Sodium replaces the call
+to `LevelRenderer.prepareChunkRenders` in the level render and never calls the method. During a
+pack frame, `LevelRendererSodiumMixin` answers the shadow pass's call (`ShadowSections`) with
+Sodium's sections: `SodiumTerrain.shadowSections` prepares Sodium's draw commands for its current
+render lists (outside any pass, as Sodium does later in the frame), with the camera's position
+and matrices, and returns a `SodiumChunkSection`. The shadow renderer then draws its opaque and
+translucent groups into the shadow pass, where Sodium's pipelines become the pack's shadow
+programs, or draw nothing if the pack has none.
 
 ## 10. Configuration
 
@@ -431,16 +582,16 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
 
 ### Rendering gaps
 
-* **Terrain vertices.** Minecraft 26.3's chunk meshes (`BLOCK` format) carry no normals, block
-  ids, mid-texture coordinates, tangents or `at_midBlock`. The `vanilla_terrain_basic` and
-  `vanilla_terrain_section` profiles therefore feed:
-  * normal (0, 1, 0);
-  * `mc_Entity` = -1;
-  * `mc_midTexCoord` = the vertex's own UV.
-
-  Water detection by block id, waving foliage, material ids and normal-based terrain lighting do
-  not work. Iris extends the chunk vertex format; ShaderBridge does not yet. A diagnostic says so
-  for every pack with terrain programs.
+* **Terrain vertices.** Packs see normals, block ids, mid-texture coordinates, tangents and
+  `at_midBlock` on chunk terrain (§4). Remaining gaps:
+  * `layer.*` render-layer overrides of `block.properties` are not applied; blocks keep
+    Minecraft's chunk layers.
+  * The block id table is built when the pack starts rendering; block tags changed later by a
+    data pack reload are not picked up until the next pack or world change.
+  * Ids outside the 16-bit range wrap, as in Iris' `RG16_SINT` attribute.
+  * Switching packs on or off remeshes every loaded chunk section, as in Iris.
+  * Blocks drawn outside chunk meshes (moving pistons, falling blocks) keep the `vanilla_block`
+    profile, without the extension attributes.
 * **Block entities.** They draw with the entity programs. Iris tells them apart by rendering phase
   and uses `gbuffers_block`; Minecraft 26.3 batches both into the same feature draws.
 * **Entity shadows.** Entities, block entities and the player cast no shadows. The prepared
@@ -466,7 +617,26 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
 
 ### Integrations
 
-* **Sodium:** packs are refused while it is loaded.
+* **Sodium** (§9):
+  * Only checked against Sodium 0.9.2 and 0.9.3-alpha.1 for Minecraft 26.3, and never run in a
+    game. Another Sodium version that moved a hooked member makes ShaderBridge refuse packs.
+  * Shadow casters are Sodium's camera-visible sections, in the draw batches Sodium prepared for
+    the camera: with Sodium's block-face culling on, faces turned away from the camera (by whole
+    section) are missing from the shadow map. Closed geometry still casts its shadow.
+  * The shadow pass is the first terrain draw of the frame, so it writes Sodium's per-frame
+    terrain uniforms (with the camera's matrices, as the main pass would); their fog colour is the
+    previous frame's. Only Sodium's own shader reads it (fallback draws while a program compiles).
+  * Activating or deactivating a pack, or a pack with other block ids, reloads Sodium's renderer
+    and remeshes every section; terrain drawn before the extended meshes exist stays unshaded
+    (in `fallback_tex`). The extended vertex costs 80% more terrain vertex memory (36 instead of
+    20 bytes) while a pack is active.
+  * `mc_chunkFade` is 1 (Sodium's fade-in is not reproduced) and `at_tangent` is derived from the
+    normal (the Sodium vertex has no tangent attribute, unlike ShaderBridge's extended vanilla
+    vertex).
+  * Block ids resolve with `IdMapLookup` (the first matching entry in file order, blocks and tags
+    alike); the vanilla terrain path applies Iris' precedence (blocks before tags). They differ only
+    for packs whose tag entry precedes a block entry matching the same state.
+  * `layer.*` render-layer overrides of `block.properties` are not applied.
 * **Distant Horizons:**
   * DH generic objects (`dh_generic`: beacons, clouds, API objects) are not drawn while a pack
     renders.
@@ -490,6 +660,8 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   `FrontendGpuDeviceAccess`, `VulkanDeviceAccess`, the `@Shadow` fields of
   `FrontendRenderPassMixin`) are hard requirements of Mixin. If a future Minecraft version renames
   them, the game fails at start-up rather than disabling shaders. All injections are optional.
+  The Sodium mixins have no such members, and their targets are checked before they are applied
+  (§9).
 * **Unadaptable pipelines.** A vanilla pipeline drawn in a ShaderBridge pass that neither came
   from Minecraft's pipeline cache nor fits the pass (another mod's custom pipeline) fails the
   frame, and the pack is disabled with a message.
@@ -514,6 +686,14 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   * `AttachmentPlannerTest`, `PipelinePartsTest`, `SpirvReflectorTest`, `ProgramResolverTest`,
     `PackPipelineCacheTest` (with fake devices), `GeometryChainTest`, `ProfileVertexFormatsTest`,
     `OnDemandVariantsTest`.
+* **Terrain vertices.** `TerrainVertexEncoderTest` (normals and tangents of every cube face, mirrored and
+  rotated mappings, degenerate quads, `SNORM8` and `at_midBlock` packing, in-place encoding),
+  `BlockIdMappingTest` (entry grammar, Iris precedence, property filters, unknown blocks),
+  `TerrainVertexFormatTest` (the format equals the `vanilla_terrain` layout and starts with
+  `BLOCK`), `ExtendedTerrainPipelinesTest` (clones of every 26.3 terrain pipeline),
+  `ExtendedTerrainBufferBuilderTest` (vertex memory byte-identical to Minecraft's `BLOCK` builder;
+  needs LWJGL's allocator), `ChunkMeshFormatTest` (switch decisions, vanilla hooks), and the
+  extended routes in `VanillaPipelineTableTest`.
 * **Substitution.** `VanillaPipelineTableTest` (against every 26.3 pipeline), `DrawSubstitutionTest`,
   `VanillaClonesTest` (process-wide clones, the fit check, blit clones), `UniformBinderTest`
   (albedo rebinding), `ActivePassesTest`.
@@ -528,7 +708,20 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
 * **Distant Horizons.** `DhHostBlocksTest`, `DhPlanesTest`, `DhModeTest`, `LodSelectionTest`,
   `LodUniformsTest`, `DhDepthTargetsTest`, `RendererSwapTest`, `DhInternalsTest` (against the DH
   3.3.4 jar), `CameraFarPlaneTest`, `DistantBindingsTest`.
-* **Mixin targets.** `MixinTargetsTest`, `MixinMembersTest`, `RawMixinsTest`, `GameTargetsTest`.
+* **Sodium** (against the Sodium 0.9.3-alpha.1 jar on the test class path).
+  * `SodiumTargetsTest`: every member the integration needs exists; a missing method, call site,
+    class or static modifier is named; the all-or-nothing decision.
+  * `SodiumMixinsTest`: every mixin of `shaderbridge-sodium.mixins.json` (targets, call sites,
+    handler parameters) and that `SodiumTargets` checks each hooked member beforehand.
+  * `ExtendedChunkVertexTest`: the encoder with Sodium's real compact encoder: Sodium's 20 bytes
+    unchanged and decoding with the `sodium_terrain` formulas, the extension bytes.
+  * `TerrainVertexLayoutTest` (Sodium's compact vertex, the profile's inputs, Sodium's bind groups
+    against the profile's host blocks and samplers), `TerrainExtensionTest` (normals of every cube
+    face, diagonal, flipped and degenerate quads; `mc_Entity`, mid-texture and mid-block packing),
+    `SodiumPipelinesTest`, `MeshPlanTest`, `SodiumCompatTest`.
+  * Rust: `crates/sb-transform/tests/sodium_profile.rs` pins the profile to Sodium's vertex,
+    push constants, `u_Globals` and samplers.
+* **Mixin targets.** `MixinTargetsTest`, `MixinMembersTest`, `RawMixinsTest`, `RedirectMixinsTest`, `GameTargetsTest`.
 * **Native library.** The native smoke tests (`nativeTest`) load the Rust library and compile
   corpus packs.
 
@@ -538,11 +731,17 @@ runtime, every GPU call and the actual images are unverified (see [Verification]
   `FullscreenPasses`, `ComputeDispatcher`, `DistantPasses`/`DistantFrame`, `MipGenerator.generate`,
   `PassCopies`, `SinkTextures`, `AtlasTextures`, `MinecraftHost`.
 * **Shadow pass.** `ShadowRenderer`, `ShadowSections`.
+* **Chunk mesh format in a running game.** `ChunkMeshFormat`'s switch and rebuild, the block id
+  table against the live registries and tags, and meshing through the section compiler hooks.
 * **Pipeline compilation on a real `GpuDevice`.** `PackPipelineCache` and `ProgramResolver` with
   real compiles, and `SessionVariantCompiler`.
 * **Every Vulkan call of the raw path.** `VulkanContext`, `VmaImage`/`VmaBuffer`,
   `PipelineObjects`, `GraphicsPipelines`, `DescriptorAllocator`, `CommandRecorder`,
   `FullscreenRendering`, `RawResources`, `RawBindings`, `RawShaderProgram`, `VulkanRawPath`.
 * **The DH takeover in a running game.** `DistantHorizons`, `DhApiControl`.
+* **The Sodium integration in a running game.** `SodiumMixinPlugin` under Mixin, the vertex
+  switch and Sodium reloads (`SodiumTerrain`), the block id table against the live registries and
+  tags, the meshing hooks on Sodium's worker threads, the shadow-pass sections, and every Sodium
+  mixin at runtime.
 * **Every mixin at runtime.** The mixins are only checked statically against the jar.
 * **`ShaderBridgeClient` lifecycle hooks.**

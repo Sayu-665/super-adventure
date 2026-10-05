@@ -180,11 +180,11 @@ impl Default for CompileEnvironment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DepthMode {
-    /// NDC z in [0,1], near -> 0. Host: LESS/LEQUAL, clear 1.0.
+    /// NDC z in `[0, 1]`, near -> 0. Host: LESS/LEQUAL, clear 1.0.
     ForwardZeroToOne,
-    /// NDC z in [0,1], near -> 1 (Minecraft 26.2+, DH 3.3+). Host: GEQUAL, clear 0.0.
+    /// NDC z in `[0, 1]`, near -> 1 (Minecraft 26.2+, DH 3.3+). Host: GEQUAL, clear 0.0.
     ReversedZeroToOne,
-    /// GL default clip control, NDC z in [-1,1]; no remap.
+    /// GL default clip control, NDC z in `[-1, 1]`; no remap.
     GlNegOneToOne,
 }
 
@@ -343,9 +343,11 @@ pub struct DimensionPipeline {
     pub custom_uniforms: Vec<CustomUniform>,
     pub bindings: BindingTable,
     pub programs: Vec<Program>,
-    /// Geometry program -> index into `programs` (after fallback resolution). Programs
-    /// that are absent (whole chain missing) are not present; the host renders that
-    /// geometry unshaded (vanilla) writing to `settings.fallback_tex`.
+    /// Geometry program -> the program drawing it (after fallback resolution). A gbuffers
+    /// program whose whole fallback chain is missing is drawn by Iris's fallback program
+    /// (`synthesized_from` = `<iris fallback>`). A slot is absent when every program of its
+    /// chain failed to compile (the host then renders that geometry unshaded, writing to
+    /// `settings.fallback_tex`) and for shadow and DH geometry the pack has no program for.
     pub geometry: IndexMap<GeometryProgram, GeometrySlot>,
     pub passes: Vec<Pass>,
     /// Color attachments of the shared gbuffers render pass: the sorted union of every
@@ -835,7 +837,9 @@ pub struct Program {
     /// `dh_terrain`, ...). `None` for compute programs.
     pub draw_profile: Option<String>,
     /// Needs features Mojang's public pipeline API cannot express (1D/3D textures,
-    /// storage images, SSBOs, compute, geometry/tessellation).
+    /// storage images, SSBOs, compute, geometry/tessellation, a stage interface its
+    /// pipeline builder rejects, or more descriptors than
+    /// [`DeviceCaps::max_descriptors_per_program`]).
     pub requires_raw_vulkan: bool,
     pub stages: Vec<StageModule>,
     /// `RENDERTARGETS` / `DRAWBUFFERS`: logical fragment output i writes target `draw_buffers[i]`.
@@ -860,7 +864,9 @@ pub struct Program {
     pub compute: Option<ComputeInfo>,
     /// Cull back faces (None = host default for the geometry type).
     pub cull: Option<bool>,
-    /// Program was synthesized (e.g. DH program generated from gbuffers_terrain).
+    /// The program was synthesized: a DH program generated from a gbuffers or shadow
+    /// program (the source program's path, e.g. `world0/gbuffers_terrain`), or Iris's
+    /// fallback program for geometry the pack has no program for (`<iris fallback>`).
     pub synthesized_from: Option<String>,
 }
 
@@ -987,6 +993,7 @@ pub struct DhPipeline {
     /// Render vanilla terrain and LODs with one projection whose far plane is the DH far
     /// plane, and report `far` accordingly (synthesized strategy).
     pub unified_projection: bool,
+    /// LODs cast shadows: the dimension has a `dh_shadow` slot.
     pub shadow_enabled: bool,
 }
 

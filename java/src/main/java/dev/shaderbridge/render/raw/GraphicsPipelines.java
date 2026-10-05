@@ -31,6 +31,9 @@ import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
  * attachments do ({@link ColorStates#problem}).
  */
 final class GraphicsPipelines {
+    /** {@code VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT}. */
+    private static final int TESSELLATION_STAGES = VK10.VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK10.VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+
     private GraphicsPipelines() {
     }
 
@@ -53,6 +56,12 @@ final class GraphicsPipelines {
      * @throws RawVulkanException if Vulkan fails
      */
     static long create(VkDevice device, long layout, List<Stage> stages, List<ColorStates.Slot> slots) {
+        if (stages.stream().anyMatch(s -> (s.flag() & TESSELLATION_STAGES) != 0)) {
+            // Never reached: RawAdmission rejects tessellated fullscreen programs. A tessellation
+            // pipeline would need a patch-list topology and, to keep GL's winding,
+            // VkPipelineTessellationDomainOriginStateCreateInfo{LOWER_LEFT} (ARCHITECTURE.md §4).
+            throw new IllegalArgumentException("raw fullscreen pipelines cannot have tessellation stages");
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(stages.size(), stack);
             for (int i = 0; i < stages.size(); i++) {

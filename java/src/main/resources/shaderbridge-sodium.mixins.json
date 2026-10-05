@@ -1,0 +1,17 @@
+{
+  "required": false,
+  "package": "dev.shaderbridge.mixin.sodium",
+  "plugin": "dev.shaderbridge.compat.sodium.SodiumMixinPlugin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "ChunkBuilderMeshingTaskMixin",
+    "ChunkMeshFormatsMixin",
+    "ChunkVertexMixin",
+    "DefaultChunkRendererMixin",
+    "LevelRendererSodiumMixin",
+    "SodiumWorldRendererMixin",
+    "TranslucentGeometryCollectorMixin",
+    "VanillaPipelineTableMixin"
+  ],
+  "injectors": { "defaultRequire": 0 }
+}

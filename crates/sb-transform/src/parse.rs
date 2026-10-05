@@ -3,7 +3,7 @@
 //!
 //! glsl-lang 0.8 workarounds applied here:
 //! * unsuffixed integer literals `>= 0x80000000` are rejected by its lexer: they are
-//!   rewritten to `int(<literal>u)` before parsing ([`crate::text::wrap_large_int_literals`]);
+//!   rewritten to `int(<literal>u)` before parsing ([`crate::text::sanitize_for_parse`]);
 //! * `#extension` lines are never fed to it (an unknown extension is a hard error); the
 //!   preprocessed code has none, the hoisted directives are kept aside;
 //! * the minimal lexer is used with an explicit `default_version`, so no `#version` line

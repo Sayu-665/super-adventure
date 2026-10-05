@@ -193,6 +193,49 @@ fn native_and_disabled_dh() {
     assert!(!dim.geometry.keys().any(|g| g.group() == sb_core::program::GeometryGroup::DistantHorizons));
 }
 
+/// Iris draws a pack's `dh_shadow` into shadowcolor0 and shadowcolor1 whatever its
+/// `RENDERTARGETS` says (`createDHFramebufferShadow` uses draw buffers `{0, 1}`), so output
+/// 0 of a `RENDERTARGETS: 1` dh_shadow lands in shadowcolor0, not shadowcolor1.
+#[test]
+fn native_dh_shadow_ignores_its_draw_buffer_directive() {
+    let mut files = base_files();
+    files.push(("shadow.vsh".into(), TERRAIN_VSH.into()));
+    files.push(("shadow.fsh".into(), "#version 120\nvarying vec2 uv;\nvarying vec4 color;\n/* RENDERTARGETS: 0,2 */\nvoid main() { gl_FragData[0] = color; gl_FragData[1] = color; }\n".into()));
+    files.push(("dh_terrain.vsh".into(), "#version 120\nvarying vec4 c;\nvoid main() { gl_Position = ftransform(); c = gl_Color; }\n".into()));
+    files.push(("dh_terrain.fsh".into(), "#version 120\nvarying vec4 c;\n/* RENDERTARGETS: 0 */\nvoid main() { gl_FragData[0] = c; }\n".into()));
+    files.push(("dh_shadow.vsh".into(), "#version 120\nvarying vec4 c;\nvoid main() { gl_Position = ftransform(); c = gl_Color; }\n".into()));
+    let dh_shadow_fsh = |targets: &str| format!("#version 120\nvarying vec4 c;\n/* RENDERTARGETS: {targets} */\nvoid main() {{ gl_FragData[0] = c; }}\n");
+    files.push(("dh_shadow.fsh".into(), dh_shadow_fsh("1")));
+    let out = compile_pack(&pack_of(&files), &vulkan_only());
+    assert!(errors(&out).is_empty(), "{:#?}", errors(&out));
+    let dim = &out.pack.dimensions[0];
+    assert_eq!(dim.distant_horizons.strategy, DhStrategy::Native);
+    let dh = &dim.programs[dim.geometry[&GeometryProgram::DhShadow].program as usize];
+    assert_eq!(dh.name, "dh_shadow");
+    assert_eq!(dh.draw_buffers, vec![0, 1]);
+    // The shared shadow pass binds the union of the shadow programs' buffers; output i of
+    // dh_shadow goes to the slot holding shadowcolor i.
+    assert_eq!(dim.shadow_attachments, vec![0, 1, 2]);
+    assert_eq!(dh.output_slots, vec![0, 1]);
+    let fs = dh.stages.iter().find(|s| s.stage == sb_core::ShaderStage::Fragment).unwrap();
+    let glsl = out.blobs.get_str(fs.glsl_vulkan.unwrap()).unwrap();
+    assert!(glsl.contains("location = 0"), "{glsl}");
+    let ignored = |out: &CompileOutput| out.pack.diagnostics.iter().filter(|d| d.code == "dir.dh-shadow-draw-buffers").count();
+    assert_eq!(ignored(&out), 1);
+    // The regular shadow program keeps its directive.
+    assert_eq!(program(dim, "shadow").draw_buffers, vec![0, 2]);
+
+    // `0` and `0,1` route like Iris already: no diagnostic.
+    for targets in ["0", "0,1"] {
+        files.retain(|(n, _)| n != "dh_shadow.fsh");
+        files.push(("dh_shadow.fsh".into(), dh_shadow_fsh(targets)));
+        let out = compile_pack(&pack_of(&files), &vulkan_only());
+        let dim = &out.pack.dimensions[0];
+        assert_eq!(program(dim, "dh_shadow").draw_buffers, vec![0, 1], "{targets}");
+        assert_eq!(ignored(&out), 0, "{targets}");
+    }
+}
+
 #[test]
 fn synthesized_dh_uses_block_ids() {
     let mut files = base_files();

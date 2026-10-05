@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.vertex.VertexFormat;
 import dev.shaderbridge.model.GeometryProgram;
+import dev.shaderbridge.render.chunk.ExtendedTerrainPipelines;
 import dev.shaderbridge.render.pipeline.DrawProfileInfo;
 import dev.shaderbridge.render.pipeline.DrawProfiles;
 import dev.shaderbridge.render.pipeline.ProfileVertexFormats;
@@ -173,6 +175,65 @@ class VanillaPipelineTableTest {
 
     private static void assertRoute(String name, GeometryProgram gbuffers, String profile, GeometryProgram shadow) {
         assertEquals(new PipelineMapping.Mapped(gbuffers, Optional.ofNullable(shadow), profile), VanillaPipelineTable.lookupPath("pipeline/" + name), name);
+    }
+
+    @Test
+    void extendedTerrainLocationsRoundTrip() {
+        Identifier vanilla = Identifier.withDefaultNamespace("pipeline/solid_terrain_multidraw");
+        Identifier extended = VanillaPipelineTable.extendedTerrainLocation(vanilla);
+        assertEquals("shaderbridge:extended_terrain/minecraft/pipeline/solid_terrain_multidraw", extended.toString());
+        assertEquals(Optional.of(vanilla), VanillaPipelineTable.extendedTerrainOrigin(extended));
+        assertEquals(Optional.empty(), VanillaPipelineTable.extendedTerrainOrigin(vanilla));
+        assertEquals(Optional.empty(), VanillaPipelineTable.extendedTerrainOrigin(Identifier.fromNamespaceAndPath("shaderbridge", "extended_terrain/x")));
+        assertEquals(Optional.empty(), VanillaPipelineTable.extendedTerrainOrigin(Identifier.fromNamespaceAndPath("othermod", "extended_terrain/a/b")));
+        assertEquals(Optional.of("vanilla_terrain"), VanillaPipelineTable.extendedProfile("vanilla_terrain_basic"));
+        assertEquals(Optional.of("vanilla_terrain_section_ext"), VanillaPipelineTable.extendedProfile("vanilla_terrain_section"));
+        assertEquals(Optional.empty(), VanillaPipelineTable.extendedProfile("vanilla_block"));
+        assertEquals(Optional.of("vanilla_terrain_basic"), VanillaPipelineTable.basicProfile("vanilla_terrain"));
+        assertEquals(Optional.empty(), VanillaPipelineTable.basicProfile("vanilla_terrain_basic"));
+    }
+
+    @Test
+    void extendedTerrainClonesRouteToTheExtendedProfiles() {
+        PipelineRouter router = new PipelineRouter(ProfileVertexFormats.get());
+        Map<RenderPipeline, PipelineMapping> expected = new LinkedHashMap<>();
+        expected.put(RenderPipelines.SOLID_TERRAIN_MULTIDRAW, mapped(GeometryProgram.TERRAIN_SOLID, GeometryProgram.SHADOW_SOLID, "vanilla_terrain"));
+        expected.put(RenderPipelines.SOLID_TERRAIN, mapped(GeometryProgram.TERRAIN_SOLID, GeometryProgram.SHADOW_SOLID, "vanilla_terrain_section_ext"));
+        expected.put(RenderPipelines.CUTOUT_TERRAIN_MULTIDRAW, mapped(GeometryProgram.TERRAIN_CUTOUT, GeometryProgram.SHADOW_CUTOUT, "vanilla_terrain"));
+        expected.put(RenderPipelines.CUTOUT_TERRAIN, mapped(GeometryProgram.TERRAIN_CUTOUT, GeometryProgram.SHADOW_CUTOUT, "vanilla_terrain_section_ext"));
+        expected.put(RenderPipelines.TRANSLUCENT_TERRAIN_MULTIDRAW, mapped(GeometryProgram.WATER, GeometryProgram.SHADOW_WATER, "vanilla_terrain"));
+        expected.put(RenderPipelines.TRANSLUCENT_TERRAIN, mapped(GeometryProgram.WATER, GeometryProgram.SHADOW_WATER, "vanilla_terrain_section_ext"));
+        for (Map.Entry<RenderPipeline, PipelineMapping> e : expected.entrySet()) {
+            RenderPipeline clone = ExtendedTerrainPipelines.extended(e.getKey());
+            assertEquals(e.getValue(), VanillaPipelineTable.lookup(clone.getLocation()), clone.toString());
+            assertEquals(e.getValue(), router.route(clone), clone.toString());
+            // The vanilla pipeline keeps its basic profile.
+            PipelineMapping basic = router.route(e.getKey());
+            assertInstanceOf(PipelineMapping.Mapped.class, basic);
+            assertEquals(VanillaPipelineTable.basicProfile(((PipelineMapping.Mapped) e.getValue()).profile()).orElseThrow(),
+                ((PipelineMapping.Mapped) basic).profile());
+        }
+        for (RenderPipeline vanillaOnly : List.of(RenderPipelines.WIREFRAME, RenderPipelines.WIREFRAME_MULTIDRAW)) {
+            assertInstanceOf(PipelineMapping.Vanilla.class, router.route(ExtendedTerrainPipelines.extended(vanillaOnly)), vanillaOnly.toString());
+        }
+    }
+
+    @Test
+    void extendedLocationsWithoutTheExtensionAttributesFallBackToTheBasicProfile() {
+        // A pipeline at an extended location whose buffers carry only the BLOCK elements (another
+        // mod's, or a future layout change) still draws with the program, without the extension.
+        RenderPipeline vanilla = RenderPipelines.CUTOUT_TERRAIN_MULTIDRAW;
+        RenderPipeline relocated = new RenderPipeline(VanillaPipelineTable.extendedTerrainLocation(vanilla.getLocation()), vanilla.getShaders(),
+            vanilla.getShaderDefines(), vanilla.getBindGroupLayouts(), vanilla.getColorTargetStates().toArray(ColorTargetState[]::new),
+            vanilla.getDepthStencilState(), vanilla.getPolygonMode(), vanilla.isCull(), vanilla.getVertexFormatBindings().toArray(VertexFormat[]::new),
+            vanilla.getPrimitiveTopology(), vanilla.pushConstantSize(), vanilla.getSortKey()) {
+        };
+        assertEquals(mapped(GeometryProgram.TERRAIN_CUTOUT, GeometryProgram.SHADOW_CUTOUT, "vanilla_terrain_basic"),
+            new PipelineRouter(ProfileVertexFormats.get()).route(relocated));
+    }
+
+    private static PipelineMapping mapped(GeometryProgram gbuffers, GeometryProgram shadow, String profile) {
+        return new PipelineMapping.Mapped(gbuffers, Optional.ofNullable(shadow), profile);
     }
 
     @Test

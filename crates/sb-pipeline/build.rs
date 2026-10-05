@@ -2,7 +2,10 @@
 //! source tree whose code determines what a compile produces, i.e. `src/**`,
 //! `profiles/**`, `Cargo.toml` and `build.rs` of `sb-core`, `sb-pack`, `sb-preprocess`,
 //! `sb-expr`, `sb-uniforms`, `sb-transform`, `sb-compile` and `sb-pipeline`, plus the
-//! workspace `Cargo.lock` (the exact parser, glslang and reflection versions).
+//! workspace `Cargo.lock` (the exact parser, glslang and reflection versions), the
+//! workspace root `Cargo.toml` (enabled dependency features, `[patch]`/`[replace]`
+//! sections and profiles, none of which `Cargo.lock` records) and `.cargo/config.toml`
+//! (the C/C++ flags glslang is built with).
 //!
 //! `sb_pipeline::cache_key` includes it, so any change to the translator (even without a
 //! version bump) invalidates compiled-pack caches written by an older build. Files are
@@ -20,6 +23,8 @@ const CRATES: &[&str] = &["sb-core", "sb-pack", "sb-preprocess", "sb-expr", "sb-
 const TREES: &[&str] = &["src", "profiles"];
 /// Single files of each crate that are hashed.
 const FILES: &[&str] = &["Cargo.toml", "build.rs"];
+/// Files of the workspace root (relative to it, `/`-separated) that are hashed.
+const WORKSPACE_FILES: &[&str] = &["Cargo.lock", "Cargo.toml", ".cargo/config.toml"];
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| ".".into()));
@@ -52,15 +57,22 @@ fn main() {
             }
         }
     }
-    // The workspace lock file pins glsl-lang, glslang, spirq, ... (whose versions change
-    // the output as much as our own code does).
-    match crates_dir.parent().map(|w| w.join("Cargo.lock")).filter(|p| p.is_file()) {
-        Some(lock) => {
-            println!("cargo:rerun-if-changed={}", lock.display());
-            hash_marker(&mut hasher, "Cargo.lock");
-            hash_bytes(&mut hasher, &fs::read(&lock).unwrap_or_default());
+    // Workspace-level files. The lock file pins glsl-lang, glslang, spirq, ... (whose
+    // versions change the output as much as our own code does). The root manifest holds
+    // what the lock file does not record: the features enabled on those dependencies
+    // (e.g. glsl-lang's lexer), `[patch]`/`[replace]` overrides and build profiles. The
+    // cargo config sets the flags the bundled glslang is compiled with. Hashing the whole
+    // manifest is conservative: an unrelated edit to it also yields a new revision.
+    let workspace = crates_dir.parent();
+    for file in WORKSPACE_FILES {
+        match workspace.map(|w| w.join(file)).filter(|p| p.is_file()) {
+            Some(path) => {
+                println!("cargo:rerun-if-changed={}", path.display());
+                hash_marker(&mut hasher, file);
+                hash_bytes(&mut hasher, &fs::read(&path).unwrap_or_default());
+            }
+            None => hash_marker(&mut hasher, &format!("{file}: absent")),
         }
-        None => hash_marker(&mut hasher, "Cargo.lock: absent"),
     }
     let revision = hasher.finalize().to_hex();
     println!("cargo:rustc-env=SB_TRANSLATOR_REVISION={}", &revision[..32]);

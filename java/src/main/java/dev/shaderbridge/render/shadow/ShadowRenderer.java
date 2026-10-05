@@ -17,7 +17,9 @@ import org.joml.Matrix4fc;
  * the shadow targets: the chunk sections ({@link ShadowSections}) are prepared again for the
  * shadow camera, and {@code ChunkSectionsToRender.renderGroup} binds the vanilla terrain pipelines,
  * which the pipeline substitution replaces with the pack's shadow programs (vanilla pipelines
- * without a shadow program draw nothing there). Render thread only, outside any render pass.
+ * without a shadow program draw nothing there). The frame's prepared features (entities, block
+ * entities) are drawn again the same way ({@link ShadowTargets#drawFeatures}). Render thread only,
+ * outside any render pass.
  */
 public final class ShadowRenderer {
     /** The shadow targets, provided by the frame orchestration. */
@@ -43,6 +45,12 @@ public final class ShadowRenderer {
 
         /** Draws the Distant Horizons LODs that cast shadows ({@code dh_shadow}), in passes of its own. */
         void drawDistant();
+
+        /**
+         * Draws the frame's prepared opaque features (entities, block entities) with the shadow
+         * camera, in a pass of its own on the shadow attachments.
+         */
+        void drawFeatures();
     }
 
     private final ShadowPlan plan;
@@ -76,11 +84,17 @@ public final class ShadowRenderer {
         for (ShadowPlan.Step step : plan.steps()) {
             switch (step) {
                 case OPAQUE_TERRAIN -> draw(chunks, ChunkSectionLayerGroup.OPAQUE, targets);
+                case ENTITIES -> targets.drawFeatures();
                 case DISTANT_TERRAIN -> targets.drawDistant();
                 case COPY_DEPTH -> targets.copyDepth();
                 case TRANSLUCENT_TERRAIN -> draw(chunks, ChunkSectionLayerGroup.TRANSLUCENT, targets);
             }
         }
+    }
+
+    /** @return whether the shadow pass draws the frame's prepared features ({@link ShadowPlan.Step#ENTITIES}) */
+    public boolean drawsFeatures() {
+        return plan.steps().contains(ShadowPlan.Step.ENTITIES);
     }
 
     private boolean needsTerrain() {

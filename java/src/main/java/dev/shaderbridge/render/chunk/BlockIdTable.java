@@ -39,11 +39,11 @@ public final class BlockIdTable {
      * Resolves a pack's block ids against the game's block registry and block tags. Call it on the
      * render thread (tags are rebound when a world is joined).
      *
-     * @param maps the pack's id maps
+     * @param blocks the pack's block id map ({@link IdMaps#blocks()})
      * @return the table
      */
-    public static BlockIdTable of(IdMaps maps) {
-        BlockIdMapping.Resolution<BlockState> resolved = BlockIdMapping.resolve(maps.blocks(), RegistryCatalog.INSTANCE);
+    public static BlockIdTable of(Map<Integer, List<String>> blocks) {
+        BlockIdMapping.Resolution<BlockState> resolved = BlockIdMapping.resolve(blocks, RegistryCatalog.INSTANCE);
         return new BlockIdTable(resolved.ids(), resolved.entries(), resolved.unknownEntries());
     }
 

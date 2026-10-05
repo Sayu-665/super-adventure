@@ -20,6 +20,7 @@ import dev.shaderbridge.render.pipeline.AttachmentLayout;
 import dev.shaderbridge.render.targets.ColorPair;
 import dev.shaderbridge.render.targets.TextureBinding;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
@@ -38,6 +39,9 @@ import net.minecraft.client.Minecraft;
  * thread only.
  */
 final class GeometryPasses {
+    /** The uniform block of Minecraft's feature draws that holds their model-view. */
+    static final String DYNAMIC_TRANSFORMS = "DynamicTransforms";
+
     private final PackResources r;
     private final AttachmentLayout gbuffers;
     private final boolean gbuffersShared;
@@ -80,7 +84,7 @@ final class GeometryPasses {
      */
     RenderPass openGbuffers(String label, FlipState flips, GpuBufferSlice frame) {
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        return open(label, gbuffers, false, flips, frame, main.width, main.height, main.getDepthTextureView());
+        return open(label, gbuffers, false, flips, frame, main.width, main.height, main.getDepthTextureView(), null);
     }
 
     /**
@@ -124,7 +128,24 @@ final class GeometryPasses {
      */
     RenderPass openShadow(String label, FlipState flips, GpuBufferSlice frame) {
         GpuTextureView depth = r.targets.shadowDepthView(0);
-        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth);
+        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, null);
+    }
+
+    /**
+     * Opens a shadow pass for the frame's prepared features (entities, block entities): like
+     * {@link #openShadow}, but the features' {@code DynamicTransforms} blocks are replaced by their
+     * shadow-camera copies as Minecraft binds them, and draws that cast no shadows in Iris
+     * (particles, weather) draw nothing.
+     *
+     * @param label      debug label
+     * @param flips      the frame's flip state
+     * @param frame      the frame's {@code sb_Frame} slice
+     * @param transforms each feature transform block to its shadow-camera copy
+     * @return the open pass; close it, then call {@link #closed}
+     */
+    RenderPass openShadowFeatures(String label, FlipState flips, GpuBufferSlice frame, Map<GpuBufferSlice, GpuBufferSlice> transforms) {
+        GpuTextureView depth = r.targets.shadowDepthView(0);
+        return open(label, shadow, true, flips, frame, depth.getWidth(0), depth.getHeight(0), depth, transforms);
     }
 
     /**
@@ -137,11 +158,11 @@ final class GeometryPasses {
     }
 
     private RenderPass open(String label, AttachmentLayout layout, boolean shadowPass, FlipState flips, GpuBufferSlice frame, int width, int height,
-                            GpuTextureView depth) {
+                            GpuTextureView depth, Map<GpuBufferSlice, GpuBufferSlice> transforms) {
         MinecraftHost host = hostFor(shadowPass, flips);
         RenderPass pass = create(label, layout, shadowPass, flips, width, height, depth);
         RenderSystem.bindDefaultUniforms(pass);
-        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame, host));
+        ActivePasses.open(pass, new Draws(layout, shadowPass, shadowPass || gbuffersShared, flips, frame, host, transforms));
         return pass;
     }
 
@@ -184,6 +205,11 @@ final class GeometryPasses {
         };
     }
 
+    /** @return a compiled pipeline's name, for messages */
+    private static String name(CompiledRenderPipeline pipeline) {
+        return pipeline instanceof FrontendRenderPipeline f ? f.name() : String.valueOf(pipeline);
+    }
+
     private static List<Integer> targets(AttachmentLayout layout) {
         return layout.attachments().stream().map(AttachmentLayout.Attachment::target).toList();
     }
@@ -204,39 +230,52 @@ final class GeometryPasses {
         private final FlipState flips;
         private final GpuBufferSlice frame;
         private final MinecraftHost host;
+        /** Feature transform blocks to their shadow-camera copies (the feature shadow pass), else null. */
+        private final Map<GpuBufferSlice, GpuBufferSlice> transforms;
 
-        Draws(AttachmentLayout layout, boolean shadowPass, boolean packPrograms, FlipState flips, GpuBufferSlice frame, MinecraftHost host) {
+        Draws(AttachmentLayout layout, boolean shadowPass, boolean packPrograms, FlipState flips, GpuBufferSlice frame, MinecraftHost host,
+              Map<GpuBufferSlice, GpuBufferSlice> transforms) {
             this.layout = layout;
             this.shadowPass = shadowPass;
             this.packPrograms = packPrograms;
             this.flips = flips;
             this.frame = frame;
             this.host = host;
+            this.transforms = transforms;
         }
 
         @Override
         public ActivePasses.Substitution substitute(CompiledRenderPipeline requested) {
             RenderPipeline vanilla = CompiledPipelineIndex.lookup(requested);
             if (vanilla == null) {
-                return asIs(requested, "a pipeline that did not come from Minecraft's pipeline cache");
+                return asIsOrSkip(requested, "a pipeline that did not come from Minecraft's pipeline cache (" + name(requested) + ")");
             }
-            if (packPrograms && r.substitution.decide(vanilla, shadowPass) instanceof DrawSubstitution.Decision.Pack p) {
+            boolean casts = transforms == null || r.substitution.castsFeatureShadow(vanilla);
+            if (casts && packPrograms && r.substitution.decide(vanilla, shadowPass) instanceof DrawSubstitution.Decision.Pack p) {
                 return new ActivePasses.Substitution(p.resolution().compiled(), Optional.of(new PackDraw(p)));
             }
             Optional<CompiledRenderPipeline> clone = shadowPass ? r.clones.discard(vanilla, layout)
                 : r.clones.fallback(vanilla, layout, r.dim.settings().fallbackTex());
-            return clone.map(ActivePasses.Substitution::unchanged).orElseGet(() -> asIs(requested, "pipeline " + vanilla.getLocation()));
+            return clone.map(ActivePasses.Substitution::unchanged).orElseGet(() -> asIsOrSkip(requested, "pipeline " + vanilla.getLocation()));
+        }
+
+        @Override
+        public GpuBufferSlice uniform(String name, GpuBufferSlice value) {
+            return transforms != null && DYNAMIC_TRANSFORMS.equals(name) ? transforms.getOrDefault(value, value) : value;
         }
 
         /**
-         * A pipeline that cannot be adapted is bound as it is when it fits the pass; otherwise the
-         * draw fails here, with a message, rather than in Mojang's attachment check.
+         * A pipeline that cannot be adapted is bound as it is when it fits the gbuffers pass;
+         * otherwise its draws are skipped (reported once) rather than failing in Mojang's
+         * attachment check, which would end the pack. Nothing unknown draws into the shadow map.
          */
-        private ActivePasses.Substitution asIs(CompiledRenderPipeline requested, String what) {
-            if (requested instanceof FrontendRenderPipeline f && VanillaClones.fits(f.colorTargetStates(), layout)) {
+        private ActivePasses.Substitution asIsOrSkip(CompiledRenderPipeline requested, String what) {
+            if (!shadowPass && requested instanceof FrontendRenderPipeline f && VanillaClones.fits(f.colorTargetStates(), layout)) {
                 return ActivePasses.Substitution.unchanged(requested);
             }
-            throw new IllegalStateException(what + " was drawn during world rendering and cannot be adapted to the shader pack's render pass");
+            r.diagnostics.report(what + " was drawn during world rendering and cannot be adapted to the shader pack's "
+                + (shadowPass ? "shadow" : "gbuffers") + " render pass; its draws are skipped");
+            return ActivePasses.Substitution.skip();
         }
 
         /** The descriptors of a pack pipeline replacing a vanilla draw. */

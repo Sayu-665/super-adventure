@@ -8,11 +8,14 @@ import dev.shaderbridge.model.Program;
 import java.util.Objects;
 
 /**
- * The variants the compiled pack already contains: the slot's program itself when it was
- * translated for the requested profile, else another entry of {@code programs} with the same
- * name and kind translated for it (the pipeline compiler emits one entry per program and profile
- * any slot uses). Anything else is {@link VariantSource.Lookup.Missing}; an on-demand compiler
- * wraps this source.
+ * The variants the compiled pack already contains for a geometry slot: the slot's program itself
+ * when it was translated for the requested draw profile, else the entry of the slot's
+ * {@link GeometrySlot#variants() variants} map for that profile. The pipeline compiler lists there
+ * every other profile it translated the slot's program for, each with the {@code use_alt} of the
+ * slot's own pass, so the program found reads the right main/alt textures for this slot; another
+ * entry of {@code programs} with the same name may have been translated for a slot of another
+ * pass and is never used in its place. Anything else is {@link VariantSource.Lookup.Missing}; an
+ * on-demand compiler wraps this source.
  */
 public final class CompiledVariants implements VariantSource {
     private final Blobs blobs;
@@ -29,11 +32,26 @@ public final class CompiledVariants implements VariantSource {
             return new Lookup.Missing("the pack has no program for " + slot.fileName());
         }
         Program resolved = dim.programs().get(geometry.program());
-        return dim.programs().stream()
-            .filter(p -> p == resolved || (p.name().equals(resolved.name()) && p.kind().equals(resolved.kind())))
-            .filter(p -> Objects.equals(p.drawProfile(), profile))
-            .findFirst()
-            .<Lookup>map(p -> new Lookup.Found(new ProgramVariant(dim.folder(), p, blobs)))
-            .orElseGet(() -> new Lookup.Missing(resolved.name() + " was not compiled for draw profile " + profile));
+        if (Objects.equals(resolved.drawProfile(), profile)) {
+            return found(dim, resolved);
+        }
+        Integer variant = geometry.variants().get(profile);
+        if (variant == null) {
+            return new Lookup.Missing(resolved.name() + " was not compiled for draw profile " + profile);
+        }
+        if (variant < 0 || variant >= dim.programs().size()) {
+            return new Lookup.Missing(resolved.name() + ": the variant for draw profile " + profile + " is program " + variant
+                + ", which does not exist");
+        }
+        Program program = dim.programs().get(variant);
+        if (!Objects.equals(program.drawProfile(), profile)) {
+            return new Lookup.Missing(resolved.name() + ": the variant listed for draw profile " + profile + " was translated for "
+                + program.drawProfile());
+        }
+        return found(dim, program);
+    }
+
+    private Lookup found(DimensionPipeline dim, Program program) {
+        return new Lookup.Found(new ProgramVariant(dim.folder(), program, blobs));
     }
 }

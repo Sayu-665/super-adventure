@@ -4,14 +4,17 @@ A draw profile describes how a host draw path feeds a translated program:
 its vertex attributes, host uniform blocks, host samplers, and GLSL
 expressions implementing the OptiFine/Iris *compatibility semantics*
 (`gl_Vertex`, `gl_Color`, `gl_MultiTexCoord*`, `mc_Entity`, matrices, …).
-Hosts can register more profiles at runtime, which is how other mods' draw
-paths are supported.
+Hosts can register more profiles at runtime (`sb_transform::parse_profile`,
+`sb_pipeline::CompileSettings::extra_profiles`, the JNI `registerProfile`), which
+is how other mods' draw paths are supported.
 
 ## Schema (TOML)
 
 ```toml
 name = "unique_id"
 description = "free text"
+# Optional, informational: the host draw path described (e.g. "distanthorizons:blaze3d").
+host = ""
 # Optional: the profile is used for fullscreen passes (no vertex buffer).
 fullscreen = false
 # Optional: positions are camera-relative world geometry (terrain, DH, Sodium). In the
@@ -50,6 +53,7 @@ entity = "..."      # vec4  mc_Entity (x = block id or -1, y = render type; defa
 mid_tex_coord = "..." # vec4 mc_midTexCoord / gl_MultiTexCoord3
 tangent = "..."     # vec4  at_tangent
 mid_block = "..."   # vec4  at_midBlock
+velocity = "..."    # vec3  at_velocity (default vec3(0))
 overlay = "..."     # ivec2 vaUV1 / overlay coordinates
 model_view = "..."  # mat4  gl_ModelViewMatrix / modelViewMatrix
 projection = "..."  # mat4  gl_ProjectionMatrix / projectionMatrix (GL-style, forward Z)

@@ -8,9 +8,11 @@ import dev.shaderbridge.render.mapping.PipelineMapping;
 import dev.shaderbridge.render.pipeline.PipelineShape;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
 import dev.shaderbridge.render.pipeline.ProgramResolver;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -56,6 +58,10 @@ public final class DrawSubstitution {
     private record Key(RenderPipeline vanilla, boolean shadow) {
     }
 
+    /** Feature geometry Iris keeps out of the shadow map. */
+    private static final Set<GeometryProgram> NO_FEATURE_SHADOW = EnumSet.of(GeometryProgram.PARTICLES, GeometryProgram.PARTICLES_TRANSLUCENT,
+        GeometryProgram.WEATHER);
+
     private final DimensionPipeline dim;
     private final Function<RenderPipeline, PipelineMapping> router;
     private final GeometryPrograms programs;
@@ -86,6 +92,19 @@ public final class DrawSubstitution {
         Optional<Decision> decision = resolve(vanilla, shadow);
         decision.ifPresent(d -> settled.put(key, d));
         return decision.orElseGet(Decision.Vanilla::new);
+    }
+
+    /**
+     * Whether a vanilla pipeline drawn among the frame's prepared features casts a shadow when the
+     * shadow pass draws those features again: everything the table gives a shadow program,
+     * except particles and weather, which Iris does not draw into the shadow map (their camera-facing
+     * quads would cast camera-dependent shadows).
+     *
+     * @param vanilla a vanilla pipeline
+     * @return false when the draw must leave no trace in the shadow map
+     */
+    public boolean castsFeatureShadow(RenderPipeline vanilla) {
+        return !(router.apply(vanilla) instanceof PipelineMapping.Mapped mapped) || !NO_FEATURE_SHADOW.contains(mapped.gbuffers());
     }
 
     /** @return the decision, or empty while it may still change (a variant or pipeline is compiling) */

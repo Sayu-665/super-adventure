@@ -1,5 +1,6 @@
 //! Word-level SPIR-V utilities: header checks, instruction walking, byte
-//! conversion and debug-info stripping.
+//! conversion, debug-info stripping and the opt-in NaN-tolerant `min`/`max`/`clamp`
+//! rewrite ([`nan_tolerant_min_max`]).
 //!
 //! These never panic on malformed input; every failure is a `String` error.
 
@@ -99,9 +100,11 @@ const NAN_TOLERANT: [(u32, u32); 3] = [(37, 79), (40, 80), (43, 81)];
 /// `normalize(vec3(0))` or `sqrt(-x)` through `clamp`/`max` and rely on them being
 /// flushed. `NMin(x, NaN)` is defined as `x`, `NMax` likewise, and `NClamp(NaN, lo, hi)`
 /// as `lo`, which reproduces that behaviour on every conformant driver. Every result
-/// `NMin` defines is one `FMin` may return, so no defined result changes. The operand
-/// types are unchanged (both forms take the same scalar or vector floating-point
-/// operands), so the module stays valid.
+/// `NMin` defines is one `FMin` may return, so on paper no defined result changes; in
+/// practice a driver may generate different code for the two forms, so results without
+/// any NaN can differ in the last bit (measured on lavapipe). The
+/// operand types are unchanged (both forms take the same scalar or vector
+/// floating-point operands), so the module stays valid.
 ///
 /// Integer `SMin`/`UMin`/... are not touched. Malformed modules are reported as errors
 /// without being modified.

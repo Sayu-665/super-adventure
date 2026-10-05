@@ -24,6 +24,14 @@
 //! [`compile_pack`] never panics: every problem becomes a [`Diagnostic`] (tagged with the
 //! program and stage, mapped to the original `file:line`).
 //!
+//! Caching (`docs/ARCHITECTURE.md` §7.1): a [`PackSession`] keeps a pack's preprocessed,
+//! analyzed and compiled state between compiles, keyed by content, so a recompile after an
+//! option change only redoes what changed, and [`compile_variant`] compiles further
+//! (geometry program, draw profile) variants on demand from the same caches.
+//! [`compile_pack`] runs a one-shot session and, with [`CompileSettings::cache_dir`],
+//! reuses results stored on disk under [`cache_key`], which includes the
+//! [`TRANSLATOR_REVISION`].
+//!
 //! ```no_run
 //! let pack = sb_pack::ShaderPack::open(std::path::Path::new("packs/MyPack.zip")).unwrap();
 //! let out = sb_pipeline::compile_pack(&pack, &sb_pipeline::CompileSettings::default());

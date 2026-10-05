@@ -10,16 +10,21 @@ import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
+import dev.shaderbridge.render.pipeline.PipelineDiagnostics;
 import dev.shaderbridge.render.pipeline.ProgramResolution;
 import dev.shaderbridge.render.shadow.ShadowPlan;
 import dev.shaderbridge.render.shadow.ShadowRenderer;
 import dev.shaderbridge.render.shadow.ShadowSections;
+import dev.shaderbridge.render.shadow.ShadowTransforms;
 import dev.shaderbridge.render.targets.Rgba;
 import dev.shaderbridge.uniforms.GameStateCapture;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.joml.Vector4f;
 
@@ -28,8 +33,11 @@ import org.joml.Vector4f;
  *
  * <ol>
  *   <li>{@link #beginFrame} (start of {@code LevelRenderer.render}): game state and uniforms, the
- *   frame's clears, then every step before the opaque geometry ({@code setup} on the first frame,
- *   {@code begin}, the shadow pass, {@code shadowcomp}, {@code prepare});</li>
+ *   frame's clears;</li>
+ *   <li>{@link #beforeGeometry} (once Minecraft has prepared the frame's features, before its sky
+ *   and main passes): every step before the opaque geometry ({@code setup} on the first frame,
+ *   {@code begin}, the shadow pass with the prepared entities, {@code shadowcomp},
+ *   {@code prepare});</li>
  *   <li>Minecraft draws the sky and, after the opaque Distant Horizons LODs
  *   ({@link #drawDistantOpaque}), the opaque geometry into {@link #openGbuffers gbuffers passes};</li>
  *   <li>{@link #afterOpaque}: the {@code depthtex1}/{@code depthtex2} copies, then {@code deferred};</li>
@@ -60,6 +68,10 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
     private LevelRenderer level;
     private GpuBufferSlice frameSlice;
     private boolean firstFrame = true;
+    /** The frame's prepared features while {@link #beforeGeometry} runs. */
+    private FeatureRenderDispatcher.PreparedFrame features;
+    /** Drawing features into the shadow pass failed once: they cast no shadows for this pack. */
+    private boolean featureShadowsFailed;
 
     /** @param resources the pack's resources for the current dimension; owned by this renderer */
     PackRenderer(PackResources resources) {
@@ -118,8 +130,35 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         this.level = level;
         r.sequencer.begin(firstFrame);
         firstFrame = false;
-        r.sequencer.runUntil(PassGroup.GBUFFERS_OPAQUE, this);
+        if (shadows.drawsFeatures() && !featureShadowsFailed) {
+            ShadowTransforms.startRecording();
+        } else {
+            ShadowTransforms.stop();
+        }
         return true;
+    }
+
+    /**
+     * Runs everything before the opaque geometry: {@code setup} on the first frame, {@code begin},
+     * the shadow pass, {@code shadowcomp} and {@code prepare}. Runs once Minecraft has prepared
+     * the frame's features, so the shadow pass can draw them, and before its sky and main passes.
+     *
+     * @param features the frame's prepared features, or null when they are not known (the shadow
+     *                 pass then draws no entities)
+     */
+    void beforeGeometry(FeatureRenderDispatcher.PreparedFrame features) {
+        this.features = features;
+        try {
+            r.sequencer.runUntil(PassGroup.GBUFFERS_OPAQUE, this);
+        } finally {
+            this.features = null;
+            ShadowTransforms.stop();
+        }
+    }
+
+    /** @return the diagnostics of the pack in this dimension (deduplicated, also shown in the pack screen) */
+    PipelineDiagnostics diagnostics() {
+        return r.diagnostics;
     }
 
     /**
@@ -249,9 +288,52 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
             public void drawDistant() {
                 distant.drawShadow(flips, frameSlice);
             }
+
+            @Override
+            public void drawFeatures() {
+                drawShadowFeatures(flips);
+            }
         });
         if (r.dim.targets().shadow().enabled()) {
             r.targets.shadowColorTargets().forEach(pair -> r.mips.generate(pair, flips.shadowRead(pair.spec().index())));
+        }
+    }
+
+    /**
+     * The shadow pass's feature step: the frame's prepared opaque features drawn again with the
+     * shadow camera's model-view ({@link ShadowTransforms}). A failure here (a feature renderer
+     * that cannot draw into the shadow pass) turns feature shadows off for this pack and is
+     * reported; the frame goes on.
+     */
+    private void drawShadowFeatures(FlipState flips) {
+        FeatureRenderDispatcher.PreparedFrame prepared = features;
+        if (featureShadowsFailed) {
+            return;
+        }
+        if (prepared == null) {
+            r.diagnostics.report(r.dim.folder() + ": Minecraft's prepared features were not handed over (LevelRendererMixin did not apply); "
+                + "entities cast no shadows");
+            return;
+        }
+        if (prepared.isEmpty()) {
+            ShadowTransforms.stop();
+            return;
+        }
+        Matrix4f viewInverse = new Matrix4f(r.frameState.gbufferModelView()).invert();
+        Map<GpuBufferSlice, GpuBufferSlice> transforms = ShadowTransforms.writeShadowCopies(r.frameState.shadowModelView(), viewInverse);
+        if (transforms.isEmpty()) {
+            r.diagnostics.report(r.dim.folder() + ": the features' transforms were not recorded (DynamicGpuDataMixin did not apply); "
+                + "entities cast no shadows");
+            return;
+        }
+        RenderPass pass = geometry.openShadowFeatures("ShaderBridge shadow features", flips, frameSlice, transforms);
+        try (pass) {
+            prepared.executeSolid(pass);
+        } catch (RuntimeException e) {
+            featureShadowsFailed = true;
+            r.diagnostics.report(r.dim.folder() + ": entities stopped casting shadows, drawing them into the shadow pass failed: " + e);
+        } finally {
+            geometry.closed(pass);
         }
     }
 

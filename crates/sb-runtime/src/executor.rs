@@ -10,7 +10,7 @@ use crate::resources::{Arena, BufferId, ImageDesc, ImageId, SamplerKey};
 use crate::scene::dh::LodCoverage;
 use crate::scene::entity::EntityInstance;
 use crate::scene::formats::VertexLayout;
-use crate::scene::{CpuMesh, CpuScene, SubDraw};
+use crate::scene::{CpuMesh, CpuScene, SceneParams, SubDraw};
 use crate::stats::FrameStats;
 use crate::texel;
 use crate::textures::{self, TexDim, TextureData};
@@ -186,7 +186,6 @@ pub(crate) enum ProgramState {
 pub(crate) struct Executor<'r> {
     pub gpu: &'r mut Gpu,
     pub arena: Arena,
-    pub req: &'r RenderRequest<'r>,
     pub dim: &'r DimensionPipeline,
     pub stats: FrameStats,
     pub depth: DepthConfig,
@@ -203,6 +202,11 @@ pub(crate) struct Executor<'r> {
     /// The last rendered frame's values for the previous-frame uniforms (`None` before
     /// the first frame).
     pub previous_frame: Option<crate::uniforms::PreviousFrame>,
+    /// Scene parameters the next frame's uniforms are computed from (view angles, field
+    /// of view, time, weather). A render keeps the request's [`SceneParams`] for every
+    /// frame; tests change it between frames to move the view. The geometry is built
+    /// once from the request.
+    pub view: SceneParams,
     pub center_buffer: BufferId,
     pub dh_enabled: bool,
     pub unified: bool,
@@ -317,7 +321,7 @@ impl<'r> Executor<'r> {
         }
     }
 
-    pub fn new(gpu: &'r mut Gpu, req: &'r RenderRequest<'r>, dim: &'r DimensionPipeline) -> Result<Self, RuntimeError> {
+    pub fn new(gpu: &'r mut Gpu, req: &RenderRequest<'_>, dim: &'r DimensionPipeline) -> Result<Self, RuntimeError> {
         let depth = DepthConfig::new(req.depth_mode, gpu)?;
         let mut arena = Arena::default();
         let mut stats = FrameStats::default();
@@ -326,7 +330,6 @@ impl<'r> Executor<'r> {
             Ok(parts) => Ok(Self {
                 gpu,
                 arena,
-                req,
                 dim,
                 stats,
                 depth,
@@ -341,6 +344,7 @@ impl<'r> Executor<'r> {
                 flips: Flips::default(),
                 center_depth: 1.0,
                 previous_frame: None,
+                view: req.scene.clone(),
                 center_buffer: parts.center_buffer,
                 dh_enabled: parts.dh_enabled,
                 unified: parts.unified,

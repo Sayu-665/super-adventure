@@ -300,7 +300,9 @@ pub struct BufferSizeOverride {
 }
 
 impl BufferSizeOverride {
-    /// The model representation, if both components have the same kind.
+    /// The model representation: [`TargetSize::Relative`] or [`TargetSize::Absolute`] when
+    /// both components have the same kind, [`TargetSize::PerAxis`] when they are mixed.
+    /// Always `Some`.
     pub fn to_target_size(self) -> Option<TargetSize> {
         match (self.width, self.height) {
             (SizeValue::Relative(x), SizeValue::Relative(y)) => Some(TargetSize::Relative { x, y }),
@@ -849,15 +851,7 @@ fn parse_buffer_size(
             if legacy {
                 ctx.legacy_sizes.insert(index);
             }
-            if o.to_target_size().is_none() {
-                ctx.at(
-                    e,
-                    Diagnostic::warning(
-                        "props.mixed-size",
-                        format!("`{}` mixes absolute and relative sizes, which the pipeline model cannot represent", e.key),
-                    ),
-                );
-            }
+            // Mixed absolute/relative sizes are valid (Iris); the model keeps them per axis.
             p.buffer_sizes.insert(index, o);
         }
         _ => ctx.bad(
@@ -1954,9 +1948,16 @@ mod tests {
                 height: SizeValue::Absolute(64)
             }
         );
-        assert_eq!(mixed.to_target_size(), None);
+        // Iris accepts mixed sizes; the model keeps them per axis.
+        assert_eq!(
+            mixed.to_target_size(),
+            Some(TargetSize::PerAxis {
+                x: sb_core::model::AxisSize::Relative(0.5),
+                y: sb_core::model::AxisSize::Absolute(64)
+            })
+        );
         assert_eq!(p.buffer_sizes.len(), 3);
-        assert_eq!(codes(&d), vec!["props.mixed-size", "props.bad-value"]);
+        assert_eq!(codes(&d), vec!["props.bad-value"]);
         assert_eq!(parse_buffer_name("gcolor"), Some(0));
         assert_eq!(parse_buffer_name("gaux4"), Some(7));
         assert_eq!(parse_buffer_name("colortex15"), Some(15));

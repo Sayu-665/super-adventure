@@ -3,7 +3,7 @@
 //! copy, translucent casters) → shadowcomp → prepare → opaque gbuffers (sky, DH LODs,
 //! terrain, entities) → centre depth sample, depthtex2 and depthtex1 copies (Iris'
 //! `beginHand` / `beginTranslucents`), dhDepthTex1 copy → deferred → translucent gbuffers
-//! (water, DH water) → composite → final → end-of-frame copies.
+//! (DH water, water) → composite → final → end-of-frame copies.
 
 use crate::descriptors::BindContext;
 use crate::error::{RuntimeError, VkResultExt};
@@ -78,6 +78,44 @@ struct Batch {
     shadow: bool,
 }
 
+/// One kind of scene geometry a gbuffers geometry group draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SceneDraw {
+    Sky,
+    /// Opaque Distant Horizons LODs (`dh_terrain`).
+    DhTerrain,
+    /// Opaque terrain (solid and cutout).
+    Terrain,
+    Entities,
+    /// Translucent Distant Horizons LODs (`dh_water`).
+    DhWater,
+    /// Translucent terrain (vanilla water).
+    TranslucentTerrain,
+}
+
+/// The scene geometry of the opaque (`translucent == false`) or translucent gbuffers group,
+/// in draw order. Distant Horizons' LODs come before Minecraft's geometry of their kind, as
+/// DH draws them for Iris (and as the Java host draws them): the opaque LODs before the
+/// opaque terrain, and `dh_water` before the translucent terrain, so vanilla water blends
+/// over the LOD water behind it.
+fn gbuffers_draws(translucent: bool, dh: bool) -> Vec<SceneDraw> {
+    let mut draws = Vec::new();
+    if translucent {
+        if dh {
+            draws.push(SceneDraw::DhWater);
+        }
+        draws.push(SceneDraw::TranslucentTerrain);
+    } else {
+        draws.push(SceneDraw::Sky);
+        if dh {
+            draws.push(SceneDraw::DhTerrain);
+        }
+        draws.push(SceneDraw::Terrain);
+        draws.push(SceneDraw::Entities);
+    }
+    draws
+}
+
 /// Rendering scope: colour attachments (`None` = unused slot) and depth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Scope {
@@ -85,40 +123,55 @@ struct Scope {
     depth: Option<ImageId>,
 }
 
-/// Vertices of a composite-style (`fullscreen` profile) draw: Iris' [0,1]^2 quad as two
+/// Vertices of a composite-style (`fullscreen` profile) draw: Iris' `[0,1]^2` quad as two
 /// triangles, generated from `gl_VertexIndex` without vertex buffers.
 pub(crate) const FULLSCREEN_VERTICES: u32 = 6;
 
 impl Executor<'_> {
     /// Render `frames` frames.
     pub(crate) fn run(&mut self, frames: u32) -> Result<(), RuntimeError> {
-        let cmd = self.gpu.allocate_command_buffer()?;
-        self.arena.command_buffers.push(cmd);
+        let cmd = self.frame_command_buffer()?;
         for frame in 0..frames.max(1) {
-            let fs = self.frame_state(frame);
-            let frame_block = self.frame_block(&fs);
-            let mut attempts = 0;
-            loop {
-                self.record_frame(cmd, frame, &fs, &frame_block)?;
-                if !self.ring.overflow {
-                    break;
-                }
-                attempts += 1;
-                if attempts > 6 {
-                    return Err(RuntimeError::Unsupported("uniform data of one frame exceeds 512 MiB".into()));
-                }
-                self.grow_ring()?;
-            }
-            self.gpu.submit_and_wait(cmd)?;
-            self.stats.frames = frame + 1;
-            // Iris' previous-frame uniforms report what the frame before reported.
-            self.previous_frame = Some(fs.as_previous());
-            if let Some(m) = self.arena.buffer(self.center_buffer).mapped_ref() {
-                let d = f32::from_le_bytes([m[0], m[1], m[2], m[3]]);
-                self.center_depth = self.depth.gl_depth(d);
-            }
+            self.run_frame(cmd, frame)?;
         }
         Ok(())
+    }
+
+    /// A command buffer for [`Executor::run_frame`] (freed with the arena).
+    pub(crate) fn frame_command_buffer(&mut self) -> Result<vk::CommandBuffer, RuntimeError> {
+        let cmd = self.gpu.allocate_command_buffer()?;
+        self.arena.command_buffers.push(cmd);
+        Ok(cmd)
+    }
+
+    /// Record frame number `frame` into `cmd`, submit it and wait for it. The frame's
+    /// uniforms come from [`Executor::view`] and the camera, and its previous-frame
+    /// uniforms from the frame rendered before (the first frame is its own previous
+    /// frame). Returns the frame's uniform state.
+    pub(crate) fn run_frame(&mut self, cmd: vk::CommandBuffer, frame: u32) -> Result<FrameState, RuntimeError> {
+        let fs = self.frame_state(frame);
+        let frame_block = self.frame_block(&fs);
+        let mut attempts = 0;
+        loop {
+            self.record_frame(cmd, frame, &fs, &frame_block)?;
+            if !self.ring.overflow {
+                break;
+            }
+            attempts += 1;
+            if attempts > 6 {
+                return Err(RuntimeError::Unsupported("uniform data of one frame exceeds 512 MiB".into()));
+            }
+            self.grow_ring()?;
+        }
+        self.gpu.submit_and_wait(cmd)?;
+        self.stats.frames = frame + 1;
+        // Iris' previous-frame uniforms report what the frame before reported.
+        self.previous_frame = Some(fs.as_previous());
+        if let Some(m) = self.arena.buffer(self.center_buffer).mapped_ref() {
+            let d = f32::from_le_bytes([m[0], m[1], m[2], m[3]]);
+            self.center_depth = self.depth.gl_depth(d);
+        }
+        Ok(fs)
     }
 
     fn grow_ring(&mut self) -> Result<(), RuntimeError> {
@@ -132,7 +185,7 @@ impl Executor<'_> {
     fn frame_state(&self, frame: u32) -> FrameState {
         let ext = self.targets.extent;
         FrameState::new(&FrameInputs {
-            scene: &self.req.scene,
+            scene: &self.view,
             camera: self.scene.camera,
             width: ext.width,
             height: ext.height,
@@ -437,12 +490,9 @@ impl Executor<'_> {
             }
             PassGroup::GbuffersOpaque => {
                 let mut batches = Vec::new();
-                self.sky_batches(&mut batches, fs);
-                if self.dh_enabled {
-                    self.dh_batches(&mut batches, fs, false, false);
+                for draw in gbuffers_draws(false, self.dh_enabled) {
+                    self.scene_batches(&mut batches, fs, draw);
                 }
-                self.terrain_batches(&mut batches, fs, false, false);
-                self.entity_batches(&mut batches, fs, false);
                 self.draw_batches(cmd, &batches, fs, frame_offset)?;
                 // Iris `beginHand`: the centre depth sample and depthtex2 (no translucents,
                 // no hand), then `beginTranslucents`: depthtex1 (no translucents) before
@@ -455,14 +505,25 @@ impl Executor<'_> {
             }
             _ => {
                 let mut batches = Vec::new();
-                self.terrain_batches(&mut batches, fs, false, true);
-                if self.dh_enabled {
-                    self.dh_batches(&mut batches, fs, false, true);
+                for draw in gbuffers_draws(true, self.dh_enabled) {
+                    self.scene_batches(&mut batches, fs, draw);
                 }
                 self.draw_batches(cmd, &batches, fs, frame_offset)?;
             }
         }
         Ok(())
+    }
+
+    /// Appends the gbuffers batches of one kind of scene geometry.
+    fn scene_batches(&self, out: &mut Vec<Batch>, fs: &FrameState, draw: SceneDraw) {
+        match draw {
+            SceneDraw::Sky => self.sky_batches(out, fs),
+            SceneDraw::DhTerrain => self.dh_batches(out, fs, false, false),
+            SceneDraw::Terrain => self.terrain_batches(out, fs, false, false),
+            SceneDraw::Entities => self.entity_batches(out, fs, false),
+            SceneDraw::DhWater => self.dh_batches(out, fs, false, true),
+            SceneDraw::TranslucentTerrain => self.terrain_batches(out, fs, false, true),
+        }
     }
 
     /// Copy the depth at the screen centre (GL convention after readback) for
@@ -1245,5 +1306,91 @@ impl Executor<'_> {
         for (a, m) in copies {
             self.copy_image(cmd, a, m);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::SceneParams;
+    use crate::uniforms::builtin_value;
+    use crate::{NoTextures, RenderRequest, Runtime, RuntimeOptions};
+    use sb_core::model::DepthMode;
+
+    /// Distant Horizons' LODs precede Minecraft's geometry of their kind, as DH draws them
+    /// for Iris and as the Java host draws them: `dh_water` is drawn before the translucent
+    /// terrain (vanilla water), not after it.
+    #[test]
+    fn dh_lods_precede_the_vanilla_geometry_of_their_kind() {
+        use SceneDraw::*;
+        assert_eq!(gbuffers_draws(true, true), vec![DhWater, TranslucentTerrain]);
+        assert_eq!(gbuffers_draws(false, true), vec![Sky, DhTerrain, Terrain, Entities]);
+        assert_eq!(gbuffers_draws(true, false), vec![TranslucentTerrain]);
+        assert_eq!(gbuffers_draws(false, false), vec![Sky, Terrain, Entities]);
+    }
+
+    /// Regression (review F2): the executor hands every frame the values of the frame it
+    /// rendered before. The previous-frame uniforms used to report the current frame's
+    /// values, and the static camera of normal renders cannot tell the two apart, so this
+    /// test turns, zooms and moves the view between executed frames.
+    #[test]
+    fn executed_frames_feed_the_previous_frame_uniforms() {
+        let mut rt = match Runtime::new(&RuntimeOptions { validation: true, prefer_cpu_device: true, device_name_filter: None }) {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("skipping: {e}");
+                return;
+            }
+        };
+        let (pack, blobs) = crate::testutil::mini_pack();
+        let req = RenderRequest {
+            pack: &pack,
+            blobs: &blobs,
+            dimension: "world0",
+            width: 32,
+            height: 24,
+            frames: 3,
+            scene: SceneParams { render_distance: 1, dh_render_distance: 0, ..Default::default() },
+            depth_mode: DepthMode::ForwardZeroToOne,
+            textures: &NoTextures,
+            capture_targets: false,
+        };
+        let mut exec = Executor::new(&mut rt.gpu, &req, &pack.dimensions[0]).expect("executor");
+        let cmd = exec.frame_command_buffer().expect("command buffer");
+        let first = exec.run_frame(cmd, 0).expect("frame 0");
+        exec.view.yaw += 35.0;
+        exec.view.pitch = -12.0;
+        exec.view.fov = 95.0;
+        exec.scene.camera[0] += 3.5;
+        exec.scene.camera[2] -= 1.25;
+        let second = exec.run_frame(cmd, 1).expect("frame 1");
+        let third = exec.run_frame(cmd, 2).expect("frame 2");
+        assert_eq!(exec.stats.frames, 3);
+        assert!(exec.stats.programs_skipped.is_empty(), "{:?}", exec.stats.programs_skipped);
+
+        // The first frame is its own previous frame; every later one sees the frame before.
+        assert_eq!(first.previous, first.as_previous());
+        assert_eq!(second.previous, first.as_previous());
+        assert_eq!(third.previous, second.as_previous());
+        let value = |name: &str, f: &FrameState| builtin_value(name, f, &DrawState::new(f));
+        for (prev, current) in [
+            ("gbufferPreviousModelView", "gbufferModelView"),
+            ("gbufferPreviousProjection", "gbufferProjection"),
+            ("dhPreviousProjection", "dhProjection"),
+            ("vxModelViewPrev", "vxModelView"),
+            ("vxProjPrev", "vxProj"),
+            ("previousCameraPosition", "cameraPosition"),
+            ("previousCameraPositionInt", "cameraPositionInt"),
+            ("previousCameraPositionFract", "cameraPositionFract"),
+        ] {
+            assert!(value(prev, &second).is_some(), "{prev}");
+            assert_eq!(value(prev, &second), value(current, &first), "{prev} on the frame after the view changed");
+            assert_ne!(value(prev, &second), value(current, &second), "{prev} reads the current frame");
+            // The view did not change between the second and the third frame.
+            assert_eq!(value(prev, &third), value(current, &third), "{prev} once the view is still again");
+        }
+        drop(exec);
+        let messages: Vec<String> = rt.gpu.take_messages().iter().map(|m| m.render()).collect();
+        assert!(messages.is_empty(), "{messages:#?}");
     }
 }

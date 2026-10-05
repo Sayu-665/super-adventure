@@ -144,7 +144,23 @@ public final class TerrainVertexEncoder {
                 putMidBlock(buffer, at + layout.midBlock(), record, pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]);
             }
         }
-        for (int i = quadCount * QUAD; i < vertexCount; i++) {
+        encodeNeutral(vertices, layout, quadCount * QUAD, vertexCount);
+    }
+
+    /**
+     * Writes neutral extension attributes (normal up, no block id or render type, the vertex's own
+     * atlas coordinates as the centre, tangent +X, no block offset or emission) to a range of
+     * vertices that do not form quads.
+     *
+     * @param vertices the vertices, starting at the buffer's position (native byte order)
+     * @param layout   where the elements are
+     * @param from     first vertex
+     * @param to       end of the range (exclusive)
+     */
+    public static void encodeNeutral(ByteBuffer vertices, Layout layout, int from, int to) {
+        ByteBuffer buffer = vertices.duplicate().order(ByteOrder.nativeOrder());
+        int origin = vertices.position();
+        for (int i = from; i < to; i++) {
             int at = origin + i * layout.stride();
             putSnorm4(buffer, at + layout.normal(), 0f, 1f, 0f, 0f);
             buffer.putShort(at + layout.entity(), (short) NONE);

@@ -10,7 +10,7 @@
   "entrypoints": {
     "client": ["dev.shaderbridge.ShaderBridgeClient"]
   },
-  "mixins": ["shaderbridge.mixins.json"],
+  "mixins": ["shaderbridge.mixins.json", "shaderbridge-sodium.mixins.json"],
   "accessWidener": "shaderbridge.classtweaker",
   "depends": {
     "fabricloader": ">=0.19.5",
@@ -19,9 +19,11 @@
     "fabric-api": "*"
   },
   "suggests": {
-    "distanthorizons": ">=3.3.0"
+    "distanthorizons": ">=3.3.0",
+    "sodium": ">=0.9.2"
   },
   "breaks": {
-    "iris": "*"
+    "iris": "*",
+    "distanthorizons": "<3.3.0"
   }
 }

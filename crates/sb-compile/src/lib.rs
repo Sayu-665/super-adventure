@@ -2,17 +2,21 @@
 //!
 //! The SPIR-V back end of ShaderBridge (see `docs/ARCHITECTURE.md`, §3):
 //!
-//! * [`compile_glsl`] compiles the Vulkan GLSL 4.50 emitted by `sb-transform` to
+//! * [`compile_glsl`] compiles the Vulkan GLSL 4.60 emitted by `sb-transform` to
 //!   SPIR-V with glslang (Vulkan 1.2 / SPIR-V 1.5 by default, Vulkan GLSL rules,
 //!   entry point `main`, debug names kept, no auto-mapping unless asked).
 //!   Failures carry parsed glslang messages mapped back to the original pack
 //!   files through the transformer's line map ([`CompileFailure::to_diagnostics`]).
-//! * [`reflect`] extracts descriptors, block layouts, push constants, the stage
+//! * [`reflect()`] extracts descriptors, block layouts, push constants, the stage
 //!   interface (with interpolation qualifiers, interface blocks expanded per
 //!   member) and the compute work-group size from a SPIR-V module, using spirq
 //!   plus a word-level scan for what spirq does not expose.
 //! * [`validate`] runs `spirv-val` (when installed) and [`disassemble`] runs
 //!   `spirv-dis`.
+//! * [`module`] holds word-level SPIR-V utilities, among them the opt-in rewrite
+//!   that makes float `min`/`max`/`clamp` NaN-tolerant
+//!   ([`CompileOptions::nan_tolerant_min_max`], off by default; see
+//!   `docs/ARCHITECTURE.md` §8 for why).
 //!
 //! Every function is thread-safe; [`compile_glsl`] is designed to be called from
 //! many rayon workers at once. Each compilation runs glslang on its own
@@ -21,7 +25,7 @@
 //! pool memory is released after every compile. Inputs that would exhaust that
 //! stack, memory or time inside glslang (deep expressions, macro bombs,
 //! exponentially nested structs) are rejected with an error instead of
-//! aborting or hanging the process; [`reflect`] likewise bounds the types it
+//! aborting or hanging the process; [`reflect()`] likewise bounds the types it
 //! expands, and external tools are killed after 60 s.
 //!
 //! ## Limitations

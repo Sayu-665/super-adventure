@@ -9,10 +9,12 @@ import dev.shaderbridge.model.IndirectDispatch;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.model.ProgramKind;
 import dev.shaderbridge.model.ShaderStage;
+import dev.shaderbridge.model.StageModule;
 import dev.shaderbridge.model.WorkGroups;
 import dev.shaderbridge.render.RenderFixture;
 import dev.shaderbridge.render.pipeline.ProgramVariant;
 import dev.shaderbridge.render.pipeline.SpirvReflection.ScalarClass;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +86,30 @@ class RawAdmissionTest {
         String reason = assertInstanceOf(RawAdmission.Result.Rejected.class, admit(asComposite, new EnabledFeatures(EnumSet.allOf(RawFeature.class),
             0, 0))).reason();
         assertTrue(reason.contains("vertex attributes"), reason);
+    }
+
+    /**
+     * The raw path builds no tessellation pipeline, so no pipeline of it would need
+     * {@code VkPipelineTessellationDomainOriginStateCreateInfo{LOWER_LEFT}} (ARCHITECTURE.md §4):
+     * tessellated composite-style programs are rejected (a fullscreen draw of triangles cannot feed
+     * patches) and geometry programs never run there.
+     */
+    @Test
+    void tessellatedProgramsNeverReachTheRawPath() {
+        EnabledFeatures all = new EnabledFeatures(EnumSet.allOf(RawFeature.class), 0, 0);
+        Program composite = GLIMMER.program("world0/final", "fullscreen");
+        StageModule vertex = composite.stage(ShaderStage.VERTEX).orElseThrow();
+        List<StageModule> stages = new ArrayList<>(composite.stages());
+        stages.add(1, new StageModule(ShaderStage.TESS_CONTROL, vertex.entryPoint(), vertex.spirv(), null, null, "final.tcs"));
+        stages.add(2, new StageModule(ShaderStage.TESS_EVAL, vertex.entryPoint(), vertex.spirv(), null, null, "final.tes"));
+        Program tessellated = new Program(composite.name(), composite.kind(), composite.drawProfile(), true, stages, composite.drawBuffers(),
+            composite.outputSlots(), composite.outputTypes(), composite.blend(), composite.blendPerBuffer(), composite.alphaTest(), composite.viewport(),
+            composite.mipmapTargets(), composite.bindingsUsed(), composite.vertexInputs(), composite.pushConstantSize(), composite.compute(),
+            composite.cull(), composite.synthesizedFrom());
+        String reason = assertInstanceOf(RawAdmission.Result.Rejected.class, admit(tessellated, all)).reason();
+        assertTrue(reason.contains("tessellation"), reason);
+        Program terrain = GLIMMER.program("world0/gbuffers_skybasic", "vanilla_position");
+        assertInstanceOf(RawAdmission.Result.Rejected.class, admit(Models.with(terrain, terrain.kind(), null), all));
     }
 
     @Test

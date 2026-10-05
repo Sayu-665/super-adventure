@@ -14,7 +14,7 @@
 //!   (opaque casters, shadowtex1 copy, translucent casters) → `shadowcomp` → `prepare` →
 //!   opaque gbuffers (sky, DH LODs, terrain, entities) → centre depth sample and depthtex2
 //!   copy (`beginHand`), depthtex1 copy (`beginTranslucents`) → `deferred` → translucent
-//!   gbuffers (water, DH water) → `composite` → `final` → end-of-frame alt → main copies;
+//!   gbuffers (DH water, water) → `composite` → `final` → end-of-frame alt → main copies;
 //!   composite-style programs read the current image of each colortex and write the
 //!   other, as in Iris' `BufferFlipper`, with the model's `flip_state` as the authority;
 //! * every attachment is written only where the fragment shader declares an output of

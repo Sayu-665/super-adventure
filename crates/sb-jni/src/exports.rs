@@ -1,5 +1,5 @@
 //! The JNI exports of `dev.shaderbridge.natives.ShaderBridgeNative`. Each one converts its
-//! arguments, calls the matching [`api`](crate::api) function and converts the result.
+//! arguments, calls the matching [`api`] function and converts the result.
 //!
 //! Every export:
 //! * clears this thread's last error on entry (except `lastError` itself);

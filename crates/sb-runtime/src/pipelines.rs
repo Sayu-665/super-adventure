@@ -483,7 +483,7 @@ pub(crate) fn attribute_class(f: vk::Format) -> &'static str {
 }
 
 /// Binding used for vertex inputs the layout does not provide: stride 0 over
-/// [`ATTRIBUTE_DEFAULTS`], so they read GL's default `(0, 0, 0, 1)`.
+/// [`attribute_defaults`], so they read GL's default `(0, 0, 0, 1)`.
 pub(crate) const NULL_VERTEX_BINDING: u32 = 7;
 
 /// Contents of the buffer behind [`NULL_VERTEX_BINDING`]: `vec4(0, 0, 0, 1)` as floats

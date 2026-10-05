@@ -42,11 +42,14 @@ pub struct CompileOptions {
     pub suppress_warnings: bool,
     /// Make `min`, `max` and `clamp` on floats return the non-NaN operand, as NVIDIA
     /// and AMD GPUs do: GLSL.std.450 `FMin`/`FMax`/`FClamp` are rewritten to
-    /// `NMin`/`NMax`/`NClamp` ([`crate::module::nan_tolerant_min_max`]). Shader packs
-    /// are tuned on those GPUs; GLSL and `FMin` leave the result undefined when an
-    /// operand is NaN, while `NMin` defines it as the other operand. The rewrite never
-    /// changes a defined result. Default `true`; `docs/ARCHITECTURE.md` §8 has the
-    /// measurements behind the default (a no-op on lavapipe, which already flushes).
+    /// `NMin`/`NMax`/`NClamp` ([`crate::module::nan_tolerant_min_max`]). GLSL and `FMin`
+    /// leave the result undefined when an operand is NaN, while `NMin` defines it as the
+    /// other operand.
+    ///
+    /// Default `false` (opt-in). It is not output-neutral: drivers compile the two
+    /// forms differently, so results can change in the last bit even without NaNs
+    /// (lavapipe: 59 pixels of kappa-shader differ by 1/255), and no pack has been
+    /// found that it fixes. `docs/ARCHITECTURE.md` §8 has the measurements.
     pub nan_tolerant_min_max: bool,
 }
 
@@ -61,7 +64,7 @@ impl Default for CompileOptions {
             auto_map_locations: false,
             debug_info: false,
             suppress_warnings: false,
-            nan_tolerant_min_max: true,
+            nan_tolerant_min_max: false,
         }
     }
 }

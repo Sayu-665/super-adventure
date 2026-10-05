@@ -345,6 +345,28 @@ pub fn writes_shadow_targets(unit: &Unit) -> bool {
     }
 }
 
+/// Draw buffers of a pack's own `dh_shadow`: always shadowcolor0 and shadowcolor1, so that
+/// fragment output `i` lands in shadowcolor `i`. Iris builds the DH shadow framebuffer with
+/// draw buffers `{0, 1}` and never consults the program's `RENDERTARGETS`/`DRAWBUFFERS`
+/// (`IrisRenderingPipeline.createDHFramebufferShadow`); outputs past 1 have no attachment
+/// and are discarded. A directive that would route the outputs differently (anything but
+/// `0` or `0,1`) gets an info diagnostic, since it is ignored.
+fn dh_shadow_draw_buffers(directive: Option<&[u32]>, diags: &mut Diagnostics) -> Vec<u32> {
+    const IRIS: [u32; 2] = [0, 1];
+    if let Some(dir) = directive
+        && !IRIS.starts_with(dir)
+    {
+        diags.push(Diagnostic::info(
+            "dir.dh-shadow-draw-buffers",
+            format!(
+                "dh_shadow always draws into shadowcolor0 and shadowcolor1 (output i to shadowcolor i, as in Iris); \
+                 its draw buffer directive {dir:?} is ignored"
+            ),
+        ));
+    }
+    IRIS.to_vec()
+}
+
 /// Iris `ProgramId` order of the geometry programs (the order `ProgramSet` scans their
 /// const directives), with `final` last.
 const IRIS_PROGRAM_ID_ORDER: [&str; 39] = [
@@ -421,7 +443,11 @@ pub fn scan_directives(
         let mut d = Diagnostics::new();
         let parsed = directives::parse_draw_buffers(code, &mut d);
         out.explicit_draw_buffers[u] = parsed.is_some();
-        let mut buffers = parsed.unwrap_or_else(|| if shadow { vec![0, 1] } else { vec![0] });
+        let mut buffers = if unit.geometry() == Some(GeometryProgram::DhShadow) {
+            dh_shadow_draw_buffers(parsed.as_deref(), &mut d)
+        } else {
+            parsed.unwrap_or_else(|| if shadow { vec![0, 1] } else { vec![0] })
+        };
         let limit = if shadow { directives::MAX_SHADOWCOLOR } else { directives::MAX_COLORTEX };
         let before = buffers.len();
         buffers.retain(|b| *b < limit);

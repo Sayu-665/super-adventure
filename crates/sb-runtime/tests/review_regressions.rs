@@ -325,46 +325,58 @@ fn tessellated_terrain_keeps_gl_winding() {
 /// `dh_shadow` draws in the shadow pass into shadowcolor targets: Iris gives it a
 /// framebuffer of shadowcolor0/1 on the shadow depth (`createDHFramebufferShadow`), and
 /// sb-pipeline and the Java host classify it as a shadow program. Its draw buffers are
-/// shadowcolor indices, so the runtime must allocate shadowcolor images for them (it
-/// used to allocate a colortex image instead and send the output to a sink).
+/// shadowcolor indices, so the runtime must allocate shadowcolor images for them.
+///
+/// The runtime used to classify them as colortex indices. With shared shadow attachments
+/// (`shadow_attachments`, which sb-pipeline fills with dh_shadow's buffers) that only
+/// allocated a spurious colortex image, since the shared list allocated the shadowcolor
+/// image anyway. Without shared attachments (more shadow draw buffers than colour
+/// attachments, so every shadow program binds its own), dh_shadow's output had no image
+/// and went to a sink. Both configurations are checked.
 #[test]
 fn dh_shadow_writes_shadowcolor_targets() {
     let _g = GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut rt) = runtime() else { return };
-    let (mut pack, mut blobs) = test_pack(Variant { native_dh: true, ..Variant::default() });
-    let vsh = common::shaders::dh_vsh().replace("dhProjection * (gbufferModelView", "shadowProjection * (shadowModelView");
-    assert!(vsh.contains("shadowProjection * (shadowModelView"), "dh_vsh changed");
-    // Physical location 1: shadowcolor3 is slot 1 of the shared shadow attachments.
-    let fsh = "#version 460\nlayout(location = 1) out vec4 sb_FragData0;\nvoid main() { sb_FragData0 = vec4(1.0, 0.0, 1.0, 1.0); }\n";
-    let vs = blobs.push_spirv(&compile(&vsh, ShaderStage::Vertex));
-    let fs = blobs.push_spirv(&compile(fsh, ShaderStage::Fragment));
-    let d = dim(&mut pack);
-    let template = d.programs.iter().find(|p| p.name == "dh_terrain").expect("dh_terrain").clone();
-    let mut dh_shadow = template;
-    dh_shadow.name = "dh_shadow".into();
-    dh_shadow.kind = ProgramKind::Geometry { program: sb_core::program::GeometryProgram::DhShadow };
-    for s in &mut dh_shadow.stages {
-        s.spirv = Some(if s.stage == ShaderStage::Vertex { vs } else { fs });
-        s.glsl_vulkan = None;
-    }
-    dh_shadow.draw_buffers = vec![3];
-    dh_shadow.output_slots = vec![1];
-    dh_shadow.output_types = vec!["float".into()];
-    dh_shadow.bindings_used.clear();
-    d.programs.push(dh_shadow);
-    let index = d.programs.len() as u32 - 1;
-    d.geometry.insert(sb_core::program::GeometryProgram::DhShadow, GeometrySlot { program: index, resolved_from: sb_core::program::GeometryProgram::DhShadow, variants: Default::default() });
-    d.distant_horizons.shadow_enabled = true;
-    d.shadow_attachments = vec![0, 3];
+    for shared in [true, false] {
+        let (mut pack, mut blobs) = test_pack(Variant { native_dh: true, ..Variant::default() });
+        let vsh = common::shaders::dh_vsh().replace("dhProjection * (gbufferModelView", "shadowProjection * (shadowModelView");
+        assert!(vsh.contains("shadowProjection * (shadowModelView"), "dh_vsh changed");
+        // Shared: shadowcolor3 is slot 1 of the shared shadow attachments [0, 3], so the
+        // output is at physical location 1. Per program: the program's own attachments are
+        // its draw buffers, so the output is at location 0.
+        let location = if shared { 1 } else { 0 };
+        let fsh = format!("#version 460\nlayout(location = {location}) out vec4 sb_FragData0;\nvoid main() {{ sb_FragData0 = vec4(1.0, 0.0, 1.0, 1.0); }}\n");
+        let vs = blobs.push_spirv(&compile(&vsh, ShaderStage::Vertex));
+        let fs = blobs.push_spirv(&compile(&fsh, ShaderStage::Fragment));
+        let d = dim(&mut pack);
+        let template = d.programs.iter().find(|p| p.name == "dh_terrain").expect("dh_terrain").clone();
+        let mut dh_shadow = template;
+        dh_shadow.name = "dh_shadow".into();
+        dh_shadow.kind = ProgramKind::Geometry { program: sb_core::program::GeometryProgram::DhShadow };
+        for s in &mut dh_shadow.stages {
+            s.spirv = Some(if s.stage == ShaderStage::Vertex { vs } else { fs });
+            s.glsl_vulkan = None;
+        }
+        dh_shadow.draw_buffers = vec![3];
+        dh_shadow.output_slots = vec![location];
+        dh_shadow.output_types = vec!["float".into()];
+        dh_shadow.bindings_used.clear();
+        d.programs.push(dh_shadow);
+        let index = d.programs.len() as u32 - 1;
+        d.geometry.insert(sb_core::program::GeometryProgram::DhShadow, GeometrySlot { program: index, resolved_from: sb_core::program::GeometryProgram::DhShadow, variants: Default::default() });
+        d.distant_horizons.shadow_enabled = true;
+        d.shadow_attachments = if shared { vec![0, 3] } else { Vec::new() };
+        assert!(!d.targets.shadowcolor.iter().any(|t| t.index == 3), "the pack already declares shadowcolor3");
 
-    let out = render(&mut rt, &pack, &blobs, small_scene(), (160, 90), 1, true);
-    assert_no_validation_messages(&out);
-    assert!(out.stats.programs_skipped.is_empty(), "{:?}", out.stats.programs_skipped);
-    assert!(!out.stats.warnings.iter().any(|w| w.contains("has no image")), "{:?}", out.stats.warnings);
-    let target = |name: &str| out.targets.iter().find(|(n, _)| n == name).map(|(_, img)| img);
-    assert!(target("colortex3").is_none(), "dh_shadow's draw buffer allocated a colortex");
-    let shadowcolor3 = target("shadowcolor3").expect("no shadowcolor3 image for dh_shadow's draw buffer");
-    shadowcolor3.save(render_dir().join("review_dh_shadowcolor3.png")).ok();
-    let magenta = shadowcolor3.pixels().filter(|p| p[0] > 200 && p[1] < 50 && p[2] > 200).count();
-    assert!(magenta > 0, "no DH LOD reached shadowcolor3");
+        let out = render(&mut rt, &pack, &blobs, small_scene(), (160, 90), 1, true);
+        assert_no_validation_messages(&out);
+        assert!(out.stats.programs_skipped.is_empty(), "shared {shared}: {:?}", out.stats.programs_skipped);
+        assert!(!out.stats.warnings.iter().any(|w| w.contains("has no image")), "shared {shared}: {:?}", out.stats.warnings);
+        let target = |name: &str| out.targets.iter().find(|(n, _)| n == name).map(|(_, img)| img);
+        assert!(target("colortex3").is_none(), "shared {shared}: dh_shadow's draw buffer allocated a colortex");
+        let shadowcolor3 = target("shadowcolor3").unwrap_or_else(|| panic!("shared {shared}: no shadowcolor3 image for dh_shadow's draw buffer"));
+        shadowcolor3.save(render_dir().join(format!("review_dh_shadowcolor3_{}.png", if shared { "shared" } else { "own" }))).ok();
+        let magenta = shadowcolor3.pixels().filter(|p| p[0] > 200 && p[1] < 50 && p[2] > 200).count();
+        assert!(magenta > 0, "shared {shared}: no DH LOD reached shadowcolor3");
+    }
 }

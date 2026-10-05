@@ -8,7 +8,9 @@ use std::path::Path;
 /// Revision of the translator: a blake3 hash (32 hex digits) of the sources of every crate
 /// whose code determines a compile's output (`sb-core`, `sb-pack`, `sb-preprocess`,
 /// `sb-expr`, `sb-uniforms`, `sb-transform` with its draw profiles, `sb-compile`,
-/// `sb-pipeline`) and of the workspace `Cargo.lock`, computed by `build.rs`.
+/// `sb-pipeline`) and of the workspace `Cargo.lock`, root `Cargo.toml` (dependency
+/// features and patches) and `.cargo/config.toml` (glslang's build flags), computed by
+/// `build.rs`.
 ///
 /// It is part of [`cache_key`], so a cache written by a build whose translator differs in
 /// any way (not only in its version number) is never reused.

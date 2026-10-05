@@ -216,8 +216,8 @@ pub struct DrawProfile {
     /// `distanthorizons:blaze3d`); empty when not given.
     #[serde(default)]
     pub host: String,
-    /// Used for fullscreen passes: no vertex inputs, a triangle generated from
-    /// `gl_VertexIndex`.
+    /// Used for fullscreen passes: no vertex inputs; the vertices (Iris' fullscreen quad as
+    /// two triangles, 6 vertices) are generated from `gl_VertexIndex`.
     pub fullscreen: bool,
     /// Host vertex attributes.
     pub inputs: Vec<ProfileInput>,

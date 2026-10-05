@@ -628,12 +628,13 @@ const NMIN: u32 = 79;
 const NMAX: u32 = 80;
 const NCLAMP: u32 = 81;
 
-/// `min`/`max`/`clamp` on floats become NaN-tolerant `NMin`/`NMax`/`NClamp` by default
-/// (NVIDIA/AMD semantics: the non-NaN operand wins); integer forms are untouched and the
-/// module stays valid. The option turns it off.
+/// `min`/`max`/`clamp` on floats become NaN-tolerant `NMin`/`NMax`/`NClamp` when the option
+/// is on (NVIDIA/AMD semantics: the non-NaN operand wins); integer forms are untouched and
+/// the module stays valid. The option is off by default: glslang's `FMin`/`FMax`/`FClamp`
+/// are kept as they are.
 #[test]
-fn float_min_max_clamp_are_nan_tolerant_by_default() {
-    let on = compile_ok(MIN_MAX_FRAG, ShaderStage::Fragment);
+fn float_min_max_clamp_are_nan_tolerant_on_request() {
+    let on = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: true, ..Default::default() });
     assert_valid(&on, VulkanTarget::Vulkan1_2);
     let ops = glsl_std_450_ops(&on);
     for op in [NMIN, NMAX, NCLAMP] {
@@ -644,7 +645,8 @@ fn float_min_max_clamp_are_nan_tolerant_by_default() {
     assert_eq!(ops.iter().filter(|&&o| o == 39 || o == 42).count(), 4, "{ops:?}");
     assert!(ops.contains(&45), "{ops:?}");
 
-    let off = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    assert!(!CompileOptions::default().nan_tolerant_min_max);
+    let off = compile_ok(MIN_MAX_FRAG, ShaderStage::Fragment);
     assert_valid(&off, VulkanTarget::Vulkan1_2);
     let ops = glsl_std_450_ops(&off);
     for op in [FMIN, FMAX, FCLAMP] {
@@ -659,12 +661,12 @@ fn float_min_max_clamp_are_nan_tolerant_by_default() {
 /// untouched with an error instead of panicking.
 #[test]
 fn nan_tolerant_pass_on_raw_modules() {
-    let mut spirv = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    let mut spirv = compile_ok(MIN_MAX_FRAG, ShaderStage::Fragment);
     assert_eq!(module::nan_tolerant_min_max(&mut spirv), Ok(6));
     assert_eq!(module::nan_tolerant_min_max(&mut spirv), Ok(0));
     assert_valid(&spirv, VulkanTarget::Vulkan1_2);
 
-    let mut truncated = compile_with(MIN_MAX_FRAG, ShaderStage::Fragment, &CompileOptions { nan_tolerant_min_max: false, ..Default::default() });
+    let mut truncated = compile_ok(MIN_MAX_FRAG, ShaderStage::Fragment);
     let len = truncated.len();
     truncated[len - 1] = 0xffff_0001; // a final instruction claiming 65535 words
     let before = truncated.clone();

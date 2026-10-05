@@ -1,5 +1,6 @@
 package dev.shaderbridge.render.draw;
 
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import java.util.Optional;
@@ -25,10 +26,22 @@ public final class ActivePasses {
     public interface PassDraws {
         /**
          * @param requested the pipeline vanilla code binds
-         * @return the pipeline to bind instead and what to bind with it
-         * @throws IllegalStateException if the draw cannot be drawn in the pass at all
+         * @return the pipeline to bind instead and what to bind with it, or
+         *     {@link Substitution#skip()} when the draws must not happen
          */
         Substitution substitute(CompiledRenderPipeline requested);
+
+        /**
+         * Replaces a uniform buffer vanilla code binds in the pass (by default, nothing is
+         * replaced).
+         *
+         * @param name  the uniform name
+         * @param value the slice vanilla code binds
+         * @return the slice to bind instead
+         */
+        default GpuBufferSlice uniform(String name, GpuBufferSlice value) {
+            return value;
+        }
     }
 
     /** Binds the descriptors of a pack pipeline in a render pass. */
@@ -50,17 +63,32 @@ public final class ActivePasses {
     }
 
     /**
-     * @param pipeline the pipeline to bind
+     * @param pipeline the pipeline to bind, or null when the vanilla draws are skipped
      * @param binding  the descriptors to bind with it: present for pack pipelines, empty for
      *                 vanilla pipelines (bound by vanilla code)
      */
     public record Substitution(CompiledRenderPipeline pipeline, Optional<PackBinding> binding) {
+        private static final Substitution SKIP = new Substitution(null, Optional.empty());
+
         /**
          * @param pipeline a pipeline
          * @return the pipeline bound as is, with nothing more to bind
          */
         public static Substitution unchanged(CompiledRenderPipeline pipeline) {
             return new Substitution(pipeline, Optional.empty());
+        }
+
+        /**
+         * @return the pipeline is not bound, and every draw (and push constant) until the next
+         *     pipeline is dropped: for pipelines that cannot be drawn in the pass at all
+         */
+        public static Substitution skip() {
+            return SKIP;
+        }
+
+        /** @return whether the draws of this pipeline are dropped */
+        public boolean skipped() {
+            return pipeline == null;
         }
     }
 
@@ -81,7 +109,7 @@ public final class ActivePasses {
      * @param pass the pass
      */
     public static void close(RenderPass pass) {
-        if (current == pass) {
+        if (pass != null && current == pass) {
             current = null;
             draws = null;
         }
@@ -105,5 +133,18 @@ public final class ActivePasses {
             return null;
         }
         return draws.substitute(requested);
+    }
+
+    /**
+     * @param pass  the pass {@code setUniform} is called on
+     * @param name  the uniform name
+     * @param value the slice vanilla code binds
+     * @return the slice to bind: replaced in ShaderBridge passes that replace it, else {@code value}
+     */
+    public static GpuBufferSlice uniform(Object pass, String name, GpuBufferSlice value) {
+        if (!owns(pass) || draws == null || value == null) {
+            return value;
+        }
+        return draws.uniform(name, value);
     }
 }
