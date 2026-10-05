@@ -26,7 +26,9 @@ use std::sync::OnceLock;
 use common::{CORPUS_DEFINES, DirSources, corpus_options, corpus_root, program_files, shader_roots};
 use indexmap::IndexMap;
 use sb_core::MemorySources;
-use sb_preprocess::{PreprocessOptions, Preprocessed, Preprocessor, preprocess_properties};
+use sb_preprocess::{
+    ESCAPE_PREFIX, PreprocessOptions, Preprocessed, Preprocessor, preprocess_properties,
+};
 
 const DEFAULT_JCPP_JAR: &str = "/tmp/claude-0/-home-user-super-adventure/14a9b258-2170-5e12-9e2c-1c1a40e3de07/scratchpad/mc/x_iris/META-INF/jars/jcpp-1.4.14.jar";
 
@@ -458,8 +460,12 @@ fn corpus_programs_match_iris() {
     write_defines(&defines, CORPUS_DEFINES);
     let mut opts = corpus_options();
     opts.escape_reserved_words = false;
+    let escaping = corpus_options();
+    assert!(escaping.escape_reserved_words);
     let (mut total, mut per_pack) = (0usize, BTreeMap::new());
     let mut mismatches = Vec::new();
+    // Programs whose escaped output contains `sb_kw_`, and the escaped words.
+    let (mut escaped_programs, mut escaped_words) = (0usize, BTreeMap::<String, usize>::new());
     for (pack, shaders) in shader_roots(&corpus) {
         let programs = program_files(&shaders);
         let out_dir = h.scratch(&format!("corpus_{}", pack.replace(['/', ' '], "_")));
@@ -473,10 +479,37 @@ fn corpus_programs_match_iris() {
             if let Some(d) = compare_glsl(&out, &out_dir.join(program)) {
                 mismatches.push(format!("{pack} {program}: {d}"));
             }
+            // Escaping only inserts `sb_kw_` prefixes: without an escape the output
+            // is byte-identical to the one compared with Iris above.
+            let esc = pp.preprocess(program, &escaping);
+            let same_header = esc.version == out.version && esc.extensions == out.extensions;
+            if !esc.code.contains(ESCAPE_PREFIX) {
+                if esc.code != out.code || !same_header {
+                    mismatches.push(format!(
+                        "{pack} {program}: escaping changed output without escaping anything"
+                    ));
+                }
+            } else {
+                escaped_programs += 1;
+                for w in esc
+                    .code
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                {
+                    if let Some(w) = w.strip_prefix(ESCAPE_PREFIX) {
+                        *escaped_words.entry(w.to_owned()).or_default() += 1;
+                    }
+                }
+                if esc.code.replace(ESCAPE_PREFIX, "") != out.code || !same_header {
+                    mismatches.push(format!(
+                        "{pack} {program}: escaping changed more than the escaped identifiers"
+                    ));
+                }
+            }
         }
         let _ = std::fs::remove_dir_all(&out_dir);
     }
     println!("compared {total} programs with Iris/JCPP: {per_pack:?}");
+    println!("{escaped_programs} programs contain escaped identifiers: {escaped_words:?}");
     assert!(total > 100, "expected a real corpus");
     assert!(
         mismatches.is_empty(),

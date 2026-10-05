@@ -11,8 +11,9 @@ use common::{DirSources, corpus_options, corpus_root, program_files, shader_root
 use glsl_lang::ast::TranslationUnit;
 use glsl_lang::parse::DefaultParse;
 use sb_core::Diagnostic;
+use sb_preprocess::escape::CONTEXTUAL_RESERVED;
 use sb_preprocess::{
-    PreprocessOptions, Preprocessed, Preprocessor, Profile, preprocess_properties,
+    ESCAPE_PREFIX, PreprocessOptions, Preprocessed, Preprocessor, Profile, preprocess_properties,
 };
 
 /// Errors that are genuine properties of the packs, not preprocessor bugs.
@@ -124,6 +125,43 @@ fn corpus_programs_preprocess_cleanly() {
         unexpected.is_empty(),
         "unexpected errors:\n{}",
         unexpected.join("\n")
+    );
+}
+
+/// Every occurrence of a context-sensitive reserved word in the corpora is a
+/// keyword use (`flat`, `layout(`, `switch`, `case`, `default`, `double`, ...;
+/// checked with grep: none is used as an identifier), so escaping any of them
+/// would be a false positive that breaks valid code.
+#[test]
+fn corpus_contextual_words_are_never_escaped() {
+    let Some((results, _)) = preprocess_corpus() else {
+        return;
+    };
+    let mut escaped: BTreeMap<String, usize> = BTreeMap::new();
+    let mut false_escapes = Vec::new();
+    for r in &results {
+        for w in r
+            .out
+            .code
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter_map(|w| w.strip_prefix(ESCAPE_PREFIX))
+        {
+            *escaped.entry(w.to_owned()).or_default() += 1;
+            if CONTEXTUAL_RESERVED.iter().any(|c| c.word == w) {
+                false_escapes.push(format!("{} {}: {w}", r.pack, r.program));
+            }
+        }
+    }
+    println!("escaped identifiers in the corpus: {escaped:?}");
+    assert!(
+        false_escapes.is_empty(),
+        "contextual words escaped:\n{}",
+        false_escapes
+            .iter()
+            .take(30)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

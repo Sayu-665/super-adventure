@@ -1,10 +1,15 @@
 //! Keeps the reserved-word escape lists honest: checks which words glsl-lang
 //! 0.8 rejects as identifiers, and that every word parses once escaped.
+//! The context-sensitive words ([`CONTEXTUAL_RESERVED`]) are also checked to
+//! be rejected by glsl-lang at every version, and their keyword uses in old
+//! versions to survive preprocessing and parse.
 
 use glsl_lang::ast::TranslationUnit;
 use glsl_lang::parse::DefaultParse;
 use sb_core::MemorySources;
-use sb_preprocess::escape::{ALWAYS_RESERVED, RESERVED_BELOW_400, RESERVED_BELOW_430};
+use sb_preprocess::escape::{
+    ALWAYS_RESERVED, CONTEXTUAL_RESERVED, RESERVED_BELOW_400, RESERVED_BELOW_430,
+};
 use sb_preprocess::{PreprocessOptions, Preprocessor};
 
 /// Words `glslangValidator -V` (15.1) rejects as identifiers in a `#version 450`
@@ -56,6 +61,23 @@ const GLSLANG_REJECTS_AT_450: &[&str] = &[
     "precise",
     "buffer",
     "shared",
+    "smooth",
+    "flat",
+    "noperspective",
+    "coherent",
+    "volatile",
+    "restrict",
+    "readonly",
+    "writeonly",
+    "layout",
+    "precision",
+    "lowp",
+    "mediump",
+    "highp",
+    "switch",
+    "case",
+    "default",
+    "double",
 ];
 
 fn glsl_lang_accepts(src: &str) -> bool {
@@ -68,7 +90,44 @@ fn all_words() -> Vec<&'static str> {
         .copied()
         .chain(RESERVED_BELOW_400.iter().map(|(w, _)| *w))
         .chain(RESERVED_BELOW_430.iter().copied())
+        .chain(CONTEXTUAL_RESERVED.iter().map(|w| w.word))
         .collect()
+}
+
+/// The premise of contextual escaping: glsl-lang rejects these words as
+/// identifiers at every version, including the old ones where lenient
+/// compilers accept them (so escaping identifier uses can only help).
+#[test]
+fn glsl_lang_rejects_contextual_words_at_every_version() {
+    let mut accepted = Vec::new();
+    for w in CONTEXTUAL_RESERVED {
+        for v in [110, 120, 130, 140, 150, 330, 400, 420, 450] {
+            let src = format!(
+                "#version {v}\nvoid main() {{ float {w} = 1.0; {w} += 1.0; }}\n",
+                w = w.word
+            );
+            if glsl_lang_accepts(&src) {
+                accepted.push(format!("{} at {v}", w.word));
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "glsl-lang accepts: {accepted:?}");
+}
+
+/// Keyword uses of the contextual words in old versions (accepted by lenient
+/// compilers) are not escaped and parse as before.
+#[test]
+fn contextual_keyword_uses_survive_and_parse() {
+    let src = "#version 120\n#extension GL_EXT_gpu_shader4 : enable\nflat varying vec3 n;\nnoperspective varying float d;\nsmooth varying vec2 uv;\nprecision highp float;\nuniform lowp sampler2D t;\nvoid main() {\n  int i = int(d);\n  switch (i) { case 0: i = 1; break; case -1: case (2): break; default: i = 3; }\n  mediump vec3 c = n;\n  gl_FragData[0] = vec4(c, float(i));\n}\n";
+    let m = MemorySources::new().with("main.fsh", src);
+    let mut pp = Preprocessor::new(&m);
+    let out = pp.preprocess("main.fsh", &PreprocessOptions::default());
+    assert!(!out.code.contains("sb_kw_"), "{}", out.code);
+    // Parsed as at least 130, like sb-transform does.
+    let glsl = format!("#version 130\n{}", out.code);
+    if let Err(e) = TranslationUnit::parse(glsl.as_str()) {
+        panic!("does not parse: {e}\n{glsl}");
+    }
 }
 
 #[test]

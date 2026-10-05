@@ -34,7 +34,10 @@
 //!    `#extension` lines to the top).
 //! 4. **Reserved-word escaping**: identifiers that lenient drivers accept but
 //!    strict compilers reject are renamed to `sb_kw_<name>` (see [`escape`] for
-//!    the exact, version-gated lists).
+//!    the exact, version-gated lists). Words that are keywords only from some
+//!    version on and that packs also use as keywords in older versions
+//!    (`flat`, `layout`, `switch`, `double`, ...) are escaped only where the
+//!    surrounding tokens show an identifier use.
 //!
 //! JCPP compatibility details that are mirrored deliberately: floating-point
 //! literals in `#if` are truncated to integers (hex floats shift by their

@@ -11,7 +11,10 @@ use std::rc::Rc;
 
 use sb_core::{Diagnostic, Diagnostics, Severity, SourceLocation};
 
-use crate::escape::{ESCAPE_PREFIX, ReservedClass, candidates, must_escape};
+use crate::escape::{
+    CONTEXTUAL_RESERVED, ESCAPE_PREFIX, Neighbour, ReservedClass, Usage, candidates,
+    classify_usage, must_escape,
+};
 use crate::expr;
 use crate::intern::{FxHashMap, Interner, Sym, known};
 use crate::lexer::{F_MACRO, F_NOEXPAND, Kind, LexState, Tok, lex_line, lex_single, would_paste};
@@ -131,6 +134,25 @@ struct Args {
     raw: Vec<Tok>,
 }
 
+/// An escape candidate in the output.
+#[derive(Debug, Clone, Copy)]
+struct ReservedHit {
+    /// Byte offset of the word in the output.
+    off: usize,
+    class: ReservedClass,
+    /// How the occurrence is used (always `Identifier` for context-free classes).
+    usage: Usage,
+}
+
+/// A contextual escape candidate waiting for the next significant token.
+#[derive(Debug, Clone, Copy)]
+struct PendingHit {
+    /// Index into `reserved_hits`.
+    hit: usize,
+    /// The significant token before the candidate.
+    prev: Option<(Kind, Sym)>,
+}
+
 pub(crate) struct Engine<'e> {
     files: &'e [FileData],
     int: &'e mut Interner,
@@ -174,7 +196,11 @@ pub(crate) struct Engine<'e> {
     layout_after: bool,
     layout_depth: u32,
     reserved: FxHashMap<Sym, ReservedClass>,
-    reserved_hits: Vec<(usize, ReservedClass)>,
+    reserved_hits: Vec<ReservedHit>,
+    /// The last significant (non-whitespace, non-comment) token emitted.
+    prev_sig: Option<(Kind, Sym)>,
+    /// Contextual candidate whose following token has not been emitted yet.
+    pending_hit: Option<PendingHit>,
 
     // Results.
     version: Option<VersionDirective>,
@@ -232,6 +258,8 @@ impl<'e> Engine<'e> {
             layout_depth: 0,
             reserved,
             reserved_hits: Vec::new(),
+            prev_sig: None,
+            pending_hit: None,
             version: None,
             extensions: Vec::new(),
             pragmas: Vec::new(),
@@ -585,20 +613,7 @@ impl<'e> Engine<'e> {
             }
         }
         if !self.reserved_hits.is_empty() {
-            let version = self.version.as_ref().map_or(110, |v| v.number);
-            let mut new = String::with_capacity(
-                self.out.len() + self.reserved_hits.len() * ESCAPE_PREFIX.len(),
-            );
-            let mut last = 0;
-            for &(off, class) in &self.reserved_hits {
-                if must_escape(class, version, &self.extensions) {
-                    new.push_str(&self.out[last..off]);
-                    new.push_str(ESCAPE_PREFIX);
-                    last = off;
-                }
-            }
-            new.push_str(&self.out[last..]);
-            self.out = new;
+            self.apply_escapes();
         }
         EngineOutput {
             code: self.out,
@@ -608,6 +623,99 @@ impl<'e> Engine<'e> {
             pragmas: self.pragmas,
             diagnostics: self.diags,
         }
+    }
+
+    /// Inserts [`ESCAPE_PREFIX`] before the reserved words that must be escaped.
+    ///
+    /// A contextual word is escaped (everywhere in the unit) only when at least
+    /// one occurrence is certainly an identifier and none is certainly a
+    /// keyword; see the `escape` module documentation.
+    fn apply_escapes(&mut self) {
+        let version = self.version.as_ref().map_or(110, |v| v.number);
+        // Per contextual word: (an identifier use seen, a keyword use seen).
+        let mut seen = [(false, false); CONTEXTUAL_RESERVED.len()];
+        for h in &self.reserved_hits {
+            if let ReservedClass::Contextual(i) = h.class
+                && let Some(s) = seen.get_mut(i)
+            {
+                match h.usage {
+                    Usage::Identifier => s.0 = true,
+                    Usage::Keyword => s.1 = true,
+                    Usage::Ambiguous => {}
+                }
+            }
+        }
+        let mut new =
+            String::with_capacity(self.out.len() + self.reserved_hits.len() * ESCAPE_PREFIX.len());
+        let mut last = 0;
+        for h in &self.reserved_hits {
+            let in_context = match h.class {
+                ReservedClass::Contextual(i) => seen.get(i).is_some_and(|&(id, kw)| id && !kw),
+                _ => true,
+            };
+            if in_context
+                && must_escape(h.class, version, &self.extensions)
+                && let Some(text) = self.out.get(last..h.off)
+            {
+                new.push_str(text);
+                new.push_str(ESCAPE_PREFIX);
+                last = h.off;
+            }
+        }
+        new.push_str(self.out.get(last..).unwrap_or_default());
+        self.out = new;
+    }
+
+    fn neighbour(&self, tok: Option<(Kind, Sym)>) -> Neighbour<'_> {
+        match tok {
+            None => Neighbour::Missing,
+            Some((Kind::Ident, _)) => Neighbour::Ident,
+            Some((Kind::Number, _)) => Neighbour::Number,
+            Some((Kind::Punct, s)) => Neighbour::Punct(self.int.get(s)),
+            Some(_) => Neighbour::Other,
+        }
+    }
+
+    /// Records escape candidates and the context of contextual ones. Called
+    /// for every significant token, before its text is appended to the output.
+    fn track_reserved(&mut self, t: Tok) {
+        if let Some(p) = self.pending_hit.take() {
+            let usage = match self.reserved_hits.get(p.hit).map(|h| h.class) {
+                Some(ReservedClass::Contextual(i)) => CONTEXTUAL_RESERVED.get(i).map(|w| {
+                    classify_usage(
+                        w.role,
+                        self.neighbour(p.prev),
+                        self.neighbour(Some((t.kind, t.sym))),
+                    )
+                }),
+                _ => None,
+            };
+            if let (Some(u), Some(h)) = (usage, self.reserved_hits.get_mut(p.hit)) {
+                h.usage = u;
+            }
+        }
+        if t.kind == Kind::Ident
+            && self.layout_depth == 0
+            && let Some(&class) = self.reserved.get(&t.sym)
+        {
+            let contextual = matches!(class, ReservedClass::Contextual(_));
+            if contextual {
+                self.pending_hit = Some(PendingHit {
+                    hit: self.reserved_hits.len(),
+                    prev: self.prev_sig,
+                });
+            }
+            self.reserved_hits.push(ReservedHit {
+                off: self.out.len(),
+                class,
+                usage: if contextual {
+                    Usage::Ambiguous
+                } else {
+                    Usage::Identifier
+                },
+            });
+        }
+        self.prev_sig = Some((t.kind, t.sym));
     }
 
     // ------------------------------------------------------------------
@@ -665,14 +773,12 @@ impl<'e> Engine<'e> {
                     let p = self.cur_phys;
                     self.diag(Severity::Error, "pp.stray-hash", msg, p);
                 }
+                if !self.reserved.is_empty() {
+                    self.track_reserved(t);
+                }
                 let text = self.int.get(t.sym);
                 match t.kind {
                     Kind::Ident => {
-                        if self.layout_depth == 0
-                            && let Some(&c) = self.reserved.get(&t.sym)
-                        {
-                            self.reserved_hits.push((self.out.len(), c));
-                        }
                         self.layout_after = t.sym == known::LAYOUT;
                     }
                     Kind::Punct if t.sym == known::LPAREN => {

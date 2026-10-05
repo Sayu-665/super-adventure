@@ -1156,6 +1156,245 @@ fn reserved_words_respect_versions_extensions_and_layout() {
     );
 }
 
+/// Context-sensitive reserved words used as identifiers in old versions are
+/// escaped (every occurrence, including ones whose context alone is ambiguous).
+#[test]
+fn contextual_words_used_as_identifiers_are_escaped() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "float smooth = 0.5;\nfloat y = smooth * 2.0;\n",
+            &["float sb_kw_smooth = 0.5;", "float y = sb_kw_smooth * 2.0;"],
+        ),
+        (
+            "vec3 flat;\nvoid main() { flat.x = 1.0; }\n",
+            &["vec3 sb_kw_flat;", "void main() { sb_kw_flat.x = 1.0; }"],
+        ),
+        (
+            "float f(float noperspective) { return noperspective; }\n",
+            &["float f(float sb_kw_noperspective) { return sb_kw_noperspective; }"],
+        ),
+        ("int coherent = 1;\n", &["int sb_kw_coherent = 1;"]),
+        (
+            "bool volatile, restrict;\n",
+            &["bool sb_kw_volatile, sb_kw_restrict;"],
+        ),
+        (
+            "struct S { int readonly; int writeonly[2]; };\nint g(S s) { return s.readonly + s.writeonly[1]; }\n",
+            &[
+                "struct S { int sb_kw_readonly; int sb_kw_writeonly[2]; };",
+                "int g(S s) { return s.sb_kw_readonly + s.sb_kw_writeonly[1]; }",
+            ],
+        ),
+        (
+            "float layout = 1.0;\nvoid main() { layout += 2.0; }\n",
+            &[
+                "float sb_kw_layout = 1.0;",
+                "void main() { sb_kw_layout += 2.0; }",
+            ],
+        ),
+        (
+            "uniform float precision;\nfloat p = precision;\n",
+            &[
+                "uniform float sb_kw_precision;",
+                "float p = sb_kw_precision;",
+            ],
+        ),
+        (
+            "const float lowp = 0.1, mediump = 0.5, highp = 1.0;\nfloat q = mix(lowp, highp, mediump);\n",
+            &[
+                "const float sb_kw_lowp = 0.1, sb_kw_mediump = 0.5, sb_kw_highp = 1.0;",
+                "float q = mix(sb_kw_lowp, sb_kw_highp, sb_kw_mediump);",
+            ],
+        ),
+        (
+            "bool switch = true;\nvoid main() { if (switch) { switch = !switch; } }\n",
+            &[
+                "bool sb_kw_switch = true;",
+                "void main() { if (sb_kw_switch) { sb_kw_switch = !sb_kw_switch; } }",
+            ],
+        ),
+        // `case - 1` alone is ambiguous (`case -1:`); the declaration decides.
+        (
+            "int case = 2;\nvoid main() { int y; case - 1; y = case; }\n",
+            &[
+                "int sb_kw_case = 2;",
+                "void main() { int y; sb_kw_case - 1; y = sb_kw_case; }",
+            ],
+        ),
+        (
+            "vec3 default = vec3(1.0);\nvec3 pick(bool c) { return c ? default : vec3(0.0); }\n",
+            &[
+                "vec3 sb_kw_default = vec3(1.0);",
+                "vec3 pick(bool c) { return c ? sb_kw_default : vec3(0.0); }",
+            ],
+        ),
+        // `sqrt(double)` alone is ambiguous (an unnamed parameter); the declaration decides.
+        (
+            "float double = 4.0;\nfloat r = sqrt(double);\n",
+            &["float sb_kw_double = 4.0;", "float r = sqrt(sb_kw_double);"],
+        ),
+        // A function named `layout`: `layout(` alone is ambiguous, the call after `=` is not.
+        (
+            "vec2 layout(vec2 p) { return p; }\nvec2 q = layout(vec2(0.0));\n",
+            &[
+                "vec2 sb_kw_layout(vec2 p) { return p; }",
+                "vec2 q = sb_kw_layout(vec2(0.0));",
+            ],
+        ),
+        // Macro-produced, and context across lines and comments.
+        (
+            "#define NAME smooth\nfloat NAME /* c */\n  = 1.0;\n",
+            &["float sb_kw_smooth /* c */", "= 1.0;"],
+        ),
+    ];
+    for (body, expect) in cases {
+        for version in ["", "#version 110\n", "#version 120\n"] {
+            let src = format!("{version}{body}");
+            let out = run(&src);
+            assert!(out.diagnostics.is_empty(), "{src}: {:?}", out.diagnostics);
+            assert_eq!(norm(&out.code), *expect, "{src}");
+        }
+    }
+}
+
+/// Keyword uses of the context-sensitive words, which lenient compilers accept
+/// in old versions, are never escaped.
+#[test]
+fn contextual_words_used_as_keywords_are_kept() {
+    let cases: &[&str] = &[
+        "#version 120\n#extension GL_EXT_gpu_shader4 : enable\nflat varying vec3 n;\nnoperspective varying float d;\n",
+        "#version 120\nflat varying vec3 n;\nsmooth varying vec2 uv;\nnoperspective varying float d;\nflat /* c */\n  varying int id;\n",
+        "#version 330\nlayout(rgba8) coherent uniform image2D a;\nvoid f(readonly image2D b, writeonly restrict volatile image2D c);\n",
+        "#version 130\nlayout(location = 0) out vec4 color;\nlayout(std140) uniform U { vec4 v; };\n",
+        "#version 120\nlayout(location = 0) out vec4 color;\n",
+        "#version 120\nprecision highp float;\nuniform lowp sampler2D t;\nmediump vec3 v;\nhighp float f(highp float x) { return x; }\n",
+        "#version 120\n#define FOO 3\nvoid main() { int x; switch (x) { case 0: x = 1; break; case -1: case (2): case FOO: case +4: case ~5: case !true: break; default: break; } if (x > 0) switch (x) { default : x = 2; } }\n",
+        "#version 330\ndouble d = double(1.0);\ndouble a[2];\nvoid f(double, double);\ndouble g(double x) { return x; }\n",
+        "#version 120\n#define Q flat\n#define V varying\nQ V vec3 n;\n",
+        // Contradicting evidence (a keyword use next to an identifier use): left alone.
+        "#version 120\nflat varying vec3 n;\nvoid main() { float y = flat; }\n",
+        "#version 120\nvoid main() { int i; switch (i) { default: break; } int default = 1; }\n",
+    ];
+    for src in cases {
+        let out = run(src);
+        assert!(!out.code.contains(ESCAPE_PREFIX), "{src}\n{}", out.code);
+    }
+}
+
+/// Identifier uses are left alone from the version (or with the extension)
+/// that makes the word a keyword: the pack cannot mean an identifier there.
+#[test]
+fn contextual_words_respect_versions_and_extensions() {
+    let id_uses: String = crate::escape::CONTEXTUAL_RESERVED
+        .iter()
+        .map(|w| format!("float {} = 0.0;\n", w.word))
+        .collect();
+    let escaped = |src: &str| {
+        let out = run(src);
+        let mut words: Vec<String> = out
+            .code
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter_map(|w| w.strip_prefix(ESCAPE_PREFIX))
+            .map(str::to_owned)
+            .collect();
+        words.sort();
+        words
+    };
+    let sorted = |w: &[&str]| {
+        let mut v: Vec<String> = w.iter().map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    };
+    let all = sorted(&[
+        "smooth",
+        "flat",
+        "noperspective",
+        "coherent",
+        "volatile",
+        "restrict",
+        "readonly",
+        "writeonly",
+        "layout",
+        "precision",
+        "lowp",
+        "mediump",
+        "highp",
+        "switch",
+        "case",
+        "default",
+        "double",
+    ]);
+    assert_eq!(escaped(&format!("#version 120\n{id_uses}")), all);
+    assert_eq!(
+        escaped(&format!("#version 130\n{id_uses}")),
+        sorted(&[
+            "coherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+            "layout",
+            "double"
+        ])
+    );
+    assert_eq!(
+        escaped(&format!("#version 140\n{id_uses}")),
+        sorted(&[
+            "coherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+            "double"
+        ])
+    );
+    assert_eq!(
+        escaped(&format!("#version 400\n{id_uses}")),
+        sorted(&["coherent", "volatile", "restrict", "readonly", "writeonly"])
+    );
+    assert!(escaped(&format!("#version 420\n{id_uses}")).is_empty());
+    assert!(escaped(&format!("#version 460\n{id_uses}")).is_empty());
+    let with_ext = escaped(&format!(
+        "#version 120\n#extension GL_EXT_gpu_shader4 : enable\n#extension GL_ARB_shader_image_load_store : enable\n#extension GL_ARB_explicit_attrib_location : require\n#extension GL_ARB_gpu_shader_fp64 : enable\n{id_uses}"
+    ));
+    assert_eq!(
+        with_ext,
+        sorted(&[
+            "precision",
+            "lowp",
+            "mediump",
+            "highp",
+            "switch",
+            "case",
+            "default"
+        ])
+    );
+    // A disabled extension does not count.
+    assert_eq!(
+        escaped("#version 120\n#extension GL_EXT_gpu_shader4 : disable\nfloat flat;\n"),
+        ["flat"]
+    );
+    // Escaping can be turned off.
+    let out = run_opts(
+        "#version 120\nfloat flat;\n",
+        &PreprocessOptions {
+            escape_reserved_words: false,
+            ..Default::default()
+        },
+    );
+    assert_eq!(norm(&out.code), ["float flat;"]);
+    // Inside layout(...) nothing is escaped.
+    assert_eq!(
+        norm(&run("#version 120\nlayout(flat = 1) out vec4 c; float flat;\n").code),
+        ["layout(flat = 1) out vec4 c; float sb_kw_flat;"]
+    );
+    // Unresolved context at the end of the unit is ambiguous.
+    assert_eq!(
+        norm(&run("#version 120\nfloat x = 1.0; switch\n").code),
+        ["float x = 1.0; switch"]
+    );
+}
+
 #[test]
 fn diagnostics_have_locations_in_included_files() {
     let out = run_files(
