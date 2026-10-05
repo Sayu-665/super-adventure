@@ -113,7 +113,7 @@ final class DistantFrame implements AutoCloseable {
     /**
      * Copies the LOD depth into {@code dhDepthTex<index>} ({@link DhMode#NATIVE} only).
      *
-     * @param index 1 after the opaque LODs, 0 after the translucent ones
+     * @param index 1 after the opaque LODs, 0 after the opaque and after the translucent ones
      */
     void copyDepth(int index) {
         if (mode.separateDepth()) {

@@ -1,6 +1,7 @@
 package dev.shaderbridge.render.targets;
 
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.shaderbridge.model.ResourceRef;
 import java.util.Optional;
 
 /**
@@ -37,4 +38,16 @@ public interface HostTextures {
 
     /** @return Distant Horizons' block atlas, if Distant Horizons renders */
     Optional<TextureBinding> dhBlockAtlas();
+
+    /**
+     * A copy of a render target that the current render pass draws into, taken just before the
+     * pass: programs that sample a target of their own pass read the copy (Vulkan leaves reading
+     * an attachment that is being written undefined).
+     *
+     * @param resource a sampled resource
+     * @return the copy to bind instead, if the resource is attached to the current pass and copied
+     */
+    default Optional<GpuTextureView> passCopy(ResourceRef resource) {
+        return Optional.empty();
+    }
 }

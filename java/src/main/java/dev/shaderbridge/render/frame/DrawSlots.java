@@ -46,8 +46,8 @@ public final class DrawSlots {
      */
     public void prepare(FrameState frame, BlockWriter writer) {
         slices.clear();
-        cameraDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, false, 0, DrawKey.blendFunc(null)));
-        shadowDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, true, 0, DrawKey.blendFunc(null)));
+        cameraDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, false, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
+        shadowDefault = write(frame, writer, new DrawKey("", RenderStages.NONE, true, 0, DrawKey.blendFunc(null), AlbedoSize.NONE));
         for (DrawKey key : known) {
             slices.put(key, write(frame, writer, key));
         }

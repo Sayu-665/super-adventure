@@ -28,7 +28,8 @@ import net.minecraft.client.renderer.RenderPipelines;
  * Draws composite-style programs: each in its own render pass over its output targets (the
  * {@link FlipState#write} textures, or Minecraft's main color target for {@code final}) as the
  * {@code fullscreen} profile's six vertices, with its inputs bound per {@code BindingUse.use_alt},
- * through renderpearl or, for programs only raw Vulkan can run, the raw path.
+ * through renderpearl or, for programs only raw Vulkan can run, the raw path. The mipmaps a
+ * program asks for are generated just before it ({@link MipGenerator}).
  * Also performs the copies around them: {@code colortex0} to the main target when no
  * {@code final} program drew, and the end-of-frame alt to main copies. Render thread only.
  */
@@ -67,16 +68,15 @@ final class FullscreenPasses {
         if (!isDefault(program.viewport())) {
             r.diagnostics.report(program.name() + ": viewport scale/offset (scale." + program.name() + ") is not supported; drawn over the whole target");
         }
-        if (!program.mipmapTargets().isEmpty()) {
-            r.diagnostics.report(program.name() + ": mipmaps of " + program.mipmapTargets() + " are not generated; their lower levels keep old contents");
+        for (int t : program.mipmapTargets()) {
+            pair(t, shadow).ifPresent(pair -> r.mips.generate(pair, shadow ? flips.shadowRead(t) : flips.read(t)));
         }
-        List<Optional<GpuTextureView>> views = new ArrayList<>();
+        List<GpuTextureView> views = new ArrayList<>();
         for (int s = 0; s < slots.size(); s++) {
             views.add(switch (slots.get(s)) {
-                case AttachmentSlot.Target t -> Optional.of(pair(t.target(), shadow).orElseThrow().attachmentView(t.alt()));
-                case AttachmentSlot.MainColor m -> Optional.of(main.getColorTextureView());
-                case AttachmentSlot.Sink k -> Optional.of(r.sinks.view(layout.attachments().get(s).format(), size[0], size[1]));
-                case AttachmentSlot.Unused u -> Optional.empty();
+                case AttachmentSlot.Target t -> pair(t.target(), shadow).orElseThrow().attachmentView(t.alt());
+                case AttachmentSlot.MainColor m -> main.getColorTextureView();
+                case AttachmentSlot.Sink k -> r.sinks.view(s, layout.attachments().get(s).format(), size[0], size[1]);
             });
         }
         if (resolution instanceof ProgramResolution.Raw raw) {
@@ -84,8 +84,8 @@ final class FullscreenPasses {
         }
         ProgramResolution.Renderpearl pipeline = (ProgramResolution.Renderpearl) resolution;
         RenderPassDescriptor.Builder descriptor = RenderPassDescriptor.builder(() -> "ShaderBridge " + program.name());
-        views.forEach(v -> v.ifPresentOrElse(descriptor::withColorAttachment, descriptor::withUnusedColorAttachment));
-        DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.NONE, false);
+        views.forEach(descriptor::withColorAttachment);
+        DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.NONE, false, AlbedoSize.NONE);
         try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(descriptor.build())) {
             pass.setPipeline(pipeline.compiled());
             r.binder.bind(new OwnPassUniforms(pass), pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key),
@@ -101,12 +101,13 @@ final class FullscreenPasses {
      *
      * @return whether it drew, and the shadowcolor targets a {@code shadowcomp} program wrote
      */
-    private FrameSteps.Drawn drawRaw(ProgramResolution.Raw raw, Program program, List<AttachmentSlot> slots, List<Optional<GpuTextureView>> views,
+    private FrameSteps.Drawn drawRaw(ProgramResolution.Raw raw, Program program, List<AttachmentSlot> slots, List<GpuTextureView> views,
                                      int[] size, boolean shadow, FlipState flips, GpuBufferSlice frame) {
-        GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, false));
+        GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, false, AlbedoSize.NONE));
+        List<Optional<GpuTextureView>> attachments = views.stream().map(Optional::of).toList();
         List<Boolean> wrote;
         try {
-            wrote = r.raw.draw(raw.program(), new RawDraw(views, size[0], size[1], r.frameState.timer().frameCounter(), frame, draw,
+            wrote = r.raw.draw(raw.program(), new RawDraw(attachments, size[0], size[1], r.frameState.timer().frameCounter(), frame, draw,
                 flips.colorState(), flips.shadowState()));
         } catch (RuntimeException e) {
             r.diagnostics.report(program.name() + " was not drawn: " + e.getMessage());

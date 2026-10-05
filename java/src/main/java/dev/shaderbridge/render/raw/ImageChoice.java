@@ -33,6 +33,8 @@ public final class ImageChoice {
             case ResourceRef.ColorImage c -> color(kind, c.index(), useAlt, colorAlt, warnings);
             case ResourceRef.ShadowColor s -> state(shadowColorAlt, s.index());
             case ResourceRef.ShadowColorImage s -> state(shadowColorAlt, s.index());
+            // A sampler the pack did not name reads colortex0 in its current texture outside geometry programs.
+            case ResourceRef.Unknown u -> !(kind instanceof ProgramKind.Geometry) && state(colorAlt, 0);
             default -> false;
         };
     }

@@ -70,4 +70,13 @@ class SpirvCapabilitiesTest {
         assertEquals(1, problems.size());
         assertTrue(problems.getFirst().contains("5345"), problems.getFirst());
     }
+
+    @Test
+    void renderpearlPipelinesAreCheckedAgainstTheEnabledFeatures() {
+        assertEquals(1, EnabledFeatures.none().capabilities().modules().problems(module(1, 10), ShaderStage.FRAGMENT).size(),
+            "a Float64 fragment shader on a device without shaderFloat64");
+        EnabledFeatures float64 = new EnabledFeatures(EnumSet.of(RawFeature.FLOAT64, RawFeature.INDEPENDENT_BLEND), 0, 0);
+        assertEquals(List.of(), float64.capabilities().modules().problems(module(1, 10), ShaderStage.FRAGMENT));
+        assertTrue(float64.capabilities().independentBlend());
+    }
 }

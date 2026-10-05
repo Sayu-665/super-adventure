@@ -4,6 +4,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.device.DeviceInfo;
 import dev.shaderbridge.ShaderBridge;
 import dev.shaderbridge.compat.sodium.SodiumCompat;
 import dev.shaderbridge.dh.CameraFarPlane;
@@ -207,7 +208,9 @@ public final class RenderBridge {
             return null;
         }
         LoadedPack pack = active.get();
-        Optional<String> blocked = SodiumCompat.blocker();
+        DeviceInfo device = RenderSystem.getDevice().getDeviceInfo();
+        Optional<String> blocked = SodiumCompat.blocker()
+            .or(() -> DepthSupport.problem(pack.model().info().environment().depthMode(), device.isZZeroToOne(), device.backendName()));
         if (blocked.isPresent()) {
             closeRenderer();
             failedPack = pack;

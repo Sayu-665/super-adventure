@@ -53,7 +53,7 @@ final class ComputeDispatcher {
             if (!indirect && Arrays.stream(groups).anyMatch(g -> g == 0)) {
                 continue;
             }
-            GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, shadow));
+            GpuBufferSlice draw = r.drawSlots.slice(DrawKey.of("raw " + program.name(), program, RenderStages.NONE, shadow, AlbedoSize.NONE));
             try {
                 r.raw.dispatch(raw.program(), new RawDispatch(Arrays.stream(groups).boxed().toList(), r.frameState.timer().frameCounter(), frame, draw,
                     flips.colorState(), flips.shadowState()));

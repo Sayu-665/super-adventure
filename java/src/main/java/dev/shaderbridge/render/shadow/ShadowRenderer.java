@@ -66,7 +66,13 @@ public final class ShadowRenderer {
         if (plan.steps().isEmpty()) {
             return;
         }
-        ChunkSectionsToRender chunks = needsTerrain() ? sections.prepare(level, shadowModelView) : null;
+        ChunkSectionsToRender chunks = null;
+        if (needsTerrain()) {
+            chunks = sections.prepare(level, shadowModelView);
+            // Preparing only records how many quad indices the sections need; Minecraft grows its
+            // shared index buffer later in the frame (prepareTranslucents), after this pass.
+            RenderSystem.resizeAllAutoStorageIndexBuffers();
+        }
         for (ShadowPlan.Step step : plan.steps()) {
             switch (step) {
                 case OPAQUE_TERRAIN -> draw(chunks, ChunkSectionLayerGroup.OPAQUE, targets);

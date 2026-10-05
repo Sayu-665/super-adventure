@@ -6,6 +6,7 @@ import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import dev.shaderbridge.dh.DhMode;
+import dev.shaderbridge.model.GeometryProgram;
 import dev.shaderbridge.model.Pass;
 import dev.shaderbridge.model.PassGroup;
 import dev.shaderbridge.render.pipeline.AttachmentLayout;
@@ -42,6 +43,14 @@ import org.joml.Vector4f;
  * Minecraft renders vanilla. Render thread only.
  */
 final class PackRenderer implements FrameSteps, AutoCloseable {
+    /** Programs that draw Minecraft's chunk meshes. */
+    private static final List<GeometryProgram> TERRAIN_SLOTS = List.of(GeometryProgram.TERRAIN, GeometryProgram.TERRAIN_SOLID,
+        GeometryProgram.TERRAIN_CUTOUT, GeometryProgram.WATER);
+    /** What terrain programs see of Minecraft 26.3's chunk vertices. */
+    static final String TERRAIN_VERTEX_NOTE = "Minecraft 26.3's chunk meshes carry no normals, block ids or mid-texture coordinates; "
+        + "terrain and water programs read the normal (0, 1, 0), mc_Entity -1 and each vertex's own texture coordinate, so effects "
+        + "that depend on them (water and foliage detection, waving plants, material ids, normal-based lighting) do not work on terrain";
+
     private final PackResources r;
     private final GeometryPasses geometry;
     private final FullscreenPasses fullscreen;
@@ -63,6 +72,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
             DhMode.castsShadows(resources.dim.distantHorizons(), resources.dim.targets().shadow()));
         plan.notes().forEach(n -> resources.diagnostics.report(resources.dim.folder() + ": " + n));
         this.shadows = new ShadowRenderer(plan, ShadowSections.CAMERA_VISIBLE);
+        if (TERRAIN_SLOTS.stream().anyMatch(resources.dim.geometry()::containsKey)) {
+            resources.diagnostics.report(resources.dim.folder() + ": " + TERRAIN_VERTEX_NOTE);
+        }
     }
 
     /**
@@ -89,7 +101,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
         if (r.targets.resize(main.width, main.height)) {
             r.sinks.close();
+            r.passCopies.close();
         }
+        r.atlases.refresh();
         gameState.capture(r.frameState, camera, projection, partialTick);
         r.frameState.update();
         CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
@@ -236,6 +250,9 @@ final class PackRenderer implements FrameSteps, AutoCloseable {
                 distant.drawShadow(flips, frameSlice);
             }
         });
+        if (r.dim.targets().shadow().enabled()) {
+            r.targets.shadowColorTargets().forEach(pair -> r.mips.generate(pair, flips.shadowRead(pair.spec().index())));
+        }
     }
 
     @Override

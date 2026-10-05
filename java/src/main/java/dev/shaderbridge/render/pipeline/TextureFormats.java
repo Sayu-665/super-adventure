@@ -84,4 +84,17 @@ public final class TextureFormats {
     public static boolean blendable(GpuFormat format) {
         return numericClass(format) == ScalarClass.FLOAT;
     }
+
+    /**
+     * @param format a color format
+     * @return whether every Vulkan device can sample it with linear filtering (the formats the
+     *     Vulkan specification requires {@code SAMPLED_IMAGE_FILTER_LINEAR} for)
+     */
+    public static boolean filterable(GpuFormat format) {
+        return switch (format) {
+            case R8_UNORM, RG8_UNORM, RGBA8_UNORM, R8_SNORM, RG8_SNORM, RGBA8_SNORM, R16_FLOAT, RG16_FLOAT, RGBA16_FLOAT, RG11B10_FLOAT,
+                 RGB10A2_UNORM -> true;
+            default -> false;
+        };
+    }
 }

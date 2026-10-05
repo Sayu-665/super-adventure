@@ -2,11 +2,14 @@ package dev.shaderbridge.render.frame;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.shaderbridge.model.AlphaFunc;
 import dev.shaderbridge.model.AlphaTest;
 import dev.shaderbridge.model.BlendFactor;
@@ -16,8 +19,10 @@ import dev.shaderbridge.model.Program;
 import dev.shaderbridge.render.RenderFixture;
 import dev.shaderbridge.uniforms.DrawState;
 import dev.shaderbridge.uniforms.FrameState;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +49,7 @@ class DrawKeyTest {
     @Test
     void keysCarryTheProgramsBlendAndAlphaTestAsGlValues() {
         DrawKey key = DrawKey.of("p", with(new BlendMode(BlendFactor.SRC_ALPHA, BlendFactor.ONE_MINUS_SRC_ALPHA, BlendFactor.ONE, BlendFactor.ZERO),
-            new AlphaTest(AlphaFunc.GREATER, 0.1f)), RenderStages.TERRAIN_SOLID, false);
+            new AlphaTest(AlphaFunc.GREATER, 0.1f)), RenderStages.TERRAIN_SOLID, false, AlbedoSize.NONE);
         assertEquals(List.of(0x0302, 0x0303, 1, 0), key.blendFunc());
         assertEquals(0.1f, key.alphaTestRef());
         DrawState draw = new DrawState();
@@ -53,7 +58,7 @@ class DrawKeyTest {
         assertEquals(RenderStages.TERRAIN_SOLID, draw.renderStage);
         assertArrayEquals(new int[] {0x0302, 0x0303, 1, 0}, draw.blendFunc);
         assertEquals(new Matrix4f(frame.gbufferModelView()), draw.modelViewMatrix);
-        DrawKey.of("p", with(null, null), RenderStages.TERRAIN_SOLID, true).apply(frame, draw);
+        DrawKey.of("p", with(null, null), RenderStages.TERRAIN_SOLID, true, AlbedoSize.NONE).apply(frame, draw);
         assertEquals(new Matrix4f(frame.shadowModelView()), draw.modelViewMatrix);
         assertEquals(new Matrix4f(frame.shadowProjection()), draw.projectionMatrix);
         assertArrayEquals(new int[4], draw.blendFunc);
@@ -74,8 +79,8 @@ class DrawKeyTest {
             return slice;
         };
         DrawSlots slots = new DrawSlots();
-        DrawKey water = DrawKey.of("water", TERRAIN, RenderStages.TERRAIN_TRANSLUCENT, false);
-        DrawKey shadow = DrawKey.of("shadow", TERRAIN, RenderStages.TERRAIN_SOLID, true);
+        DrawKey water = DrawKey.of("water", TERRAIN, RenderStages.TERRAIN_TRANSLUCENT, false, AlbedoSize.NONE);
+        DrawKey shadow = DrawKey.of("shadow", TERRAIN, RenderStages.TERRAIN_SOLID, true, AlbedoSize.NONE);
         assertThrows(IllegalStateException.class, () -> slots.slice(water));
         FrameState frame = frame();
         slots.prepare(frame, writer);
@@ -101,5 +106,44 @@ class DrawKeyTest {
         for (GeometryProgram p : GeometryProgram.values()) {
             RenderStages.of(p);
         }
+    }
+
+    @Test
+    void theAlbedoSetsGtextureSizeAndAtlasSizeOnlyForAtlases() {
+        GpuTexture atlas = texture(1024, 512);
+        GpuTexture skin = texture(64, 32);
+        AlbedoSize atlasSize = AlbedoSize.of(Optional.of(view(atlas)), t -> t == atlas);
+        AlbedoSize skinSize = AlbedoSize.of(Optional.of(view(skin)), t -> t == atlas);
+        assertEquals(new AlbedoSize(1024, 512, true), atlasSize);
+        assertEquals(new AlbedoSize(64, 32, false), skinSize);
+        assertEquals(AlbedoSize.NONE, AlbedoSize.of(Optional.empty(), t -> true));
+        DrawState draw = new DrawState();
+        FrameState frame = frame();
+        DrawKey.of("p", TERRAIN, RenderStages.TERRAIN_SOLID, false, atlasSize).apply(frame, draw);
+        assertArrayEquals(new int[] {1024, 512, 1024, 512}, new int[] {draw.gtextureWidth, draw.gtextureHeight, draw.atlasWidth, draw.atlasHeight});
+        DrawKey.of("p", TERRAIN, RenderStages.ENTITIES, false, skinSize).apply(frame, draw);
+        assertArrayEquals(new int[] {64, 32, 0, 0}, new int[] {draw.gtextureWidth, draw.gtextureHeight, draw.atlasWidth, draw.atlasHeight});
+        assertNotEquals(DrawKey.of("p", TERRAIN, RenderStages.ENTITIES, false, skinSize), DrawKey.of("p", TERRAIN, RenderStages.ENTITIES, false,
+            AlbedoSize.NONE), "draws with other albedo sizes get blocks of their own");
+    }
+
+    private static GpuTexture texture(int width, int height) {
+        return (GpuTexture) Proxy.newProxyInstance(GpuTexture.class.getClassLoader(), new Class<?>[] {GpuTexture.class}, (p, m, a) -> switch (m.getName()) {
+            case "getWidth" -> width >> (int) a[0];
+            case "getHeight" -> height >> (int) a[0];
+            case "hashCode" -> System.identityHashCode(p);
+            case "equals" -> p == a[0];
+            default -> throw new UnsupportedOperationException(m.getName());
+        });
+    }
+
+    private static GpuTextureView view(GpuTexture texture) {
+        return (GpuTextureView) Proxy.newProxyInstance(GpuTextureView.class.getClassLoader(), new Class<?>[] {GpuTextureView.class},
+            (p, m, a) -> switch (m.getName()) {
+                case "texture" -> texture;
+                case "getWidth" -> texture.getWidth((int) a[0]);
+                case "getHeight" -> texture.getHeight((int) a[0]);
+                default -> throw new UnsupportedOperationException(m.getName());
+            });
     }
 }

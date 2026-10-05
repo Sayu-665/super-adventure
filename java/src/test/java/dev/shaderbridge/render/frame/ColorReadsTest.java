@@ -55,4 +55,15 @@ class ColorReadsTest {
         assertFalse(ColorReads.alt(COMPOSITE, new ResourceRef.DepthTex(1), true, flips, w -> { }));
         assertFalse(ColorReads.alt(COMPOSITE, new ResourceRef.Noise(), true, flips, w -> { }));
     }
+
+    @Test
+    void unnamedSamplersReadColortex0InItsCurrentTextureOutsideGeometry() {
+        FlipState flips = new FlipState();
+        ResourceRef unknown = new ResourceRef.Unknown("texture");
+        assertFalse(ColorReads.alt(COMPOSITE, unknown, true, flips, w -> { }));
+        flips.flip(List.of(0));
+        assertTrue(ColorReads.alt(COMPOSITE, unknown, false, flips, w -> { }), "after colortex0 flipped, its current texture is the alt one");
+        assertTrue(ColorReads.alt(COMPOSITE_COMPUTE, unknown, false, flips, w -> { }));
+        assertFalse(ColorReads.alt(TERRAIN, unknown, false, flips, w -> { }), "geometry programs read the albedo there");
+    }
 }

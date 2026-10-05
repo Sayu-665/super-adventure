@@ -559,20 +559,22 @@ Two strategies are selected per pack and recorded in the model:
   and DH-format LOD terrain beyond render distance. It supports all pass
   types, ping-pong flips, shadow maps, computes, images, SSBOs, blending,
   alpha test and viewport scales, and writes PNGs.
-* **The Java mod** (`java/`, Fabric, MC 26.3) does the following:
+* **The Java mod** (`java/`, Fabric, MC 26.3; details in [JAVA_MOD.md](JAVA_MOD.md)) does the following:
   * Loads the native library via JNI and manages packs and options, with its own GUI.
   * Compiles packs off-thread and creates pack render targets as renderpearl `GpuTexture`s.
-  * Swaps vanilla and DH `RenderPipeline`s for pack programs at
-    `RenderPass#setPipeline`. Pipelines are built from the
-    `Target::Renderpearl` GLSL through a custom `ShaderSource`, so the same
-    path works on Mojang's GL and Vulkan backends.
-  * Redirects color attachments to the pack's gbuffer targets.
+  * Builds renderpearl `RenderPipeline`s from the packs' SPIR-V, which a hook on Mojang's
+    `GlslCompiler` serves in place of compiled GLSL, and swaps them in for vanilla pipelines at
+    `RenderPass#setPipeline` inside its own gbuffers and shadow passes.
+  * Runs Minecraft's own draw code inside render passes on the pack's gbuffer targets.
   * Fills `sb_Frame` / `sb_Draw` from game state, evaluating custom uniforms natively.
   * Runs composite-style passes as fullscreen draws.
   * Routes `requires_raw_vulkan` programs to raw Vulkan using LWJGL Vulkan
     on Mojang's `VkDevice`, or disables them with a diagnostic when the
     backend is GL.
-  * Integrates with DH through its API events and pipeline substitution.
+  * Takes over DH's terrain renderer (a reflection proxy) and draws its LODs with the pack's
+    `dh_*` programs, switching DH's own effects off through its API.
+  * Renders only reversed-Z packs (`ReversedZeroToOne` on a device with [0, 1] clip depth), because
+    pack geometry shares Minecraft's depth buffer.
 
 ## 11. Verification
 

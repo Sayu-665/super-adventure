@@ -131,19 +131,22 @@ class VanillaPipelineTableTest {
         assertRoute("solid_terrain", GeometryProgram.TERRAIN_SOLID, "vanilla_terrain_section", GeometryProgram.SHADOW_SOLID);
         assertRoute("cutout_terrain_multidraw", GeometryProgram.TERRAIN_CUTOUT, "vanilla_terrain_basic", GeometryProgram.SHADOW_CUTOUT);
         assertRoute("translucent_terrain_multidraw", GeometryProgram.WATER, "vanilla_terrain_basic", GeometryProgram.SHADOW_WATER);
-        assertRoute("solid_block", GeometryProgram.BLOCK, "vanilla_block", GeometryProgram.SHADOW_CUTOUT);
-        assertRoute("cutout_block", GeometryProgram.BLOCK, "vanilla_block", GeometryProgram.SHADOW_CUTOUT);
-        assertRoute("translucent_block", GeometryProgram.BLOCK_TRANSLUCENT, "vanilla_block", GeometryProgram.SHADOW_WATER);
+        // Iris 26.3 (IrisPipelines): blocks outside chunk meshes use the terrain programs, translucent ones gbuffers_block.
+        assertRoute("solid_block", GeometryProgram.TERRAIN_SOLID, "vanilla_block", GeometryProgram.SHADOW_CUTOUT);
+        assertRoute("cutout_block", GeometryProgram.TERRAIN_CUTOUT, "vanilla_block", GeometryProgram.SHADOW_CUTOUT);
+        assertRoute("translucent_block", GeometryProgram.BLOCK, "vanilla_block", GeometryProgram.SHADOW_WATER);
         for (String entity : List.of("entity_solid", "entity_cutout", "entity_cutout_cull", "entity_cutout_dissolve", "entity_cutout_z_offset",
             "entity_solid_offset_forward", "armor_cutout_no_cull", "armor_decal_cutout_no_cull", "armor_translucent", "energy_swirl",
-            "breeze_wind", "item_cutout", "banner_pattern", "armor_cutout_no_cull_glint", "entity_solid_glint")) {
+            "item_cutout", "armor_cutout_no_cull_glint", "entity_solid_glint")) {
             assertRoute(entity, GeometryProgram.ENTITIES, "vanilla_entity", GeometryProgram.SHADOW_ENTITIES);
         }
-        for (String translucent : List.of("entity_translucent", "entity_translucent_cull", "entity_translucent_emissive", "item_translucent",
-            "item_translucent_glint")) {
+        for (String translucent : List.of("entity_translucent", "entity_translucent_cull", "item_translucent", "item_translucent_glint",
+            "breeze_wind", "banner_pattern")) {
             assertRoute(translucent, GeometryProgram.ENTITIES_TRANSLUCENT, "vanilla_entity", GeometryProgram.SHADOW_ENTITIES);
         }
+        assertRoute("entity_shadow", GeometryProgram.ENTITIES_TRANSLUCENT, "vanilla_entity", null);
         assertRoute("eyes", GeometryProgram.SPIDER_EYES, "vanilla_entity", GeometryProgram.SHADOW_ENTITIES);
+        assertRoute("entity_translucent_emissive", GeometryProgram.SPIDER_EYES, "vanilla_entity", GeometryProgram.SHADOW_ENTITIES);
         assertRoute("glint", GeometryProgram.ARMOR_GLINT, "vanilla_position_tex", null);
         assertRoute("lightning", GeometryProgram.LIGHTNING, "vanilla_position_color", GeometryProgram.SHADOW_LIGHTNING);
         assertRoute("beacon_beam_opaque", GeometryProgram.BEACON_BEAM, "vanilla_block", GeometryProgram.SHADOW_ENTITIES);
@@ -160,10 +163,10 @@ class VanillaPipelineTableTest {
         assertRoute("flat_clouds", GeometryProgram.CLOUDS, "vanilla_clouds", null);
         assertRoute("lines", GeometryProgram.LINE, "vanilla_lines", null);
         assertRoute("secondary_block_outline", GeometryProgram.LINE, "vanilla_lines", null);
-        assertRoute("leash", GeometryProgram.LINE, "vanilla_position_color_lightmap", GeometryProgram.SHADOW);
+        assertRoute("leash", GeometryProgram.BASIC, "vanilla_position_color_lightmap", GeometryProgram.SHADOW);
         assertRoute("world_border", GeometryProgram.TEXTURED, "vanilla_position_tex", null);
-        assertRoute("text", GeometryProgram.TEXTURED, "vanilla_text", GeometryProgram.SHADOW_ENTITIES);
-        assertRoute("text_see_through", GeometryProgram.TEXTURED, "vanilla_position_tex_color", null);
+        assertRoute("text", GeometryProgram.ENTITIES_TRANSLUCENT, "vanilla_text", GeometryProgram.SHADOW_ENTITIES);
+        assertRoute("text_see_through", GeometryProgram.ENTITIES_TRANSLUCENT, "vanilla_position_tex_color", null);
         assertRoute("end_portal", GeometryProgram.BLOCK, "vanilla_position", GeometryProgram.SHADOW_BLOCK);
         assertRoute("end_gateway", GeometryProgram.BLOCK, "vanilla_position", GeometryProgram.SHADOW_BLOCK);
     }
@@ -175,7 +178,7 @@ class VanillaPipelineTableTest {
     @Test
     void guiDebugOitAndInternalPipelinesStayVanilla() {
         for (String name : List.of("gui", "gui_textured", "crosshair", "debug_quads", "oit_composite", "oit_accumulate_entity", "blit_depth",
-            "lightmap", "panorama", "tracy_blit", "outline_cull", "entity_outline_blit", "entity_shadow", "wireframe", "wireframe_multidraw",
+            "lightmap", "panorama", "tracy_blit", "outline_cull", "entity_outline_blit", "wireframe", "wireframe_multidraw",
             "water_mask")) {
             assertInstanceOf(PipelineMapping.Vanilla.class, VanillaPipelineTable.lookupPath("pipeline/" + name), name);
         }

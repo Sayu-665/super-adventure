@@ -4,11 +4,17 @@ import dev.shaderbridge.model.DepthMode;
 import java.util.Locale;
 import java.util.Optional;
 
-/** The user's depth convention choice ({@code depthMode} in the config file). */
+/**
+ * The user's depth convention choice ({@code depthMode} in the config file): which depth convention
+ * packs are translated for. The in-game renderer shares Minecraft's reversed-Z depth buffer, so it
+ * renders only packs translated for reversed-Z on a device with [0, 1] clip depth, and refuses
+ * others with a message; the other conventions exist for comparing translations with ShaderBridge's
+ * headless executor.
+ */
 public enum DepthModeSetting {
-    /** Share Minecraft's reversed-Z depth when the device clips Z to [0,1] (the default). */
+    /** Reversed-Z [0,1] when the device clips Z to [0,1] (the default), else GL's [-1,1] (not rendered in game). */
     AUTO,
-    /** Forward-Z [0,1]: packs get their own depth buffers cleared to 1. */
+    /** Forward-Z [0,1] (not rendered in game: Minecraft's depth buffer is reversed-Z). */
     FORWARD,
     /** Reversed-Z [0,1], as Minecraft 26.2+ and Distant Horizons 3.3+ render. */
     REVERSED;

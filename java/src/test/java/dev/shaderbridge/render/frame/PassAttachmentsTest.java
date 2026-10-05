@@ -21,11 +21,11 @@ class PassAttachmentsTest {
     }
 
     @Test
-    void geometryUsesTheCurrentTexturesAndKeepsSlotZeroBacked() {
+    void geometryUsesTheCurrentTexturesAndBacksEveryMissingTargetWithASink() {
         FlipState flips = new FlipState();
         flips.flip(List.of(3));
         flips.flipShadow(List.of(1));
-        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Target(3, true), new AttachmentSlot.Unused(), new AttachmentSlot.Target(4, false)),
+        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Target(3, true), new AttachmentSlot.Sink(), new AttachmentSlot.Target(4, false)),
             PassAttachments.geometry(List.of(0, 3, 5, 4), false, flips, Set.of(3, 4)::contains));
         assertEquals(List.of(new AttachmentSlot.Target(0, false), new AttachmentSlot.Target(1, true)),
             PassAttachments.geometry(List.of(0, 1), true, flips, t -> true));
@@ -44,10 +44,10 @@ class PassAttachmentsTest {
     }
 
     @Test
-    void missingAndRepeatedTargetsGetNoTexture() {
+    void missingAndRepeatedTargetsDrawIntoSinks() {
         FlipState flips = new FlipState();
         Program p = withOutputs(COMPOSITE, List.of(9, 4, 4, 6), List.of());
-        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Target(4, true), new AttachmentSlot.Unused(), new AttachmentSlot.Unused()),
+        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Target(4, true), new AttachmentSlot.Sink(), new AttachmentSlot.Sink()),
             PassAttachments.fullscreen(p, PassGroup.DEFERRED, flips, Set.of(4)::contains, 8));
         assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Target(4, true)),
             PassAttachments.fullscreen(p, PassGroup.DEFERRED, flips, Set.of(4)::contains, 2), "outputs past the attachment limit are dropped");
@@ -56,7 +56,7 @@ class PassAttachmentsTest {
     @Test
     void outputSlotsPlaceOutputsAndHolesAreFilled() {
         Program p = withOutputs(COMPOSITE, List.of(5), List.of(2));
-        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Unused(), new AttachmentSlot.Target(5, true)),
+        assertEquals(List.of(new AttachmentSlot.Sink(), new AttachmentSlot.Sink(), new AttachmentSlot.Target(5, true)),
             PassAttachments.fullscreen(p, PassGroup.COMPOSITE, new FlipState(), t -> true, 8));
     }
 

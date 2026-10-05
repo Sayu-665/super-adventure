@@ -112,4 +112,46 @@ class VanillaClonesTest {
         assertFalse(compiles.get(2) == compiles.get(0));
         assertTrue(clones.discard(RenderPipelines.SOLID_TERRAIN_MULTIDRAW, GBUFFERS).isEmpty(), "a failed compile is reported as empty");
     }
+
+    @Test
+    void rebuiltResourcesReuseTheSameClones() {
+        List<RenderPipeline> compiles = new ArrayList<>();
+        new VanillaClones(p -> {
+            compiles.add(p);
+            return compiled();
+        }, false).fallback(TRANSLUCENT, GBUFFERS, 0);
+        new VanillaClones(p -> {
+            compiles.add(p);
+            return compiled();
+        }, false).fallback(TRANSLUCENT, GBUFFERS, 0);
+        assertSame(compiles.get(0), compiles.get(1), "Mojang's pipeline cache keys by identity: a second set would never be freed");
+        new VanillaClones(p -> {
+            compiles.add(p);
+            return compiled();
+        }, true).fallback(TRANSLUCENT, GBUFFERS, 0);
+        assertFalse(compiles.get(2) == compiles.get(0), "the clone depends on independentBlend");
+    }
+
+    @Test
+    void pipelinesFitAPassWithOneStateOfTheSameFormatPerAttachment() {
+        AttachmentLayout single = AttachmentLayout.single("one", 0, GpuFormat.RGBA8_UNORM);
+        assertTrue(VanillaClones.fits(TRANSLUCENT.getColorTargetStates(), single));
+        assertFalse(VanillaClones.fits(TRANSLUCENT.getColorTargetStates(), AttachmentLayout.single("one", 0, GpuFormat.RGBA16_FLOAT)));
+        assertFalse(VanillaClones.fits(TRANSLUCENT.getColorTargetStates(), GBUFFERS));
+        List<ColorTargetState> withHole = new ArrayList<>();
+        withHole.add(null);
+        assertFalse(VanillaClones.fits(withHole, single));
+    }
+
+    @Test
+    void blitClonesTargetAnyFormatWithoutBlendingOrDepth() {
+        RenderPipeline blit = BlitPipelines.to(GpuFormat.RG11B10_FLOAT);
+        assertSame(blit, BlitPipelines.to(GpuFormat.RG11B10_FLOAT));
+        assertSameDraw(RenderPipelines.TRACY_BLIT, blit);
+        assertEquals(List.of(GpuFormat.RG11B10_FLOAT), formats(blit));
+        assertTrue(blit.getColorTargetStates().getFirst().blendFunction().isEmpty());
+        assertEquals(ColorTargetState.WRITE_ALL, blit.getColorTargetStates().getFirst().writeMask());
+        assertNull(blit.getDepthStencilState());
+        assertFalse(BlitPipelines.to(GpuFormat.RGBA16_FLOAT).getLocation().equals(blit.getLocation()));
+    }
 }

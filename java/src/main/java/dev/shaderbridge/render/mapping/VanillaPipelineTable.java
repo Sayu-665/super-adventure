@@ -1,9 +1,9 @@
 package dev.shaderbridge.render.mapping;
 
 import static dev.shaderbridge.model.GeometryProgram.ARMOR_GLINT;
+import static dev.shaderbridge.model.GeometryProgram.BASIC;
 import static dev.shaderbridge.model.GeometryProgram.BEACON_BEAM;
 import static dev.shaderbridge.model.GeometryProgram.BLOCK;
-import static dev.shaderbridge.model.GeometryProgram.BLOCK_TRANSLUCENT;
 import static dev.shaderbridge.model.GeometryProgram.CLOUDS;
 import static dev.shaderbridge.model.GeometryProgram.DAMAGED_BLOCK;
 import static dev.shaderbridge.model.GeometryProgram.ENTITIES;
@@ -49,6 +49,15 @@ import net.minecraft.resources.Identifier;
  * shares a location but uses another vertex format (the {@code *_GLINT_SPECIAL} item pipelines)
  * is still compatible because only the profile's attributes are read; {@link PipelineRouter}
  * checks this per pipeline.
+ *
+ * <p>The programs follow Iris 26.3's choices where Iris makes one per pipeline: blocks outside
+ * chunk meshes draw with the terrain programs (translucent ones with {@code gbuffers_block}),
+ * in-world text, banner patterns, breeze wind and the entity shadow decal with
+ * {@code gbuffers_entities_translucent}, emissive entity layers with {@code gbuffers_spidereyes},
+ * leads with {@code gbuffers_basic}. Iris also tells block entities from entities by the rendering
+ * phase they are drawn in (both use the {@code entity_*} pipelines; block entities draw with
+ * {@code gbuffers_block}); Minecraft 26.3 batches both into the same feature draws, so this table
+ * maps them all to the entity programs.
  *
  * <p>The {@code *_glint} pipelines of 26.3 draw the model <em>and</em> its glint in one pass
  * ({@code GLINT} shader define), so they map to the program of the model; only
@@ -143,19 +152,20 @@ public final class VanillaPipelineTable {
         t.map(WATER, SHADOW_WATER, TERRAIN_MULTIDRAW, "translucent_terrain_multidraw");
         t.vanilla("the debug wireframe view", "wireframe", "wireframe_multidraw");
         // Blocks outside chunk meshes (moving pistons, falling blocks), block decals and beams.
-        t.map(BLOCK, SHADOW_CUTOUT, BLOCK_FORMAT, "solid_block", "cutout_block");
-        t.map(BLOCK_TRANSLUCENT, SHADOW_WATER, BLOCK_FORMAT, "translucent_block");
+        t.map(TERRAIN_SOLID, SHADOW_CUTOUT, BLOCK_FORMAT, "solid_block");
+        t.map(TERRAIN_CUTOUT, SHADOW_CUTOUT, BLOCK_FORMAT, "cutout_block");
+        t.map(BLOCK, SHADOW_WATER, BLOCK_FORMAT, "translucent_block");
         t.map(DAMAGED_BLOCK, null, BLOCK_FORMAT, "crumbling");
         t.map(BEACON_BEAM, SHADOW_ENTITIES, BLOCK_FORMAT, "beacon_beam_opaque", "beacon_beam_translucent");
         t.map(BLOCK, SHADOW_BLOCK, POSITION, "end_portal", "end_gateway");
         // Entities, block entities, items, armor.
         t.map(ENTITIES, SHADOW_ENTITIES, ENTITY_FORMAT, "entity_solid", "entity_solid_offset_forward", "entity_cutout", "entity_cutout_cull",
             "entity_cutout_z_offset", "entity_cutout_dissolve", "armor_cutout_no_cull", "armor_decal_cutout_no_cull", "armor_translucent",
-            "energy_swirl", "breeze_wind", "end_crystal_beam", "banner_pattern", "item_cutout", "armor_cutout_no_cull_glint",
-            "entity_solid_glint");
-        t.map(ENTITIES_TRANSLUCENT, SHADOW_ENTITIES, ENTITY_FORMAT, "entity_translucent", "entity_translucent_cull", "entity_translucent_emissive",
-            "item_translucent", "item_translucent_glint");
-        t.map(SPIDER_EYES, SHADOW_ENTITIES, ENTITY_FORMAT, "eyes");
+            "energy_swirl", "end_crystal_beam", "item_cutout", "armor_cutout_no_cull_glint", "entity_solid_glint");
+        t.map(ENTITIES_TRANSLUCENT, SHADOW_ENTITIES, ENTITY_FORMAT, "entity_translucent", "entity_translucent_cull", "item_translucent",
+            "item_translucent_glint", "breeze_wind", "banner_pattern");
+        t.map(ENTITIES_TRANSLUCENT, null, ENTITY_FORMAT, "entity_shadow");
+        t.map(SPIDER_EYES, SHADOW_ENTITIES, ENTITY_FORMAT, "eyes", "entity_translucent_emissive");
         t.map(ARMOR_GLINT, null, POSITION_TEX, "glint");
         t.map(LIGHTNING, SHADOW_LIGHTNING, POSITION_COLOR, "lightning", "dragon_rays");
         // Particles and weather.
@@ -170,13 +180,12 @@ public final class VanillaPipelineTable {
         t.map(CLOUDS, null, CLOUD_FACES, "clouds", "flat_clouds");
         // Lines, leads, text and the world border.
         t.map(LINE, null, LINES, "lines", "lines_translucent", "lines_translucent_no_depth_write", "lines_depth_bias", "secondary_block_outline");
-        t.map(LINE, SHADOW, POSITION_COLOR_LIGHTMAP, "leash");
-        t.map(TEXTURED, SHADOW_ENTITIES, TEXT, "text", "text_grayscale", "text_polygon_offset", "text_grayscale_polygon_offset");
-        t.map(TEXTURED, null, POSITION_TEX_COLOR, "text_see_through", "text_grayscale_see_through");
+        t.map(BASIC, SHADOW, POSITION_COLOR_LIGHTMAP, "leash");
+        t.map(ENTITIES_TRANSLUCENT, SHADOW_ENTITIES, TEXT, "text", "text_grayscale", "text_polygon_offset", "text_grayscale_polygon_offset");
+        t.map(ENTITIES_TRANSLUCENT, null, POSITION_TEX_COLOR, "text_see_through", "text_grayscale_see_through");
         t.map(TEXTURED, null, POSITION_TEX, "world_border");
         // Everything else draws vanilla.
         t.vanilla("a depth-only mask that keeps water out of boats", "water_mask", "oit_water_mask");
-        t.vanilla("the vanilla entity shadow decal", "entity_shadow");
         t.vanilla("GUI and screen overlays", "gui", "gui_invert", "gui_text", "gui_text_grayscale", "gui_text_highlight", "gui_textured",
             "gui_textured_premultiplied_alpha", "gui_opaque_textured_background", "gui_nausea_overlay", "block_screen_effect", "fire_screen_effect",
             "vignette", "crosshair", "mojang_logo", "panorama");

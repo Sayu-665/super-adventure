@@ -20,13 +20,15 @@
 //! ...) are keywords from some GLSL version on, but lenient compilers accept
 //! them as identifiers in older versions (NVIDIA all of them, glslang most),
 //! while glsl-lang rejects them as identifiers at every version and the
-//! translated `#version 450` output makes them keywords anyway. Unlike the words above, packs also use them as
-//! keywords below that version (`flat varying` under `GL_EXT_gpu_shader4`,
-//! `layout(location = 0)` under `GL_ARB_explicit_attrib_location`, a
-//! leniently accepted `switch`), so the version gate alone cannot tell the two
-//! uses apart. Each occurrence is therefore classified from its neighbouring
-//! tokens as an identifier use, a keyword use or ambiguous (see
-//! [`KeywordRole`]), and a word is escaped in a translation unit only when
+//! translated `#version 450` output makes them keywords anyway. Unlike the
+//! words above, packs also use them as keywords below that version
+//! (`flat varying` under `GL_EXT_gpu_shader4`, `layout(location = 0)` under
+//! `GL_ARB_explicit_attrib_location`, a leniently accepted `switch`), so the
+//! version gate alone cannot tell the two uses apart. Each occurrence is
+//! therefore classified from the nearest significant tokens before and after
+//! it (whitespace, comments and directives skipped; after macro expansion) as
+//! an identifier use, a keyword use or ambiguous (see [`KeywordRole`]), and a
+//! word is escaped in a translation unit only when
 //! * the source version is below [`ContextualWord::since`] and none of its
 //!   [`ContextualWord::extensions`] is enabled, and
 //! * at least one occurrence is certainly an identifier and none is certainly
@@ -158,8 +160,11 @@ pub enum KeywordRole {
     /// followed by any other punctuator: identifier.
     Default,
     /// A type name (`double`). Followed by an identifier: keyword. Followed by
-    /// `(` (constructor), `[` (array type), `,`/`)` (unnamed parameter) or `;`
-    /// (empty declaration): ambiguous. Any other punctuator: identifier.
+    /// `(` (constructor) or `[` (array type): ambiguous. Followed by `,`/`)`
+    /// (unnamed parameter) or `;` (empty declaration): ambiguous, unless
+    /// preceded by an operator other than `(` and `,` (after an operator a type
+    /// name can only start a constructor): identifier. Any other punctuator:
+    /// identifier.
     Type,
 }
 
@@ -350,13 +355,18 @@ fn expects_operand(p: &str) -> bool {
 pub(crate) fn classify_usage(role: KeywordRole, prev: Neighbour<'_>, next: Neighbour<'_>) -> Usage {
     use KeywordRole as R;
     use Neighbour as N;
+    // An operator after which an operand must follow, other than the `(` and
+    // `,` that can also start a parameter declaration.
+    let prev_operator = matches!(prev, N::Punct(p) if p != "(" && p != "," && expects_operand(p));
     // What the preceding token proves: only identifiers follow a field selection,
-    // and statement keywords never follow an operator.
+    // statement keywords never follow an operator, and qualifiers only follow
+    // `(` and `,` among the operators. A type name can follow any operator (as
+    // a constructor), so for it the operator is weighed with the next token.
     let prev_identifier = match prev {
         N::Punct(".") => true,
         N::Punct(p) => match role {
             R::Switch | R::Case | R::Default => expects_operand(p),
-            R::Qualifier | R::Layout => p != "(" && p != "," && expects_operand(p),
+            R::Qualifier | R::Layout => prev_operator,
             R::Type => false,
         },
         _ => false,
@@ -391,7 +401,7 @@ pub(crate) fn classify_usage(role: KeywordRole, prev: Neighbour<'_>, next: Neigh
             }
         }
         (R::Type, N::Punct(p)) => {
-            if matches!(p, "(" | "[" | "," | ")" | ";") {
+            if matches!(p, "(" | "[") || (matches!(p, "," | ")" | ";") && !prev_operator) {
                 Usage::Ambiguous
             } else {
                 Usage::Identifier
@@ -462,7 +472,9 @@ pub(crate) fn must_escape(class: ReservedClass, version: u32, exts: &[ExtensionD
 
 /// Whether `word` would be escaped in a shader with the given version and
 /// extensions. For the words of [`CONTEXTUAL_RESERVED`] this answers whether
-/// its identifier uses would be escaped (keyword uses never are).
+/// the version and extensions allow escaping its identifier uses; whether a
+/// translation unit is actually escaped also depends on how the word is used
+/// there (see the module documentation), and keyword uses never are.
 ///
 /// ```
 /// use sb_preprocess::would_escape;
@@ -658,7 +670,20 @@ mod tests {
         assert_eq!(c(R::Type, Punct(";"), Ident), Keyword);
         assert_eq!(c(R::Type, Punct("="), Ident), Keyword);
         for p in ["(", "[", ",", ")", ";"] {
+            assert_eq!(c(R::Type, Ident, Punct(p)), Ambiguous, "{p}");
+            assert_eq!(c(R::Type, Punct("("), Punct(p)), Ambiguous, "{p}");
+            assert_eq!(c(R::Type, Punct(","), Punct(p)), Ambiguous, "{p}");
+            assert_eq!(c(R::Type, Punct(";"), Punct(p)), Ambiguous, "{p}");
+        }
+        // After an operator a type name can only start a constructor.
+        for p in ["(", "["] {
             assert_eq!(c(R::Type, Punct("="), Punct(p)), Ambiguous, "{p}");
+            assert_eq!(c(R::Type, Punct("*"), Punct(p)), Ambiguous, "{p}");
+        }
+        for p in [",", ")", ";"] {
+            assert_eq!(c(R::Type, Punct("="), Punct(p)), Identifier, "{p}");
+            assert_eq!(c(R::Type, Punct("?"), Punct(p)), Identifier, "{p}");
+            assert_eq!(c(R::Type, Punct("+="), Punct(p)), Identifier, "{p}");
         }
         for p in ["=", "*", ".", "+=", "?", ":"] {
             assert_eq!(c(R::Type, Ident, Punct(p)), Identifier, "{p}");

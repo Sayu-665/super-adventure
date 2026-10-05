@@ -2,6 +2,7 @@ package dev.shaderbridge.render.draw;
 
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import dev.shaderbridge.model.Program;
+import dev.shaderbridge.model.ProgramKind;
 import dev.shaderbridge.model.ResourceRef;
 import dev.shaderbridge.render.frame.ColorReads;
 import dev.shaderbridge.render.frame.FlipState;
@@ -68,6 +69,40 @@ public final class UniformBinder {
                 }
             }
         }
+    }
+
+    /**
+     * Binds again what depends on the draw's albedo, after the host bound another texture as
+     * {@code Sampler0}: {@code sb_Draw} (its texture sizes) and the pack samplers that sample the
+     * albedo.
+     *
+     * @param target  the render pass
+     * @param plan    the pipeline's binding plan
+     * @param program the program the pipeline runs
+     * @param draw    the {@code sb_Draw} slice for the new albedo
+     * @param host    the game's textures with the new albedo
+     */
+    public void bindAlbedo(UniformTarget target, BindingPlan plan, Program program, GpuBufferSlice draw, HostTextures host) {
+        for (BindingPlan.Binding binding : plan.bindings()) {
+            switch (binding.source()) {
+                case BindingPlan.Source.DrawBlock d -> target.bind(binding.name(), draw);
+                case BindingPlan.Source.Pack p when samplesAlbedo(p.resource(), program) ->
+                    target.bind(binding.name(), textures.resolve(p.resource(), false, program, host));
+                default -> {
+                    // Independent of the albedo.
+                }
+            }
+        }
+    }
+
+    /**
+     * @param resource a sampled resource
+     * @param program  the sampling program
+     * @return whether it resolves to the draw's albedo: the atlas, and samplers the pack did not
+     *     name in a geometry program (GL texture unit 0)
+     */
+    static boolean samplesAlbedo(ResourceRef resource, Program program) {
+        return resource instanceof ResourceRef.Atlas || resource instanceof ResourceRef.Unknown && program.kind() instanceof ProgramKind.Geometry;
     }
 
     private void hostFallback(UniformTarget target, String name, Optional<ResourceRef> fallback, Program program, FlipState flips, HostTextures host) {

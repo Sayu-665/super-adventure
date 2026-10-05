@@ -99,4 +99,27 @@ class UniformBinderTest {
         assertEquals("ColorTex alt", resolved.get(1), "the model's use_alt wins");
         assertEquals(1, warnings.size());
     }
+
+    @Test
+    void anotherAlbedoRebindsOnlyTheDrawBlockAndAlbedoSamplers() {
+        BindingPlan plan = new BindingPlan(List.of(
+            new BindingPlan.Binding("sb_Frame", new Source.FrameBlock()),
+            new BindingPlan.Binding("sb_Draw", new Source.DrawBlock()),
+            new BindingPlan.Binding("gtexture", new Source.Pack(new ResourceRef.Atlas(), false)),
+            new BindingPlan.Binding("texture", new Source.Pack(new ResourceRef.Unknown("texture"), false)),
+            new BindingPlan.Binding("colortex4", new Source.Pack(new ResourceRef.ColorTex(4), false)),
+            new BindingPlan.Binding("Sampler2", new Source.Host(Optional.of(new ResourceRef.Lightmap())))));
+        List<String> resolved = new ArrayList<>();
+        UniformBinder binder = new UniformBinder((resource, alt, p, host) -> {
+            resolved.add(resource.getClass().getSimpleName());
+            return new TextureBinding(null, null);
+        }, w -> { });
+        Target terrain = new Target(Set.of(), new ArrayList<>());
+        binder.bindAlbedo(terrain, plan, TERRAIN, DRAW, null);
+        assertEquals(List.of("sb_Draw=draw", "gtexture=texture", "texture=texture"), terrain.binds());
+        assertEquals(List.of("Atlas", "Unknown"), resolved);
+        Target composite = new Target(Set.of(), new ArrayList<>());
+        binder.bindAlbedo(composite, plan, COMPOSITE, DRAW, null);
+        assertEquals(List.of("sb_Draw=draw", "gtexture=texture"), composite.binds(), "an unnamed sampler is colortex0 outside geometry programs");
+    }
 }

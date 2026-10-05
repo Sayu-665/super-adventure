@@ -37,7 +37,8 @@ import org.joml.Vector3d;
  * {@code dh_water} and {@code dh_shadow} programs, each slot in a pass of its own on the pack's
  * shared gbuffers attachments (or the shadow attachments), per the frame's {@link DhMode}
  * ({@link DistantFrame}): into the LOD depth ({@link DhMode#NATIVE}, copied to
- * {@code dhDepthTex1} after the opaque LODs and to {@code dhDepthTex0} after {@code dh_water}) or
+ * {@code dhDepthTex1} and {@code dhDepthTex0} after the opaque LODs and to {@code dhDepthTex0}
+ * again after {@code dh_water}) or
  * into Minecraft's depth with the unified projection and only beyond the vanilla area
  * ({@link DhMode#SYNTHESIZED}). ShaderBridge binds the profile's host resources itself:
  * {@code uLightMap} (Minecraft's lightmap), {@code uBlockAtlas} (Distant Horizons' block atlas),
@@ -65,7 +66,10 @@ final class DistantPasses {
     }
 
     /**
-     * Draws the opaque LODs ({@code dh_terrain}) of this frame, then copies {@code dhDepthTex1}.
+     * Draws the opaque LODs ({@code dh_terrain}) of this frame, then copies the LOD depth into
+     * {@code dhDepthTex1} and {@code dhDepthTex0}: until {@code dh_water} is drawn, the programs in
+     * between (the deferred passes, the translucent gbuffers) see the current frame's opaque LODs in
+     * {@code dhDepthTex0}, as they see Distant Horizons' live depth in Iris.
      *
      * @param flips the frame's flip state
      * @param frame the {@code sb_Frame} slice
@@ -73,6 +77,7 @@ final class DistantPasses {
     void drawOpaque(FlipState flips, GpuBufferSlice frame) {
         current().ifPresent(lods -> draw(GeometryProgram.DH_TERRAIN, lods.opaque(), cameraClip(), false, flips, frame));
         r.distant.copyDepth(1);
+        r.distant.copyDepth(0);
     }
 
     /**
@@ -143,14 +148,14 @@ final class DistantPasses {
         LodUniforms.PassSlots slots = r.distant.uniforms().write(RenderSystem.getDevice().createCommandEncoder(), shared(clip), buffers,
             r.frameState.cameraPosition);
         String label = "ShaderBridge " + slot.fileName();
-        Optional<RenderPass> pass = shadow ? Optional.of(passes.openOwnShadow(label, flips))
+        Optional<GeometryPasses.OwnPass> pass = shadow ? Optional.of(passes.openOwnShadow(label, flips))
             : passes.openOwnGbuffers(label, flips, r.distant.gbuffersDepth());
         if (pass.isEmpty()) {
             r.diagnostics.report(slot.fileName() + ": the pack's geometry writes more targets than one render pass holds; LODs are not drawn");
             return;
         }
-        try (RenderPass p = pass.get()) {
-            bind(p, slot, program, pipeline, bindings, slots, shadow, flips, frame);
+        try (RenderPass p = pass.get().pass()) {
+            bind(p, pass.get().host(), slot, program, pipeline, bindings, slots, shadow, flips, frame);
             for (int i = 0; i < buffers.size(); i++) {
                 LodBuffer b = buffers.get(i);
                 if (bindings.unique()) {
@@ -164,12 +169,11 @@ final class DistantPasses {
     }
 
     /** Binds the pipeline, the host resources and the pack's descriptors. */
-    private void bind(RenderPass pass, GeometryProgram slot, Program program, ProgramResolution.Renderpearl pipeline, DistantBindings bindings,
-                      LodUniforms.PassSlots slots, boolean shadow, FlipState flips, GpuBufferSlice frame) {
+    private void bind(RenderPass pass, MinecraftHost passHost, GeometryProgram slot, Program program, ProgramResolution.Renderpearl pipeline,
+                      DistantBindings bindings, LodUniforms.PassSlots slots, boolean shadow, FlipState flips, GpuBufferSlice frame) {
         pass.setPipeline(pipeline.compiled());
         OwnPassUniforms target = new OwnPassUniforms(pass);
-        MinecraftHost host = r.host()
-            .withAlbedo(new TextureBinding(r.textures.white(), RenderSystem.getSamplerCache().getRepeat(FilterMode.NEAREST)));
+        MinecraftHost host = passHost.withAlbedo(new TextureBinding(r.textures.white(), RenderSystem.getSamplerCache().getRepeat(FilterMode.NEAREST)));
         if (bindings.lightmap()) {
             target.bind(DistantBindings.LIGHTMAP, host.lightmap());
         }
@@ -179,7 +183,7 @@ final class DistantPasses {
         if (bindings.shared()) {
             target.bind(DhHostBlocks.SHARED_BLOCK, slots.shared());
         }
-        DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.of(slot), shadow);
+        DrawKey key = DrawKey.of(pipeline.pipeline().key().toString(), program, RenderStages.of(slot), shadow, AlbedoSize.NONE);
         r.binder.bind(target, pipeline.pipeline().bindings(), program, flips, frame, r.drawSlots.slice(key), host);
     }
 

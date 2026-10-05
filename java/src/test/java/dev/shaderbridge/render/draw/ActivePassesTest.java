@@ -1,7 +1,9 @@
 package dev.shaderbridge.render.draw;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
@@ -26,7 +28,11 @@ class ActivePassesTest {
         CompiledRenderPipeline replacement = VanillaClonesTest.compiled();
         ActivePasses.open(ours, r -> ActivePasses.Substitution.unchanged(replacement));
         try {
+            assertTrue(ActivePasses.owns(ours));
+            assertFalse(ActivePasses.owns(other));
+            assertFalse(ActivePasses.owns(null));
             assertSame(replacement, ActivePasses.substitute(ours, requested).pipeline());
+            assertTrue(ActivePasses.substitute(ours, requested).binding().isEmpty(), "vanilla pipelines bind nothing of the pack's");
             assertNull(ActivePasses.substitute(other, requested));
             ActivePasses.close(other);
             assertSame(replacement, ActivePasses.substitute(ours, requested).pipeline(), "closing another pass changes nothing");
@@ -34,6 +40,7 @@ class ActivePassesTest {
             ActivePasses.close(ours);
         }
         assertNull(ActivePasses.substitute(ours, requested));
+        assertFalse(ActivePasses.owns(ours), "a closed pass is no longer ShaderBridge's");
     }
 
     @Test

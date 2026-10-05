@@ -72,7 +72,10 @@ final class PackResources implements AutoCloseable {
     final FrameUniforms frameUniforms;
     final DrawUniforms drawUniforms;
     final DrawSlots drawSlots = new DrawSlots();
+    final AtlasTextures atlases = new AtlasTextures();
+    final MipGenerator mips = new MipGenerator(diagnostics::report);
     final SinkTextures sinks;
+    final PassCopies passCopies;
     final FrameSequencer sequencer;
     final DistantFrame distant;
     private final ExecutorService variantCompiler;
@@ -98,6 +101,7 @@ final class PackResources implements AutoCloseable {
             own(backend.requestStorage(dim));
             this.targets = own(PackTargets.create(device, dim, main.width, main.height, main.getDepthTexture().getFormat()));
             this.sinks = own(new SinkTextures(device));
+            this.passCopies = own(new PassCopies(device));
             this.distant = own(new DistantFrame(device, dim.distantHorizons(), depthMode, diagnostics::report));
             Map<String, byte[]> rawFiles = new HashMap<>();
             try (PackFiles files = PackFiles.open(pack.session().path())) {

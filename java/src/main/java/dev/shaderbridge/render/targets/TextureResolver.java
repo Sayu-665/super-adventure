@@ -16,7 +16,8 @@ import java.util.function.Consumer;
  * bind: render targets (main or alt per the program's flip state), depth copies, shadow maps,
  * pack textures, and host textures. Resources that do not exist bind a neutral texture (black for
  * colors, the far plane for depth, white for custom textures, as the headless executor does) and
- * are reported once. Render thread only.
+ * are reported once. A sampler the pack did not name (GL texture unit 0) is the albedo in geometry
+ * programs and {@code colortex0} elsewhere. Render thread only.
  */
 public final class TextureResolver {
     private final DimensionPipeline dim;
@@ -67,6 +68,10 @@ public final class TextureResolver {
      */
     public TextureBinding resolve(ResourceRef ref, boolean useAlt, Program program, HostTextures host) {
         SamplerSpec sampler = samplerSpec(ref, program);
+        Optional<GpuTextureView> copy = host.passCopy(ref);
+        if (copy.isPresent()) {
+            return bind(copy.get(), sampler);
+        }
         return switch (ref) {
             case ResourceRef.ColorTex c -> color(c.index(), useAlt, sampler);
             case ResourceRef.ColorImage c -> color(c.index(), useAlt, sampler);
@@ -85,7 +90,7 @@ public final class TextureResolver {
             case ResourceRef.DhDepthTex d -> host.dhDepth(Math.clamp(d.index(), 0, 1)).map(v -> bind(v, sampler)).orElseGet(this::farDepth);
             case ResourceRef.DhBlockAtlas a -> host.dhBlockAtlas().orElseGet(() -> bind(textures.white(), sampler));
             case ResourceRef.CustomTexture t -> custom(t.id(), sampler, host);
-            case ResourceRef.Unknown u -> program.kind() instanceof ProgramKind.Geometry ? host.atlas() : color(0, false, sampler);
+            case ResourceRef.Unknown u -> program.kind() instanceof ProgramKind.Geometry ? host.atlas() : color(0, useAlt, sampler);
             case ResourceRef.Image i -> missing("custom image " + i.name() + " is a storage image, which only the raw Vulkan path provides");
             case ResourceRef.Ssbo s -> missing("SSBO " + s.index() + " cannot be bound as a sampler");
             case ResourceRef.UniformBlock b -> missing("uniform block " + b.name() + " cannot be bound as a sampler");

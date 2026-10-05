@@ -20,8 +20,7 @@ import java.util.function.IntPredicate;
  *   color target.</li>
  * </ul>
  *
- * A slot without a usable texture is {@link AttachmentSlot.Unused}, or {@link AttachmentSlot.Sink}
- * in slot 0, which Mojang's render passes require.
+ * A slot without a usable texture is an {@link AttachmentSlot.Sink}.
  */
 public final class PassAttachments {
     private PassAttachments() {
@@ -40,7 +39,7 @@ public final class PassAttachments {
             if (usable.test(t)) {
                 slots.add(new AttachmentSlot.Target(t, shadow ? flips.shadowRead(t) : flips.read(t)));
             } else {
-                slots.add(missing(slots.size()));
+                slots.add(new AttachmentSlot.Sink());
             }
         }
         return slots;
@@ -72,17 +71,13 @@ public final class PassAttachments {
                 slots.add(null);
             }
             slots.set(location, usable.test(t) && assigned.add(t)
-                ? new AttachmentSlot.Target(t, shadow ? flips.shadowWrite(t) : flips.write(t)) : missing(location));
+                ? new AttachmentSlot.Target(t, shadow ? flips.shadowWrite(t) : flips.write(t)) : new AttachmentSlot.Sink());
         }
         for (int s = 0; s < slots.size(); s++) {
             if (slots.get(s) == null) {
-                slots.set(s, missing(s));
+                slots.set(s, new AttachmentSlot.Sink());
             }
         }
         return slots;
-    }
-
-    private static AttachmentSlot missing(int slot) {
-        return slot == 0 ? new AttachmentSlot.Sink() : new AttachmentSlot.Unused();
     }
 }

@@ -40,7 +40,9 @@ public final class ShaderBridgeClient implements ClientModInitializer {
             bridge.gameState().tick(minecraft);
         });
         ClientPlayConnectionEvents.JOIN.register((listener, sender, minecraft) -> bridge.onWorldJoin());
-        ClientPlayConnectionEvents.DISCONNECT.register((listener, minecraft) -> RenderBridge.release());
+        // Fabric fires DISCONNECT on a network thread when the connection drops; the render
+        // resources are released on the render thread.
+        ClientPlayConnectionEvents.DISCONNECT.register((listener, minecraft) -> minecraft.execute(RenderBridge::release));
         ClientLifecycleEvents.CLIENT_STOPPING.register(minecraft -> {
             RenderBridge.release();
             bridge.shutdown();

@@ -8,12 +8,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Throwaway render targets for slot 0 of a pass whose first output has no texture: Mojang's render
- * passes take their size from slot 0 and need a texture there. One per format and size, created on
- * first use. Render thread only.
+ * Throwaway render targets for the slots of a pass whose target has no texture of the pass size
+ * ({@link AttachmentSlot.Sink}). One per slot, format and size (two slots of a pass never share
+ * an image), created on first use. Render thread only.
  */
 final class SinkTextures implements AutoCloseable {
-    private record Key(GpuFormat format, int width, int height) {
+    private record Key(int slot, GpuFormat format, int width, int height) {
     }
 
     private record Sink(GpuTexture texture, GpuTextureView view) {
@@ -27,13 +27,14 @@ final class SinkTextures implements AutoCloseable {
     }
 
     /**
+     * @param slot   the attachment slot
      * @param format the attachment format the pipeline expects
      * @param width  the pass width
      * @param height the pass height
      * @return a view of a texture of that format and size
      */
-    GpuTextureView view(GpuFormat format, int width, int height) {
-        return sinks.computeIfAbsent(new Key(format, width, height), k -> {
+    GpuTextureView view(int slot, GpuFormat format, int width, int height) {
+        return sinks.computeIfAbsent(new Key(slot, format, width, height), k -> {
             GpuTexture texture = device.createTexture("ShaderBridge sink " + format, GpuTexture.USAGE_RENDER_ATTACHMENT, format, width, height, 1, 1);
             return new Sink(texture, device.createTextureView(texture));
         }).view();

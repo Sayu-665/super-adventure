@@ -2,6 +2,7 @@ package dev.shaderbridge.render.targets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.mojang.renderpearl.api.GpuFormat;
 import dev.shaderbridge.model.CustomTexture;
 import dev.shaderbridge.model.DimensionPipeline;
 import dev.shaderbridge.model.Program;
@@ -79,5 +80,25 @@ class SamplerChoiceTest {
         // Every custom texture the binding table refers to is declared.
         DIM.bindings().entries().stream().filter(e -> e.resource() instanceof ResourceRef.CustomTexture)
             .forEach(e -> assertEquals(1, ids.stream().filter(id -> id.equals(((ResourceRef.CustomTexture) e.resource()).id())).count(), e.name()));
+    }
+
+    @Test
+    void integerTargetsAreReadAtTheirBaseLevelWithNearestFiltering() {
+        Program composite90 = GLIMMER.program("world0/composite90", "fullscreen");
+        TargetSpec integer = new TargetSpec(0, false, GpuFormat.RGBA16_UINT, 64, 64, TargetPlanner.fullMipChain(64, 64), true, COLOR.get(0).clearColor());
+        SamplerChoice.Targets targets = new SamplerChoice.Targets() {
+            @Override
+            public Optional<TargetSpec> color(int index) {
+                return Optional.of(integer);
+            }
+
+            @Override
+            public Optional<TargetSpec> shadowColor(int index) {
+                return Optional.of(integer);
+            }
+        };
+        assertEquals(SamplerSpec.NEAREST_CLAMP, SamplerChoice.of(new ResourceRef.ColorTex(0), DIM, composite90, targets),
+            "their mipmaps are not generated, even when the program asks for them");
+        assertEquals(SamplerSpec.NEAREST_CLAMP, SamplerChoice.of(new ResourceRef.ShadowColor(0), DIM, composite90, targets));
     }
 }

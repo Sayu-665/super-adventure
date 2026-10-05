@@ -10,8 +10,10 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
  * The depth textures of {@link DhMode#NATIVE} LODs: the depth attachment the LOD passes draw
  * into, separate from Minecraft's, and the two copies packs sample: {@code dhDepthTex1} (opaque
  * LODs only, copied after {@code dh_terrain}) and {@code dhDepthTex0} (copied after
- * {@code dh_water}). All are 32-bit float depth, screen-sized, and follow the window. Render
- * thread only.
+ * {@code dh_terrain} and again after {@code dh_water}, so that it always holds the LODs drawn so
+ * far, like the live depth texture Iris binds; a copy keeps the LOD passes free of sampling their
+ * own attachment). All are 32-bit float depth, screen-sized, and follow the window. Render thread
+ * only.
  */
 public final class DhDepthTargets implements AutoCloseable {
     /** Format of the LOD depth textures. */
@@ -31,8 +33,8 @@ public final class DhDepthTargets implements AutoCloseable {
 
     /**
      * Starts a frame: (re)creates the textures at the screen size and clears the attachment to
-     * the far plane (the copies keep the previous frame's LODs until they are copied again, as in
-     * Iris; new textures are cleared too).
+     * the far plane (the copies keep the previous frame's LODs until they are copied again; new
+     * textures are cleared too).
      *
      * @param encoder a command encoder (outside any render pass)
      * @param width   screen width
@@ -62,7 +64,7 @@ public final class DhDepthTargets implements AutoCloseable {
      * Copies the LOD depth into {@code dhDepthTex<index>}.
      *
      * @param encoder a command encoder (outside any render pass)
-     * @param index   0 (after {@code dh_water}) or 1 (after {@code dh_terrain})
+     * @param index   0 (after {@code dh_terrain} and {@code dh_water}) or 1 (after {@code dh_terrain})
      */
     public void copy(CommandEncoder encoder, int index) {
         GpuTexture source = textures[0];

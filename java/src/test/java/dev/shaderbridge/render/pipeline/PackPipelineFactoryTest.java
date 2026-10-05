@@ -18,6 +18,7 @@ import dev.shaderbridge.model.DepthMode;
 import dev.shaderbridge.model.Program;
 import dev.shaderbridge.model.ProgramKind;
 import dev.shaderbridge.model.ResourceRef;
+import dev.shaderbridge.model.ShaderStage;
 import dev.shaderbridge.render.RenderFixture;
 import java.util.HashSet;
 import java.util.List;
@@ -171,5 +172,17 @@ class PackPipelineFactoryTest {
                 DrawProfiles.get().profile(program.drawProfile())).unresolved(), program.name());
         }
         assertFalse(TUTORIAL.dim().programs().isEmpty());
+    }
+
+    @Test
+    void modulesTheDeviceCannotRunAreIneligible() {
+        Program composite = TUTORIAL.program("composite", "fullscreen");
+        PipelineCapabilities noFloat64 = new PipelineCapabilities(true, PipelineCapabilities.DEFAULT_MAX_DESCRIPTORS,
+            (module, stage) -> stage == ShaderStage.FRAGMENT ? List.of("the fragment stage needs shaderFloat64") : List.of());
+        SpirvModules modules = new SpirvModules();
+        PackPipelineFactory.Result result = factory(modules, noFloat64).build(TUTORIAL.dim(), variant(composite), PipelineShape.fullscreen(),
+            AttachmentLayout.fullscreen(TUTORIAL.dim(), composite), DepthMode.REVERSED_ZERO_TO_ONE);
+        assertEquals(new PackPipelineFactory.Result.Ineligible(List.of("the fragment stage needs shaderFloat64")), result);
+        assertEquals(0, modules.size(), "nothing is registered for an ineligible program");
     }
 }

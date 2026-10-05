@@ -48,4 +48,12 @@ class ImageChoiceTest {
         assertFalse(ImageChoice.alt(GEOMETRY_COMPUTE, new ResourceRef.ColorTex(7), true, COLOR, SHADOW, m -> { }));
         assertFalse(ImageChoice.alt(COMPOSITE_COMPUTE, new ResourceRef.ShadowColor(3), false, COLOR, SHADOW, m -> { }));
     }
+
+    @Test
+    void unnamedSamplersReadColortex0InItsCurrentTexture() {
+        ResourceRef unknown = new ResourceRef.Unknown("texture");
+        assertFalse(ImageChoice.alt(COMPOSITE_COMPUTE, unknown, true, COLOR, SHADOW, m -> { }));
+        assertTrue(ImageChoice.alt(COMPOSITE_COMPUTE, unknown, false, List.of(true), SHADOW, m -> { }));
+        assertFalse(ImageChoice.alt(new ProgramKind.Geometry(GeometryProgram.TERRAIN), unknown, false, List.of(true), SHADOW, m -> { }));
+    }
 }

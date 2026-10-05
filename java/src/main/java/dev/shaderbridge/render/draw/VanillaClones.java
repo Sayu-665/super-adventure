@@ -32,21 +32,26 @@ import net.minecraft.resources.Identifier;
  *
  * Clones are compiled by Mojang's pipeline cache with the vanilla shader source (the compiler
  * function is {@code RenderSystem::getCompiledPipelineNullable}), which recompiles them after a
- * resource reload. Render thread only.
+ * resource reload. That cache keeps every pipeline it compiled, by identity, until the next
+ * resource reload, so the clones themselves are kept for the life of the process: rebuilding a
+ * pack's resources (another pack, dimension or reload) reuses them instead of compiling another
+ * set. Render thread only.
  */
 public final class VanillaClones {
     /** Path prefix of clone locations (namespace {@code shaderbridge}). */
     static final String PATH_PREFIX = "clone/";
 
+    /** Every clone made, shared by all instances (see the class description). */
+    private static final Map<Key, RenderPipeline> CLONES = new HashMap<>();
+
     private final Function<RenderPipeline, CompiledRenderPipeline> compiler;
     private final boolean independentBlend;
-    private final Map<Key, RenderPipeline> clones = new HashMap<>();
 
     private enum Mode {
         FALLBACK, DISCARD
     }
 
-    private record Key(RenderPipeline vanilla, AttachmentLayout layout, Mode mode) {
+    private record Key(RenderPipeline vanilla, AttachmentLayout layout, Mode mode, boolean independentBlend) {
     }
 
     /**
@@ -66,7 +71,8 @@ public final class VanillaClones {
      * @return the vanilla draw adapted to the pass, or empty if it does not compile
      */
     public Optional<CompiledRenderPipeline> fallback(RenderPipeline vanilla, AttachmentLayout layout, int fallbackTarget) {
-        return compile(new Key(vanilla, layout, Mode.FALLBACK), () -> fallbackPipeline(vanilla, layout, fallbackTarget, independentBlend));
+        Key key = new Key(vanilla, layout, Mode.FALLBACK, independentBlend);
+        return compile(key, () -> fallbackPipeline(vanilla, layout, fallbackTarget, independentBlend));
     }
 
     /**
@@ -75,12 +81,30 @@ public final class VanillaClones {
      * @return the vanilla draw with every write disabled, or empty if it does not compile
      */
     public Optional<CompiledRenderPipeline> discard(RenderPipeline vanilla, AttachmentLayout layout) {
-        return compile(new Key(vanilla, layout, Mode.DISCARD), () -> discardPipeline(vanilla, layout));
+        return compile(new Key(vanilla, layout, Mode.DISCARD, false), () -> discardPipeline(vanilla, layout));
     }
 
     private Optional<CompiledRenderPipeline> compile(Key key, Supplier<RenderPipeline> build) {
-        RenderPipeline clone = clones.computeIfAbsent(key, k -> build.get());
+        RenderPipeline clone = CLONES.computeIfAbsent(key, k -> build.get());
         return Optional.ofNullable(compiler.apply(clone));
+    }
+
+    /**
+     * @param states the color target states of a pipeline
+     * @param layout a pass's attachments
+     * @return whether the pipeline can be bound in the pass as it is: one state per attachment,
+     *     of the attachment's format (Mojang's render passes check exactly this)
+     */
+    public static boolean fits(List<ColorTargetState> states, AttachmentLayout layout) {
+        if (states.size() != layout.attachments().size()) {
+            return false;
+        }
+        for (int slot = 0; slot < states.size(); slot++) {
+            if (states.get(slot) == null || states.get(slot).format() != layout.attachments().get(slot).format()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

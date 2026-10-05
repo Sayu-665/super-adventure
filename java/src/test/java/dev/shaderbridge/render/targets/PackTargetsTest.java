@@ -33,6 +33,13 @@ class PackTargetsTest {
             assertEquals(1, ct0.attachmentView(true).mipLevels());
             ColorPair ct1 = targets.color(1).orElseThrow();
             assertSame(ct1.sampleView(false), ct1.attachmentView(false), "a single-level target uses one view");
+            int views = gpu.views.size();
+            assertSame(ct0.attachmentView(true), ct0.levelView(true, 0));
+            FakeGpu.View level3 = (FakeGpu.View) ct0.levelView(true, 3);
+            assertEquals(List.of(3, 1), List.of(level3.baseMipLevel(), level3.mipLevels()));
+            assertSame(ct0.texture(true), level3.texture());
+            assertSame(level3, ct0.levelView(true, 3), "level views are made once, on demand");
+            assertEquals(views + 1, gpu.views.size());
             assertEquals(512, targets.color(7).orElseThrow().texture(false).getWidth(0));
             assertEquals(16, targets.colorTargets().size());
             assertEquals(2, targets.shadowColorTargets().size());

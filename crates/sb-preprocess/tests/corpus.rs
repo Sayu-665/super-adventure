@@ -130,8 +130,10 @@ fn corpus_programs_preprocess_cleanly() {
 
 /// Every occurrence of a context-sensitive reserved word in the corpora is a
 /// keyword use (`flat`, `layout(`, `switch`, `case`, `default`, `double`, ...;
-/// checked with grep: none is used as an identifier), so escaping any of them
-/// would be a false positive that breaks valid code.
+/// checked with grep on the small and the extended corpus, and with a probe of
+/// the classifier: none of the ~43,000 occurrences is classified as an
+/// identifier use), so escaping any of them would be a false positive that
+/// breaks valid code.
 #[test]
 fn corpus_contextual_words_are_never_escaped() {
     let Some((results, _)) = preprocess_corpus() else {

@@ -1395,6 +1395,91 @@ fn contextual_words_respect_versions_and_extensions() {
     );
 }
 
+/// Each contextual word is decided on its own: a keyword use of one word does
+/// not stop the escaping of another, and the evidence may come from other
+/// files of the unit, across directives, comments and adjacent candidates.
+#[test]
+fn contextual_words_are_decided_per_word_and_per_unit() {
+    let src = "#version 120\n#extension GL_EXT_gpu_shader4 : enable\nflat varying vec3 n;\nflat smooth varying vec2 uv;\nfloat noperspective_ok;\nuniform int mode;\nfloat layout = 1.0;\nvoid main() {\n  float highp = 2.0;\n  switch (mode) { case 0: break; default: break; }\n  gl_FragColor = vec4(n, layout * highp);\n}\n";
+    let out = run(src);
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert_eq!(
+        norm(&out.code),
+        [
+            "flat varying vec3 n;",
+            "flat smooth varying vec2 uv;",
+            "float noperspective_ok;",
+            "uniform int mode;",
+            "float sb_kw_layout = 1.0;",
+            "void main() {",
+            "float sb_kw_highp = 2.0;",
+            "switch (mode) { case 0: break; default: break; }",
+            "gl_FragColor = vec4(n, sb_kw_layout * sb_kw_highp);",
+            "}",
+        ]
+    );
+
+    // The identifier evidence (`* double;`: after an operator, a type name
+    // could only start a constructor) is in an included file; the other
+    // occurrences, ambiguous on their own (`float double;` could be an empty
+    // declaration, `vec4(double)` an unnamed parameter), are escaped too.
+    let out = run_files(
+        &[
+            (
+                "main.fsh",
+                "#version 120\n#include \"lib.glsl\"\nvoid main() { gl_FragColor = vec4(double); }\n",
+            ),
+            (
+                "lib.glsl",
+                "uniform float double;\nfloat half_d = 0.5 * double;\n",
+            ),
+        ],
+        "main.fsh",
+        &PreprocessOptions::default(),
+    );
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert_eq!(
+        norm(&out.code),
+        [
+            "uniform float sb_kw_double;",
+            "float half_d = 0.5 * sb_kw_double;",
+            "void main() { gl_FragColor = vec4(sb_kw_double); }",
+        ]
+    );
+
+    // A keyword use in an included file blocks the escape of an identifier use
+    // (invalid code either way) in the whole unit.
+    let out = run_files(
+        &[
+            (
+                "main.fsh",
+                "#version 120\n#include \"lib.glsl\"\nvoid main() { vec3 k = sb_n * flat; }\n",
+            ),
+            ("lib.glsl", "flat varying vec3 sb_n;\nfloat flat_ok;\n"),
+        ],
+        "main.fsh",
+        &PreprocessOptions::default(),
+    );
+    assert!(!out.code.contains(ESCAPE_PREFIX), "{}", out.code);
+
+    // Directives and comments between a candidate and its next token are skipped.
+    assert_eq!(
+        norm(&run("#version 120\nfloat flat\n#define X 1\n// c\n/* d */ = 1.0;\n").code),
+        ["float sb_kw_flat", "// c", "/* d */ = 1.0;"]
+    );
+    assert_eq!(
+        norm(
+            &run("#version 120\nflat\n#if 1\n/* q */ varying vec3 n;\n#endif\nvec3 m = n;\n").code
+        ),
+        ["flat", "/* q */ varying vec3 n;", "vec3 m = n;"]
+    );
+    // An inactive branch contributes no evidence.
+    assert_eq!(
+        norm(&run("#version 120\n#if 0\nflat varying vec3 n;\n#endif\nvec3 flat;\n").code),
+        ["vec3 sb_kw_flat;"]
+    );
+}
+
 #[test]
 fn diagnostics_have_locations_in_included_files() {
     let out = run_files(

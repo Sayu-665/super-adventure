@@ -9,16 +9,17 @@ import java.util.List;
 
 /**
  * The {@code sb_Draw} values of one kind of draw: what Iris would set per draw that ShaderBridge
- * can know from the pipeline alone. Entity, block entity and item ids are not known per draw
- * (Minecraft batches feature draws) and stay {@code -1}.
+ * can know from the pipeline and the draw's albedo. Entity, block entity and item ids are not
+ * known per draw (Minecraft batches feature draws) and stay {@code -1}.
  *
  * @param pipeline     identity of the pack pipeline (distinguishes the keys of different programs)
  * @param renderStage  {@code renderStage} ({@link RenderStages})
  * @param shadow       a shadow-pass draw: the shadow model-view and projection
  * @param alphaTestRef {@code alphaTestRef} of the program
  * @param blendFunc    {@code blendFunc} as GL enums (srcRGB, dstRGB, srcAlpha, dstAlpha), zeros without blending
+ * @param albedo       the draw's albedo ({@code gtextureSize}, {@code atlasSize})
  */
-public record DrawKey(String pipeline, int renderStage, boolean shadow, float alphaTestRef, List<Integer> blendFunc) {
+public record DrawKey(String pipeline, int renderStage, boolean shadow, float alphaTestRef, List<Integer> blendFunc, AlbedoSize albedo) {
     public DrawKey {
         blendFunc = List.copyOf(blendFunc);
     }
@@ -28,11 +29,12 @@ public record DrawKey(String pipeline, int renderStage, boolean shadow, float al
      * @param program     the program it runs
      * @param renderStage the draw's render stage
      * @param shadow      a shadow-pass draw
+     * @param albedo      the draw's albedo
      * @return the key
      */
-    public static DrawKey of(String pipeline, Program program, int renderStage, boolean shadow) {
+    public static DrawKey of(String pipeline, Program program, int renderStage, boolean shadow, AlbedoSize albedo) {
         float alpha = program.alphaTest() == null ? 0 : program.alphaTest().reference();
-        return new DrawKey(pipeline, renderStage, shadow, alpha, blendFunc(program.blend()));
+        return new DrawKey(pipeline, renderStage, shadow, alpha, blendFunc(program.blend()), albedo);
     }
 
     /**
@@ -49,6 +51,10 @@ public record DrawKey(String pipeline, int renderStage, boolean shadow, float al
         }
         draw.renderStage = renderStage;
         draw.alphaTestRef = alphaTestRef;
+        draw.gtextureWidth = albedo.width();
+        draw.gtextureHeight = albedo.height();
+        draw.atlasWidth = albedo.atlas() ? albedo.width() : 0;
+        draw.atlasHeight = albedo.atlas() ? albedo.height() : 0;
         for (int i = 0; i < 4; i++) {
             draw.blendFunc[i] = blendFunc.get(i);
         }

@@ -178,7 +178,6 @@ class FrameSequencerTraceTest {
             case AttachmentSlot.Target t -> t.target() + ":" + image(t.alt());
             case AttachmentSlot.MainColor m -> "output";
             case AttachmentSlot.Sink s -> "sink";
-            case AttachmentSlot.Unused u -> "sink";
         };
     }
 

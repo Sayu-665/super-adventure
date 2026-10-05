@@ -13,7 +13,8 @@ import net.minecraft.resources.Identifier;
 
 /**
  * Turns a pack program into a renderpearl {@link RenderPipeline}: reflects its SPIR-V, checks it
- * against renderpearl's limits, plans its color targets, registers its modules for the compiler
+ * against renderpearl's limits and the SPIR-V capabilities the device enabled, plans its color
+ * targets, registers its modules for the compiler
  * hook and assembles the pipeline (shader ids, bind group layout, color targets, depth state per
  * {@link DepthMode}, culling, vertex bindings and topology of the replaced draw). Nothing is
  * compiled here; see {@link PackPipelineCache}.
@@ -65,6 +66,11 @@ public final class PackPipelineFactory {
             return new Result.Ineligible(List.of("its SPIR-V cannot be read: " + e.getMessage()));
         }
         List<String> problems = new ArrayList<>(Eligibility.check(program, iface, shape, capabilities));
+        for (StageModule module : program.stages()) {
+            if (module.spirv() != null) {
+                problems.addAll(capabilities.modules().problems(variant.blobs().spirv(module.spirv()), module.stage()));
+            }
+        }
         AttachmentPlan attachments = AttachmentPlanner.plan(program, layout, iface.fragmentOutputs(), capabilities);
         problems.addAll(attachments.problems());
         BindingPlan bindings = BindingPlan.of(iface, program, dim.bindings(), dim.uniforms(), profiles.profile(variant.profile()));

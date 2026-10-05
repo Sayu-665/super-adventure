@@ -14,7 +14,9 @@ import java.util.function.Consumer;
  *   state is reported and the model wins);</li>
  *   <li>geometry programs and geometry-pass computes read the current texture
  *   ({@link FlipState#read}), which is what they also draw into;</li>
- *   <li>shadowcolor reads follow the shadowcomp flips ({@link FlipState#shadowRead}).</li>
+ *   <li>shadowcolor reads follow the shadowcomp flips ({@link FlipState#shadowRead});</li>
+ *   <li>samplers the pack did not name read {@code colortex0} in its current texture outside
+ *   geometry programs.</li>
  * </ul>
  */
 public final class ColorReads {
@@ -35,6 +37,9 @@ public final class ColorReads {
             case ResourceRef.ColorImage c -> color(kind, c.index(), useAlt, flips, warnings);
             case ResourceRef.ShadowColor s -> flips.shadowRead(s.index());
             case ResourceRef.ShadowColorImage s -> flips.shadowRead(s.index());
+            // A sampler the pack did not name reads GL texture unit 0: colortex0 in its current
+            // texture outside geometry programs (the albedo, not ping-ponged, in them).
+            case ResourceRef.Unknown u -> !(kind instanceof ProgramKind.Geometry) && flips.read(0);
             default -> false;
         };
     }

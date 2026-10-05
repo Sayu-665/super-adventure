@@ -14,8 +14,8 @@ import java.util.Optional;
 /**
  * The sampler of each pack resource, with the rules of the headless executor ({@code sb-runtime}):
  * render targets are clamped and filtered linearly when their format allows it (integer formats
- * are sampled with nearest), mip levels are used only by programs that request the target's
- * mipmaps; depth textures are nearest; shadow maps and shadow color targets follow
+ * are sampled with nearest and at their base level), mip levels are used only by programs that
+ * request the target's mipmaps; depth textures are nearest; shadow maps and shadow color targets follow
  * {@code shadowtexNNearest} / {@code shadowcolorNNearest} / {@code shadowcolorNMipmap}; the noise
  * texture is linear and repeated; custom textures follow their {@code blur} and {@code clamp}
  * flags; the block atlas is nearest, mipmapped and repeated.
@@ -79,13 +79,21 @@ public final class SamplerChoice {
     }
 
     private static SamplerSpec colorTarget(Optional<TargetSpec> target, boolean programWantsMips) {
-        return target.map(t -> new SamplerSpec(TextureFormats.numericClass(t.format()) == ScalarClass.FLOAT, programWantsMips && t.mipLevels() > 1, false))
+        return target.map(t -> new SamplerSpec(floats(t), floats(t) && programWantsMips && t.mipLevels() > 1, false))
             .orElse(SamplerSpec.NEAREST_CLAMP);
     }
 
     private static SamplerSpec shadowColor(Optional<TargetSpec> target, ShadowSettings shadow, int index) {
-        return target.map(t -> new SamplerSpec(!flag(shadow.colorNearest(), index) && TextureFormats.numericClass(t.format()) == ScalarClass.FLOAT,
-            t.mipLevels() > 1, false)).orElse(SamplerSpec.NEAREST_CLAMP);
+        return target.map(t -> new SamplerSpec(!flag(shadow.colorNearest(), index) && floats(t), floats(t) && t.mipLevels() > 1, false))
+            .orElse(SamplerSpec.NEAREST_CLAMP);
+    }
+
+    /**
+     * Targets shaders read as floats are filtered and have their mipmaps generated; integer targets
+     * are read at their base level with nearest filtering.
+     */
+    private static boolean floats(TargetSpec target) {
+        return TextureFormats.numericClass(target.format()) == ScalarClass.FLOAT;
     }
 
     /**

@@ -31,8 +31,12 @@ public record EnabledFeatures(Set<RawFeature> features, int subgroupStages, int 
         return features.contains(feature);
     }
 
-    /** @return what renderpearl pipelines may do on this device */
+    /**
+     * @return what renderpearl pipelines may do on this device: independent blending if enabled,
+     *     and only modules whose SPIR-V capabilities the device enabled ({@link SpirvCapabilities})
+     */
     public PipelineCapabilities capabilities() {
-        return new PipelineCapabilities(has(RawFeature.INDEPENDENT_BLEND), PipelineCapabilities.DEFAULT_MAX_DESCRIPTORS);
+        return new PipelineCapabilities(has(RawFeature.INDEPENDENT_BLEND), PipelineCapabilities.DEFAULT_MAX_DESCRIPTORS,
+            (module, stage) -> SpirvCapabilities.problems(SpirvCapabilities.read(module), stage, this));
     }
 }
