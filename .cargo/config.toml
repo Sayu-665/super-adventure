@@ -1,6 +1,8 @@
 # Build the embedded glslang (glslang-sys, via the cc crate) with assertions compiled out.
 # glslang's internal assert() would otherwise abort() the host process (Minecraft) on an
-# internal error instead of reporting a compile failure.
+# internal error instead of reporting a compile failure. `force` makes these win over a
+# CXXFLAGS/CFLAGS already set in the environment; sb-compile's build script refuses to
+# build if the flags cc will use still lack -DNDEBUG.
 [env]
-CXXFLAGS = "-DNDEBUG"
-CFLAGS = "-DNDEBUG"
+CXXFLAGS = { value = "-DNDEBUG", force = true }
+CFLAGS = { value = "-DNDEBUG", force = true }
